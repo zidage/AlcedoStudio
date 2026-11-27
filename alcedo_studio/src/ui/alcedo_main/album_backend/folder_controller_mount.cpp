@@ -245,7 +245,7 @@ auto FolderController::StartCreateMount(const std::filesystem::path& directory,
        first_scan_ended = std::move(first_scan_ended)](std::exception_ptr error) mutable {
         if (!error) {
           mount_scans_->ReloadMounts();
-          library_->ReloadFolderTree(current_folder_path_);
+          library_->ReloadFolderTree();
           (void)SaveProjectState();
           mount_scans_->RequestScan(*created, MountScanTrigger::kSynchronize,
                                     std::move(first_scan_ended));
@@ -277,7 +277,7 @@ auto FolderController::StartUnmount(mount_id_t mount_id, MountCommandDone done) 
                                   [this, done = std::move(done)](std::exception_ptr error) {
                                     if (!error) {
                                       mount_scans_->ReloadMounts();
-                                      library_->ReloadFolderTree(current_folder_path_);
+                                      library_->ReloadFolderTree();
                                       library_->RequestLibraryContentRefresh();
                                       (void)SaveProjectState();
                                     }
@@ -330,7 +330,7 @@ auto FolderController::StartLocateMissingPhoto(sl_element_id_t              elem
             thumbnails->InvalidateThumbnail(element_id);
           }
           // The located file can be in a directory that the last scan did not see.
-          library_->ReloadFolderTree(current_folder_path_);
+          library_->ReloadFolderTree();
           library_->RequestLibraryContentRefresh();
           (void)SaveProjectState();
         }

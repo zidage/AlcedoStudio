@@ -2,8 +2,8 @@
 
 Date: 2026-11-26
 
-Status: **in progress**. SN1 to SN7 are complete (2026-11-26). SN6 measured that SN7 and SN8 run;
-SN8 is planned.
+Status: **in progress**. SN1 to SN7 are complete (2026-11-26). SN6 measured that SN7 and SN8 run.
+SN8 is complete in code (2026-11-26); the check in the application by the user is open.
 
 Parent: [Roadmap](../../README.md).
 
@@ -220,7 +220,7 @@ and the tests.
 | SN5 | The mount tree read and the import use row queries. | `mount_tree.cpp`, `import_service.cpp` | SN4 | 600 to 900 | complete |
 | SN6 | Measured memory and time of the 80,000-photo project. Decision for SN7 and SN8. | `project_open_benchmark.cpp` | SN5 | 150 to 300 | complete |
 | SN7 | Eviction of clean file elements under a limit, and no Image link in imported file elements. SN6 requires it. | `NodeCache`, `ImportServiceImpl` | SN6 | 400 to 600 | complete |
-| SN8 | The sidebar tree read runs on the query worker. SN6 requires it. | `FolderController` | SN6 | 300 to 500 | planned |
+| SN8 | The sidebar tree read runs on the query worker. SN6 requires it. | `FolderController` | SN6 | 300 to 500 | complete in code; user check open |
 
 Each phase is one pull request. Before each phase, read `AGENTS.md` and the applicable skills
 again.
@@ -1430,7 +1430,131 @@ Remaining defects or unavailable platforms: macOS and Linux not built. A run wit
 - The SN6 wait measurement after the change goes into the pull request description.
 - The user confirms in the application that the tree stays usable during a mount scan.
 
-**Completion record.** Use the template of section 9.
+**Exit criteria.**
+
+- [x] `FolderController::ReloadTree` reads the tree on the query worker and returns at once.
+- [x] The GUI thread reads the element id of the current folder and of a row from the rows.
+- [x] `CollectionsPanelQmlTest` and `LibraryFolderSectionQmlTest` pass.
+- [ ] The user confirms in the application that the tree stays usable during a mount scan.
+
+**Implementation decisions.**
+
+- The job runs with the new `SearchRequestKind::kFolderTree`. `ApplyTree` applies a result only
+  when `IsCurrent` is true. The evidence (`AGENTS.md`): the read of project A runs on the query
+  worker (operation 1) while the GUI thread switches the project in `ProjectHandler` (operation 2:
+  `project_ = B`, then `ClearState` through `clear_project_ui_state`, then `ReloadTree` for B).
+  The queued result of A arrives after `ClearState` (event order across the
+  `Qt::QueuedConnection`). Without the check, the rows of A, their selection, and a Library
+  reload with a folder id of A apply to project B, or stay after a close.
+  `FolderTests.TreeReadOfAClosedProjectDoesNotFillTheTree` drives that order. `ClearState`
+  invalidates the read. The same check drops a read that a newer `ReloadTree` replaced; the newer
+  read applies the current tree, so no result is lost.
+- The rows of the last applied read stay until the next result is applied. The folder actions
+  (`TryGetPathForUiId`, "Add to", the import target) use these rows during a read.
+- `CurrentFolderElementId` and `FolderElementIdForUiId` read the element id from the rows. They
+  resolved the path through `SleeveServiceImpl::ResolveFolder` before, which waited on `fs_lock_`
+  on the GUI thread for each Library refresh, also for each stored batch of a mount scan. During a
+  read the rows still hold the old element ids, so a refresh after a rename keeps its folder; a
+  path resolve of the old name found no folder and showed an empty grid.
+- The folder that a read selects is resolved when the result is applied: the path of the newest
+  `ReloadTree` call that named one (rename, move, delete of the current folder), else the current
+  folder. A selection by the user before the apply replaces the named path. An empty path means
+  "keep the selection", so the callers that passed `current_folder_path()` pass nothing; a
+  rename followed by a scan end then keeps the renamed folder.
+- When the apply moves the selection to another folder (a deleted or removed current folder),
+  `ReloadScopeOfMovedSelection` clears the Inspector filters and reloads the Library. This
+  replaces the reload that `DeleteFolder` did after the synchronous read, and also covers a mount
+  scan that removes the current folder.
+- `CreateFolderIn` still returns the element id of the new folder. The Collections panel and the
+  collection picker keep it as `pendingRevealElementId` and reveal the row when the read brings
+  it.
+- A failed read keeps the root row only, as before. The next `SelectFolder` or
+  `SelectLibraryRoot` reads the tree again; `EnsurePathExpanded` no longer reads.
+- `FolderController::tree_read_pending()` is true from `ReloadTree` to the apply. The tests wait
+  with `WaitForFolderTree`, which delivers only the queued calls of the controller, so a pending
+  folder scan in the #1086 import tests stays queued.
+- The wait measurement: the SN6 benchmark times `ListFolderTree` on its own thread, the read that
+  now runs on the query worker. SN8 changes no sleeve code, so that number is the SN7 result (max
+  31.0 ms during the import). The time that SN8 changes is the time of the GUI thread.
+  `FolderTests.TreeReloadReturnsWhileTheFileSystemLockIsHeldAndAppliesAfterTheRelease` holds
+  `fs_lock_` on another thread and measures `ReloadTree` and `CurrentFolderElementId` on the GUI
+  thread.
+
+**Completion record.**
+
+```text
+Phase / date / status: SN8 / 2026-11-26 / complete in code; the check in the application by the
+  user is open. Issue #1171 (sub-issue of #1152).
+Source revision and branch: refact/sidebar-tree-worker, stacked on dd5873d03 (SN7 PR #1170).
+Actual changed modules: ui/alcedo_main/album_backend/folder_controller.cpp and
+  include/ui/alcedo_main/album_backend/folder_controller.hpp (ReloadTree on the worker,
+  ApplyTree, SelectedNodeElementId, ReloadScopeOfMovedSelection, tree_read_pending, element ids
+  from the rows), search_request_worker.hpp (kFolderTree), folder_controller_mount.cpp,
+  library_module.cpp, application_module_host.cpp, album_catalog.hpp (empty path keeps the
+  selection), qml/CollectionsPanel.qml and qml/CollectionPickerTree.qml (pendingRevealElementId),
+  tests/ui/album_backend_folder_test.cpp, album_backend_test_fixture.hpp (WaitForFolderTree),
+  album_backend_import_test.cpp, album_backend_library_query_test.cpp,
+  tests/automation/automation_library_commands_test.cpp.
+Implemented behavior:
+  ReloadTree returns at once. The query worker reads the tree with ListFolderTree, and the GUI
+  thread applies the result: new rows, the selection target, a Library reload when the selection
+  moved to another folder, and one count read. The rows of the last read stay until then. The
+  element id of the current folder and of a row comes from the rows, so no GUI thread path of
+  the controller takes fs_lock_ for a read. A read of a closed or replaced project applies
+  nothing.
+Explicitly unimplemented items:
+  - The user check in the application during a mount scan (exit criterion 4).
+  - The folder edits (create, rename, move, delete) still write on the GUI thread through
+    AlbumBrowseService under fs_lock_. They are user actions and are not the sidebar read.
+Primary success call chain:
+  caller (folder edit, scan end, mount command, project open) -> LibraryModule::ReloadFolderTree
+    -> FolderController::ReloadTree (EnsureRootNode, target path, tree_read_pending_)
+    -> SearchRequestWorker::Submit(kFolderTree)
+    -> [worker] AlbumBrowseService::ListFolderTree -> SleeveServiceImpl::ListFolderTree (fs_lock_)
+    -> QMetaObject::invokeMethod(Qt::QueuedConnection)
+    -> [GUI] FolderController::ApplyTree (IsCurrent) -> ResetTreeState, nodes, ApplyFolderSelection
+    -> FoldersChanged, FolderSelectionChanged -> [selection moved] ReloadScopeOfMovedSelection
+    -> RefreshImageCounts
+Primary failure and restore call chain:
+  ListFolderTree throws -> the job posts the text -> ApplyTree: one warning, root row only,
+    the root selected -> the next SelectFolder or SelectLibraryRoot calls ReloadTree again.
+  Project switch or close during a read -> ClearState: Invalidate(kFolderTree) -> ApplyTree of
+    the old read returns with no change.
+  FolderController destroyed during a read -> InvalidateAndWait(kFolderTree) in the destructor.
+Build and test commands with exit codes (Windows, MSVC debug):
+  cmd /c "scripts\msvc_env.cmd --build build\debug --target AlbumBackendFolderTest
+    AlbumBackendImportTest AutomationLibraryCommandsTest CollectionsPanelQmlTest
+    LibraryFolderSectionQmlTest FolderControllerMountTest"                             exit 0
+  cmd /c "scripts\msvc_env.cmd --build build\debug --target AlbumBackendProjectTest
+    AlbumBackendImageDeleteTest AlbumBackendSearchWorkerTest AlbumBackendLibraryQueryTest
+    ApplicationModuleHostLifecycleTest LibraryMutationOperationsTest MainQmlWorkflowTest" exit 0
+  Each test binary run directly from its _runtime folder (counts below).
+Discovered / passed / failed / skipped counts:
+  AlbumBackendFolderTest 20/20/0/0 (new: TreeReloadReturnsWhileTheFileSystemLockIsHeldAnd-
+    AppliesAfterTheRelease, TreeReadOfAClosedProjectDoesNotFillTheTree,
+    SelectionByTheUserBeforeTheTreeReadAppliesStays,
+    DeletingTheCurrentFolderSelectsItsParentAndReloadsTheLibrary)
+  AlbumBackendImportTest 38/38/0/0, CollectionsPanelQmlTest 30/30/0/0 (no QTRY timeout in the
+  log, #526), LibraryFolderSectionQmlTest 8/8/0/0, FolderControllerMountTest 11/11/0/0,
+  AutomationLibraryCommandsTest 18/18/0/0, AlbumBackendImageDeleteTest 13/13/0/0,
+  AlbumBackendSearchWorkerTest 25/25/0/0, AlbumBackendLibraryQueryTest 34/34/0/0,
+  LibraryMutationOperationsTest 5/5/0/0.
+  Failures that also occur at dd5873d03 (the base, built and run in the same tree):
+  AlbumBackendProjectTest 40/35/2/3 (DataSummary_WarnsOnTamperedMetadata,
+  DataSummary_WarnsOnDbChanged: #1173), ApplicationModuleHostLifecycleTest 2/1/1/0 (#1172),
+  MainQmlWorkflowTest 6/5/1/0 (ProductionWindowLoadsAndRoutesCoreWorkspaceActions: #722).
+  WorkspaceShellTest was not run (AGENTS.md). The full suite was not run.
+Manual verification: none. The application was not started.
+Performance or resource evidence (debug, fs_lock_ held by another thread):
+  ReloadTree on the GUI thread 0.04 to 0.07 ms; CurrentFolderElementId 0.005 ms. Before SN8 the
+  same calls waited for the whole lock hold (the SN6 sidebar read waited up to 50.3 ms during an
+  import; SN7 up to 31.0 ms). The read on the worker is the SN7 number (no sleeve change).
+Evidence path: build/tmp/sn8/*.log.
+Remaining defects or unavailable platforms: macOS and Linux not built. The application run
+  during a mount scan is the user check. LOC: folder_controller.cpp 879 to 908 lines,
+  folder_controller.hpp 326 to 360 lines; the code and test diff is 391 added and 131 removed
+  lines.
+```
 
 ---
 
@@ -1449,6 +1573,7 @@ Remaining defects or unavailable platforms: macOS and Linux not built. A run wit
 | A build before this plan opens a 0.15.0 project | The build refuses the project with the version message. | SN4 |
 | Scan of a mount with no change | No file element is loaded. | SN5 |
 | An element that a caller holds | It keeps its identity while the caller holds it. | SN7 |
+| A tree reload while an import batch holds `fs_lock_` | The call returns at once. The tree shows after the batch. | SN8 |
 
 ---
 

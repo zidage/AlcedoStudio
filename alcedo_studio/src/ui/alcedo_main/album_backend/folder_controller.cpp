@@ -11,9 +11,11 @@
 #include <exception>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "app/album_browse_service.hpp"
 #include "app/sleeve_error.hpp"
+#include "type/type.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
@@ -42,6 +44,7 @@ FolderController::FolderController(ProjectModule* project, LibraryModule* librar
 FolderController::~FolderController() {
   if (library_ != nullptr) {
     library_->query_worker().InvalidateAndWait(SearchRequestKind::kFolderCounts);
+    library_->query_worker().InvalidateAndWait(SearchRequestKind::kFolderTree);
   }
 }
 
@@ -69,7 +72,7 @@ void FolderController::EnsureRootNode() {
 
   FolderNodeState root;
   root.ui_id_       = 0;
-  root.element_id_  = 0;
+  root.element_id_  = kLibraryRootFolderId;
   root.folder_path_ = root_path;
   root.depth_       = 0;
   root.expanded_    = true;
@@ -110,47 +113,113 @@ auto FolderController::EnsureNode(const std::filesystem::path& folderPath,
   return it->second;
 }
 
-void FolderController::LoadTree() {
-  auto proj = project_->handler().project();
-  if (!proj) {
+void FolderController::ReloadTree(const std::filesystem::path& preferredFolderPath) {
+  auto proj   = project_ != nullptr ? project_->handler().project() : nullptr;
+  auto browse = proj ? proj->GetAlbumBrowseService() : nullptr;
+  if (library_ == nullptr || !browse) {
     return;
   }
-  auto browse = proj->GetAlbumBrowseService();
-  if (!browse) {
-    return;
+  // The root row and its element id stay available while the read runs.
+  EnsureRootNode();
+  if (!preferredFolderPath.empty()) {
+    reload_selection_path_ = preferredFolderPath;
   }
+  tree_read_pending_ = true;
 
-  std::vector<AlbumFolderView> folders;
-  try {
-    folders = browse->ListFolderTree();
-  } catch (const std::exception& e) {
+  // The destructor waits for a running job, and Qt drops the posted result of a destroyed
+  // receiver, so the job and the result may use `this`. The vector that ListFolderTree returns
+  // moves to the UI thread; no other object keeps the tree.
+  auto job           = [this, browse = std::move(browse)](std::uint64_t generation) {
+    std::vector<AlbumFolderView> folders;
+    QString                      error;
+    try {
+      folders = browse->ListFolderTree();
+    } catch (const std::exception& e) {
+      error = QString::fromUtf8(e.what());
+      if (error.isEmpty()) {
+        error = QStringLiteral("the read failed with no message");
+      }
+    }
+    QMetaObject::invokeMethod(
+        this,
+        [this, generation, folders = std::move(folders), error]() mutable {
+          ApplyTree(generation, std::move(folders), error);
+        },
+        Qt::QueuedConnection);
+  };
+  library_->query_worker().Submit(SearchRequestKind::kFolderTree, std::move(job));
+}
+
+void FolderController::ApplyTree(std::uint64_t generation, std::vector<AlbumFolderView> folders,
+                                 const QString& error) {
+  // Why the check exists (AGENTS.md, executable interleaving): the read of project A runs on the
+  // query worker while the UI thread switches the project (ProjectHandler: project_ = B, then
+  // ClearState through clear_project_ui_state, then ReloadTree for B). The queued result of A
+  // then arrives after ClearState, and without the check the rows of A, their selection, and a
+  // Library reload with a folder id of A apply to project B. ClearState invalidates the read;
+  // FolderTests.TreeReadOfAClosedProjectDoesNotFillTheTree drives that order. A newer ReloadTree
+  // also replaces an older read; the newer read applies the current tree.
+  if (!library_->query_worker().IsCurrent(SearchRequestKind::kFolderTree, generation)) {
+    return;
+  }
+  tree_read_pending_         = false;
+  const auto selected_before = SelectedNodeElementId();
+  auto       target_path     = reload_selection_path_.value_or(current_folder_path_);
+  reload_selection_path_.reset();
+
+  ResetTreeState();
+  if (!error.isEmpty()) {
     // The tree stays unloaded, so the next selection reads it again.
     qCWarning(diag::libraryLog).noquote()
-        << "FolderController: the folder tree did not load:" << e.what();
-    return;
+        << "FolderController: the folder tree did not load:" << error;
+  } else {
+    // Parents come before their children, so the parent node of each folder exists.
+    for (const auto& folder : folders) {
+      const auto parent_key = PathKey(folder.folder_path_.parent_path());
+      const auto parent_it  = nodes_by_path_.find(parent_key);
+      if (parent_it == nodes_by_path_.end()) {
+        continue;
+      }
+      const int depth   = parent_it->second.depth_ + 1;
+      auto&     child   = EnsureNode(folder.folder_path_, folder.folder_name_, depth);
+      child.element_id_ = folder.folder_id_;
+      child.mount_id_   = folder.mount_id_;
+      child_keys_by_path_[parent_key].push_back(PathKey(child.folder_path_));
+    }
+    tree_loaded_ = true;
   }
 
-  // Parents come before their children, so the parent node of each folder exists.
-  for (const auto& folder : folders) {
-    const auto parent_key = PathKey(folder.folder_path_.parent_path());
-    const auto parent_it  = nodes_by_path_.find(parent_key);
-    if (parent_it == nodes_by_path_.end()) {
-      continue;
-    }
-    const int depth   = parent_it->second.depth_ + 1;
-    auto&     child   = EnsureNode(folder.folder_path_, folder.folder_name_, depth);
-    child.element_id_ = folder.folder_id_;
-    child.mount_id_   = folder.mount_id_;
-    child_keys_by_path_[parent_key].push_back(PathKey(child.folder_path_));
+  if (!nodes_by_path_.contains(PathKey(target_path))) {
+    target_path = album_util::RootFsPath();
   }
-  tree_loaded_ = true;
+  // The sidebar tree and the "Add to" menu list every folder, so each folder shows expanded.
+  for (auto& [key, node] : nodes_by_path_) {
+    node.expanded_ = true;
+  }
+  const auto node_it = nodes_by_path_.find(PathKey(target_path));
+  ApplyFolderSelection(node_it != nodes_by_path_.end() ? node_it->second.ui_id_ : 0, true);
+  if (SelectedNodeElementId() != selected_before) {
+    ReloadScopeOfMovedSelection();
+  }
+  RefreshImageCounts();
+}
+
+auto FolderController::SelectedNodeElementId() const -> std::optional<sl_element_id_t> {
+  const auto it = nodes_by_path_.find(PathKey(current_folder_path_));
+  if (it == nodes_by_path_.end()) {
+    return std::nullopt;
+  }
+  return it->second.element_id_;
+}
+
+void FolderController::ReloadScopeOfMovedSelection() {
+  if (stats_) stats_->ClearFilters();
+  library_->ReloadCurrentFolder();
+  if (stats_) emit stats_->StatsFilterChanged();
 }
 
 void FolderController::EnsurePathExpanded(const std::filesystem::path& folderPath) {
   EnsureRootNode();
-  if (!tree_loaded_) {
-    LoadTree();
-  }
 
   auto normalized = folderPath.lexically_normal();
   if (normalized.empty()) {
@@ -380,87 +449,36 @@ auto FolderController::CurrentFolderFsPath() const -> std::filesystem::path {
 }
 
 auto FolderController::CurrentFolderElementId() const -> std::optional<sl_element_id_t> {
-  auto proj = project_->handler().project();
-  if (!proj) {
+  if (project_ == nullptr || !project_->handler().project()) {
     return std::nullopt;
   }
-
-  auto sleeve = proj->GetSleeveService();
-  if (!sleeve) {
-    return std::nullopt;
-  }
-
-  try {
-    const auto folder = sleeve->ResolveFolder(current_folder_path_);
-    if (!folder) {
-      return std::nullopt;
-    }
-    return folder->element_id_;
-  } catch (...) {
-    return std::nullopt;
-  }
+  return SelectedNodeElementId();
 }
 
 auto FolderController::FolderElementIdForUiId(uint folderUiId) const
     -> std::optional<sl_element_id_t> {
-  const auto path_opt = TryGetPathForUiId(folderUiId);
-  if (!path_opt.has_value()) {
+  if (project_ == nullptr || !project_->handler().project()) {
     return std::nullopt;
   }
-  auto proj = project_->handler().project();
-  if (!proj) {
+  const auto key_it = path_key_by_ui_id_.find(folderUiId);
+  if (key_it == path_key_by_ui_id_.end()) {
     return std::nullopt;
   }
-
-  auto sleeve = proj->GetSleeveService();
-  if (!sleeve) {
+  const auto node_it = nodes_by_path_.find(key_it->second);
+  if (node_it == nodes_by_path_.end()) {
     return std::nullopt;
   }
-
-  try {
-    const auto folder = sleeve->ResolveFolder(path_opt.value());
-    if (!folder) {
-      return std::nullopt;
-    }
-    return folder->element_id_;
-  } catch (...) {
-    return std::nullopt;
-  }
+  return node_it->second.element_id_;
 }
 
 auto FolderController::FolderUiIdForElementId(const sl_element_id_t elementId) const
     -> std::optional<uint> {
-  // The root node does not store its element id (EnsureRootNode), so the sleeve resolves it.
-  if (FolderElementIdForUiId(0) == elementId) {
-    return 0u;
-  }
-  if (elementId == 0) {
-    return std::nullopt;
-  }
   for (const auto& [key, node] : nodes_by_path_) {
     if (node.element_id_ == elementId) {
       return node.ui_id_;
     }
   }
   return std::nullopt;
-}
-
-void FolderController::ReloadTree(const std::filesystem::path& preferredFolderPath) {
-  ResetTreeState();
-  LoadTree();
-
-  auto target_path = preferredFolderPath.empty() ? album_util::RootFsPath() : preferredFolderPath;
-  if (!nodes_by_path_.contains(PathKey(target_path))) {
-    target_path = album_util::RootFsPath();
-  }
-  // The sidebar tree and the "Add to" menu list every folder, so each folder shows expanded.
-  for (auto& [key, node] : nodes_by_path_) {
-    node.expanded_ = true;
-  }
-
-  auto node_it = nodes_by_path_.find(PathKey(target_path));
-  ApplyFolderSelection(node_it != nodes_by_path_.end() ? node_it->second.ui_id_ : 0, true);
-  RefreshImageCounts();
 }
 
 void FolderController::SelectFolder(uint folderUiId) {
@@ -470,8 +488,14 @@ void FolderController::SelectFolder(uint folderUiId) {
   }
 
   library_root_selected_ = false;
+  // The selection of the user replaces the target of a pending tree read.
+  reload_selection_path_.reset();
   ApplyFolderSelection(folderUiId, true);
   ReloadSelectedScope();
+  if (!tree_loaded_ && !tree_read_pending_) {
+    // The last tree read failed: read it again.
+    ReloadTree();
+  }
 }
 
 void FolderController::SelectLibraryRoot() {
@@ -481,8 +505,12 @@ void FolderController::SelectLibraryRoot() {
   }
 
   library_root_selected_ = true;
+  reload_selection_path_.reset();
   ApplyFolderSelection(0, true);
   ReloadSelectedScope();
+  if (!tree_loaded_ && !tree_read_pending_) {
+    ReloadTree();
+  }
 }
 
 void FolderController::ReloadSelectedScope() {
@@ -644,7 +672,7 @@ uint FolderController::CreateFolderIn(uint parentFolderUiId, const QString& fold
   }
 
   const bool save_ok = SaveProjectState();
-  library_->ReloadFolderTree(current_folder_path_);
+  library_->ReloadFolderTree();
   ReportFolderEditDone(
       PL_TEXT("Created folder %1", album_util::WStringToQString(created->folder_name_)),
       save_ok);
@@ -757,9 +785,10 @@ void FolderController::DeleteFolder(uint folderUiId) {
   const auto parent_path =
       folder_path.parent_path().empty() ? album_util::RootFsPath() : folder_path.parent_path();
   // Deleting a folder that holds the current folder selects its parent; any other folder keeps
-  // the current selection.
+  // the current selection. The tree read then clears the filters and reloads the Library when
+  // the selection moves (ApplyTree).
   const bool deleted_holds_current = IsAtOrBelow(current_folder_path_, folder_path);
-  const auto next_path = deleted_holds_current ? parent_path : current_folder_path_;
+  const auto next_path             = deleted_holds_current ? parent_path : std::filesystem::path{};
 
   auto       browse                = project_->handler().project()->GetAlbumBrowseService();
   bool       deleted               = false;
@@ -776,15 +805,16 @@ void FolderController::DeleteFolder(uint folderUiId) {
 
   const bool save_ok = SaveProjectState();
   library_->ReloadFolderTree(next_path);
-  if (deleted_holds_current) {
-    if (stats_) stats_->ClearFilters();
-    library_->ReloadCurrentFolder();
-    if (stats_) emit stats_->StatsFilterChanged();
-  }
   ReportFolderEditDone(PL_TEXT("Folder deleted."), save_ok);
 }
 
 void FolderController::ClearState() {
+  if (library_ != nullptr) {
+    // A tree read of the closed project applies nothing (ApplyTree).
+    library_->query_worker().Invalidate(SearchRequestKind::kFolderTree);
+  }
+  tree_read_pending_ = false;
+  reload_selection_path_.reset();
   nodes_by_path_.clear();
   child_keys_by_path_.clear();
   path_key_by_ui_id_.clear();

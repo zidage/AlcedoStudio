@@ -581,7 +581,7 @@ ColumnLayout {
         }
         const parentFolderId = draftParentFolderId
         const trimmed = String(text || "").trim()
-        // The tree reloads inside CreateFolderIn and reassigns ui ids, so the draft ends first.
+        // A tree reload reassigns ui ids, so the draft ends first.
         draftParentFolderId = -1
         if (trimmed.length === 0 || !foldersModule) {
             rebuildFolderRows()
@@ -590,10 +590,23 @@ ColumnLayout {
         const createdElementId = Number(foldersModule.CreateFolderIn(parentFolderId, trimmed))
         rebuildFolderRows()
         if (createdElementId > 0) {
-            const index = indexOfElement(createdElementId)
-            if (index >= 0) {
-                revealFolder(folderRows[index].folderId)
-            }
+            // The row of the new collection comes with the next tree read.
+            pendingRevealElementId = createdElementId
+            revealPendingElement()
+        }
+    }
+
+    // elementId of a new collection whose row is revealed when it arrives; -1 when none.
+    property int pendingRevealElementId: -1
+
+    function revealPendingElement() {
+        if (pendingRevealElementId <= 0) {
+            return
+        }
+        const index = indexOfElement(pendingRevealElementId)
+        if (index >= 0) {
+            pendingRevealElementId = -1
+            revealFolder(folderRows[index].folderId)
         }
     }
 
@@ -830,10 +843,12 @@ ColumnLayout {
             // A closed project: the next project's rows are a first show again.
             revealOnNextRows = true
             revealedElementId = -1
+            pendingRevealElementId = -1
         } else if (revealOnNextRows) {
             revealOnNextRows = false
             revealFolder(currentFolderId)
         }
+        revealPendingElement()
     }
     // A reload can give the selected folder a new ui id; the tree scrolls only when the selected
     // folder itself changes.

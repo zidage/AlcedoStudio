@@ -9,8 +9,16 @@
 /// signal emission.
 
 #include <QSignalSpy>
+#include <chrono>
+#include <future>
+#include <iostream>
+#include <optional>
+#include <thread>
 
 #include "app/album_browse_service.hpp"
+#include "app/sleeve_service.hpp"
+#include "sleeve/sleeve_filesystem.hpp"
+#include "type/type.hpp"
 #include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/saved_project_invariants.hpp"
@@ -437,6 +445,140 @@ TEST_F(FolderTests, RenameAndMove_PersistAfterProjectReopen) {
   ASSERT_FALSE(inner.isEmpty());
   EXPECT_EQ(inner.value("parentElementId").toUInt(), beta.value("elementId").toUInt());
   EXPECT_FALSE(FolderRow(folders, "A").value("hasChildren").toBool());
+}
+
+// ── Tree read on the library query worker (Sleeve Node Cache Plan, SN8) ────
+
+auto ElapsedMs(std::chrono::steady_clock::time_point start) -> double {
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+      .count();
+}
+
+TEST_F(FolderTests, TreeReloadReturnsWhileTheFileSystemLockIsHeldAndAppliesAfterTheRelease) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+  auto* folders = backend.folders();
+  folders->CreateFolder("Before");
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+  ProcessEvents(200);
+
+  // A folder written past the controller: only a tree read shows it.
+  auto sleeve = backend.project()->handler().project()->GetSleeveService();
+  ASSERT_TRUE(sleeve
+                  ->Write<void>([](FileSystem& fs) {
+                    (void)fs.CreateFolderIn(kLibraryRootFolderId, L"Later");
+                  })
+                  .success_);
+
+  // Another thread holds the file system lock, as an import batch or a mount scan does.
+  std::promise<void>       locked;
+  std::promise<void>       release;
+  std::shared_future<void> released = release.get_future().share();
+  std::thread              holder([&] {
+    sleeve->Read<void>([&](FileSystem&) {
+      locked.set_value();
+      // The test ends the wait; the limit keeps a broken run from hanging.
+      (void)released.wait_for(std::chrono::seconds(10));
+    });
+  });
+  locked.get_future().wait();
+
+  const auto reload_start = std::chrono::steady_clock::now();
+  folders->ReloadTree();
+  const double reload_ms = ElapsedMs(reload_start);
+  const auto   id_start  = std::chrono::steady_clock::now();
+  const auto   current   = folders->CurrentFolderElementId();
+  const double id_ms     = ElapsedMs(id_start);
+  ProcessEvents(300);
+  const bool pending_while_locked = folders->tree_read_pending();
+  const bool later_while_locked   = !FolderRow(folders->Folders(), "Later").isEmpty();
+  const bool before_while_locked  = !FolderRow(folders->Folders(), "Before").isEmpty();
+  release.set_value();
+  holder.join();
+  std::cout << "[sn8] ui_thread reload_ms=" << reload_ms << " current_folder_id_ms=" << id_ms
+            << "\n";
+
+  EXPECT_LT(reload_ms, 50.0);
+  EXPECT_LT(id_ms, 50.0);
+  EXPECT_EQ(current, std::optional<sl_element_id_t>(kLibraryRootFolderId));
+  // The read waits on the worker; the rows of the last read stay.
+  EXPECT_TRUE(pending_while_locked);
+  EXPECT_FALSE(later_while_locked);
+  EXPECT_TRUE(before_while_locked);
+
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+  EXPECT_FALSE(FolderRow(folders->Folders(), "Later").isEmpty());
+  EXPECT_FALSE(FolderRow(folders->Folders(), "Before").isEmpty());
+}
+
+// The order that a project switch produces: ClearState runs before the queued result of the
+// read of the old project (FolderController::ApplyTree).
+TEST_F(FolderTests, TreeReadOfAClosedProjectDoesNotFillTheTree) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+  auto* folders = backend.folders();
+  folders->CreateFolder("Kept");
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+  ASSERT_FALSE(FolderRow(folders->Folders(), "Kept").isEmpty());
+
+  folders->ReloadTree();
+  folders->ClearState();
+  ProcessEvents(500);
+
+  EXPECT_FALSE(folders->tree_read_pending());
+  EXPECT_TRUE(folders->Folders().isEmpty())
+      << FolderNames(folders->Folders()).join(", ").toStdString();
+}
+
+TEST_F(FolderTests, SelectionByTheUserBeforeTheTreeReadAppliesStays) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+  auto* folders = backend.folders();
+  folders->CreateFolder("A");
+  folders->CreateFolder("B");
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+  ProcessEvents(200);
+
+  // A reload that selects A (as a rename of A does), then a click on B before its result.
+  folders->ReloadTree(L"/A");
+  folders->SelectFolder(FolderRow(folders->Folders(), "B").value("folderId").toUInt());
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+
+  EXPECT_EQ(folders->CurrentFolderPath(), "\\B");
+  EXPECT_EQ(folders->CurrentFolderElementId(),
+            std::optional<sl_element_id_t>(
+                FolderRow(folders->Folders(), "B").value("elementId").toUInt()));
+}
+
+TEST_F(FolderTests, DeletingTheCurrentFolderSelectsItsParentAndReloadsTheLibrary) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+  auto* folders = backend.folders();
+  folders->CreateFolder("Parent");
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+  const auto parent = FolderRow(folders->Folders(), "Parent");
+  folders->SelectFolder(parent.value("folderId").toUInt());
+  folders->CreateFolder("Child");
+  folders->CreateFolder("Other");
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+  folders->SelectFolder(FolderRow(folders->Folders(), "Child").value("folderId").toUInt());
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
+  ASSERT_EQ(folders->CurrentFolderPath(), "\\Parent\\Child");
+
+  QSignalSpy filters_spy(backend.stats(), &StatsEngine::StatsFilterChanged);
+  // Another folder: the selection and the filters stay.
+  folders->DeleteFolder(FolderRow(folders->Folders(), "Other").value("folderId").toUInt());
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+  EXPECT_EQ(folders->CurrentFolderPath(), "\\Parent\\Child");
+  EXPECT_TRUE(filters_spy.isEmpty());
+
+  folders->DeleteFolder(FolderRow(folders->Folders(), "Child").value("folderId").toUInt());
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+  EXPECT_EQ(folders->CurrentFolderPath(), "\\Parent");
+  EXPECT_EQ(folders->CurrentFolderElementId(),
+            std::optional<sl_element_id_t>(parent.value("elementId").toUInt()));
+  EXPECT_EQ(filters_spy.count(), 1);
+  EXPECT_TRUE(WaitForLibraryQuery(backend));
 }
 
 // ── Photo count of every tree row (issue #733) ─────────────────────────────

@@ -783,6 +783,7 @@ TEST_F(ImportTests, FolderImportWithoutTheDialogKeepsItsCollectionAcrossATreeRel
   const auto c_id    = folders->CreateFolderIn(0, QStringLiteral("C"));
   ASSERT_NE(b_id, 0u);
   ASSERT_NE(c_id, 0u);
+  ASSERT_TRUE(WaitForFolderTree(*folders));
   const auto c_row = folders->FolderUiIdForElementId(c_id);
   const auto b_row = folders->FolderUiIdForElementId(b_id);
   ASSERT_TRUE(c_row.has_value());
@@ -795,10 +796,12 @@ TEST_F(ImportTests, FolderImportWithoutTheDialogKeepsItsCollectionAcrossATreeRel
   backend.import_export()->StartFolderImportOfFolderAsUser(PathToQString(source),
                                                            static_cast<int>(c_row.value()));
   // The scan reports its end through the event loop, so these edits come before it. Each edit
-  // reloads the tree, and the row id of C now names D.
+  // reloads the tree, and the row id of C now names D. WaitForFolderTree delivers the tree
+  // result only, so the scan end stays queued.
   folders->DeleteFolder(b_row.value());
   const auto d_id = folders->CreateFolderIn(0, QStringLiteral("D"));
   ASSERT_NE(d_id, 0u);
+  ASSERT_TRUE(WaitForFolderTree(*folders));
   ASSERT_EQ(folders->FolderElementIdForUiId(c_row.value()), std::optional<sl_element_id_t>(d_id));
 
   WaitForPendingFolderImport(backend);
@@ -815,6 +818,7 @@ TEST_F(ImportTests, FolderImportWithoutTheDialogEndsWhenItsCollectionIsDeleted) 
   auto*      folders = backend.folders();
   const auto c_id    = folders->CreateFolderIn(0, QStringLiteral("C"));
   ASSERT_NE(c_id, 0u);
+  ASSERT_TRUE(WaitForFolderTree(*folders));
   const auto c_row = folders->FolderUiIdForElementId(c_id);
   ASSERT_TRUE(c_row.has_value());
 
@@ -826,6 +830,7 @@ TEST_F(ImportTests, FolderImportWithoutTheDialogEndsWhenItsCollectionIsDeleted) 
   folders->DeleteFolder(c_row.value());
   const auto d_id = folders->CreateFolderIn(0, QStringLiteral("D"));
   ASSERT_NE(d_id, 0u);
+  ASSERT_TRUE(WaitForFolderTree(*folders));
 
   WaitForPendingFolderImport(backend);
   EXPECT_EQ(backend.import_export()->ImportTotal(), 0);

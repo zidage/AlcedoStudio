@@ -17,16 +17,17 @@ namespace alcedo::ui {
 /// Kind of a search request. A request replaces the pending request of its own kind only, so
 /// a dialog preview never drops a pending apply and the reverse.
 enum class SearchRequestKind : std::uint8_t {
-  kPreview        = 0,  ///< Search dialog page: typing preview, paging, and explicit submit.
-  kApply          = 1,  ///< Library refresh: first page, groups, and stats of the applied query.
-  kLibraryPage    = 2,  ///< Later page of the accepted library query (scroll or section jump).
-  kLibraryIds     = 3,  ///< Position or ordered-id read of the accepted library query.
-  kSelectAll      = 4,  ///< Read of every file id of the accepted library query (Select All).
-  kPrewarm        = 5,  ///< Sidecar start and neutral text embedding before the first search.
-  kStatistics     = 6,  ///< Statistics of the accepted library query, with no photo rows.
-  kFolderCounts   = 7,  ///< Photo count of every folder for the Collections tree.
-  kEditorList     = 8,  ///< Position read of the editor's open photo (editor list check).
-  kSelectionMarks = 9,  ///< Ratings and marks of the selected photos (marks control).
+  kPreview        = 0,   ///< Search dialog page: typing preview, paging, and explicit submit.
+  kApply          = 1,   ///< Library refresh: first page, groups, and stats of the applied query.
+  kLibraryPage    = 2,   ///< Later page of the accepted library query (scroll or section jump).
+  kLibraryIds     = 3,   ///< Position or ordered-id read of the accepted library query.
+  kSelectAll      = 4,   ///< Read of every file id of the accepted library query (Select All).
+  kPrewarm        = 5,   ///< Sidecar start and neutral text embedding before the first search.
+  kStatistics     = 6,   ///< Statistics of the accepted library query, with no photo rows.
+  kFolderCounts   = 7,   ///< Photo count of every folder for the Collections tree.
+  kEditorList     = 8,   ///< Position read of the editor's open photo (editor list check).
+  kSelectionMarks = 9,   ///< Ratings and marks of the selected photos (marks control).
+  kFolderTree     = 10,  ///< Folder tree of the Collections sidebar (FolderController::ReloadTree).
 };
 
 /// One worker thread that runs search requests in submit order with latest-wins coalescing.
@@ -83,7 +84,7 @@ class SearchRequestWorker {
   std::condition_variable      wake_;
   std::deque<PendingRequest>   pending_{};
   std::condition_variable      idle_;
-  std::array<std::uint64_t, 10> newest_generation_{};
+  std::array<std::uint64_t, 11> newest_generation_{};
   std::uint64_t                last_generation_ = 0;
   bool                         stopping_        = false;
   bool                         running_         = false;
