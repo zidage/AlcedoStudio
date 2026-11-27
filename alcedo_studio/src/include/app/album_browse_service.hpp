@@ -85,6 +85,9 @@ class AlbumBrowseService {
                               std::shared_ptr<SleeveFilterService> filter_service = nullptr)
       : sleeve_service_(std::move(sleeve_service)), filter_service_(std::move(filter_service)) {}
 
+  /// The child folders of the folder at @p folder_path. Reads folders only; no file element of
+  /// the project loads (Sleeve Node Cache Plan, SN1). A failed read writes one warning with the
+  /// path and the error text and throws the error, so a caller can read the folder again.
   [[nodiscard]] auto ListFolders(const std::filesystem::path& folder_path) const
       -> std::vector<AlbumFolderView>;
   [[nodiscard]] auto ListFilesInFolder(const std::filesystem::path& folder_path) const

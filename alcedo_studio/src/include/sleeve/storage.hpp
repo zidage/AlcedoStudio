@@ -19,6 +19,7 @@
 #include "storage/store/semantic/semantic_model_registry.hpp"
 #include "storage/store/semantic/semantic_vector_search.hpp"
 #include "storage/store/sleeve/element_store.hpp"
+#include "storage/store/sleeve/folder_entry_store.hpp"
 #include "storage/store/storage_maintenance.hpp"
 #include "storage/store/storage_session.hpp"
 #include "type/type.hpp"
@@ -28,15 +29,28 @@ namespace alcedo {
 class NodeStorageHandler {
  private:
   ElementStore&                                                   element_store_;
+  FolderEntryStore&                                               folder_entry_store_;
 
   std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>>& storage_;
 
  public:
-  NodeStorageHandler(ElementStore&                                                   element_store,
+  NodeStorageHandler(ElementStore& element_store, FolderEntryStore& folder_entry_store,
                      std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>>& storage);
   void AddToStorage(std::shared_ptr<SleeveElement> new_element);
+  /// Load every child of @p folder into the node map and the folder. A failed load writes one
+  /// warning with the folder id and the error text and leaves the folder unloaded.
   void EnsureChildrenLoaded(std::shared_ptr<SleeveFolder> folder);
   auto GetElement(sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
+  /**
+   * @brief The live child folders of @p folder. Loads no file element.
+   *
+   * @details A folder with loaded children answers from memory, so the changes of the current
+   * write are in the result. Otherwise one FolderEntryStore statement reads the child folders:
+   * a folder that the node map already holds keeps its live object, and each other folder goes
+   * into the map. The folder itself stays unloaded. Deleted folders are not in the result.
+   * @throws The store error of FolderEntryStore::ReadChildFolders.
+   */
+  auto ChildFolders(const SleeveFolder& folder) -> std::vector<std::shared_ptr<SleeveFolder>>;
   void GarbageCollect();
 };
 
@@ -51,7 +65,8 @@ class Storage {
  private:
   Database                                                              database_;
   ElementStore                                                         element_store_;
-  ImageStore                                                           image_store_;
+  FolderEntryStore                                                     folder_entry_store_;
+  ImageStore                                                         image_store_;
   MountStore                                                           mount_store_;
   SemanticModelRegistry                                                 semantic_models_;
   SemanticEmbeddingStore                                                semantic_embeddings_;
@@ -78,6 +93,8 @@ class Storage {
   /// Diagnostics summary, package snapshot, and HNSW index removal (see StorageMaintenance).
   auto Maintenance() -> StorageMaintenance&;
   auto GetElementStore() -> ElementStore&;
+  /// Folder structure reads that load no file element (see FolderEntryStore).
+  auto GetFolderEntryStore() -> FolderEntryStore&;
   auto GetImageStore() -> ImageStore&;
   /// MountRoot and SourceFile rows (mounted folders).
   auto GetMountStore() -> MountStore&;

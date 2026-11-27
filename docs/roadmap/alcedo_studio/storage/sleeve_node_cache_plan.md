@@ -2,7 +2,7 @@
 
 Date: 2026-11-26
 
-Status: **planned**. No phase has implementation evidence.
+Status: **in progress**. SN1 is complete (2026-11-26). SN2 to SN8 are planned.
 
 Parent: [Roadmap](../../README.md).
 
@@ -11,7 +11,8 @@ Direct prerequisites: the storage boundary of the
 [Mounted Folder Plan](mounted_folder_plan.md). This plan changes the cache rules of the sleeve file
 system inside that boundary. It keeps both plans.
 
-Tracking issue: [#1148](https://github.com/zidage/AlcedoStudio/issues/1148).
+Tracking issue: [#1152](https://github.com/zidage/AlcedoStudio/issues/1152). Cause and required
+behavior: [#1148](https://github.com/zidage/AlcedoStudio/issues/1148).
 
 Source audit revision: `f4d364746` on `main`.
 
@@ -210,7 +211,7 @@ and the tests.
 
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
-| SN1 | The folder listing reads folders only. A failed listing writes a log line. | `FolderEntryStore`, `AlbumBrowseService`, `FolderController` | None | 350 to 500 | planned |
+| SN1 | The folder listing reads folders only. A failed listing writes a log line. | `FolderEntryStore`, `AlbumBrowseService`, `FolderController` | None | 350 to 500 | complete |
 | SN2 | `NodeCache` with the page table and the dirty list. One sync transaction. | `NodeCache`, `SleeveElement`, `SleeveServiceImpl::Sync` | SN1 | 1100 to 1500 | planned |
 | SN3 | All folders load with one query. One tree read for the sidebar. | `NodeStorageHandler`, `PathResolver`, `FolderController` | SN2 | 700 to 1000 | planned |
 | SN4 | File entries leave the folders. File names are labels. Project file 0.15.0. | `SleeveFolder`, `FileSystem`, project version | SN3 | 1200 to 1700 | planned |
@@ -259,10 +260,85 @@ folder keeps the other folders listed. Each failed listing writes one warning.
 
 **Exit criteria.**
 
-- [ ] Both tests pass in the debug build.
-- [ ] `SleeveFSTest`, `SleeveServiceTest`, and `AlbumBrowseServiceMountTest` pass.
+- [x] Both tests pass in the debug build.
+- [x] `SleeveFSTest`, `SleeveServiceTest`, and `AlbumBrowseServiceMountTest` pass.
 
-**Completion record.** Use the template of section 9.
+**Completion record.**
+
+```text
+Phase / date / status: SN1 / 2026-11-26 / complete. Issue #1153 (sub-issue of #1152).
+Source revision and branch: c00ad5afc (plan PR #1151) on refact/sleeve-folder-only-listing.
+Actual changed modules: FolderEntryStore (new), Storage, NodeStorageHandler, PathResolver,
+  FileSystem, SleeveServiceImpl, AlbumBrowseService, FolderController, SleeveServiceTest.
+Implemented behavior:
+  - FolderEntryStore::ReadChildFolders: one duckorm statement, FolderContent joined with Element
+    where type is FOLDER. A FolderContent row with no Element row is not in the result.
+  - NodeStorageHandler::ChildFolders: a folder with loaded children answers from memory (the
+    changes of the current write are in the result); otherwise the store read, where a folder
+    that the node map holds keeps its live object and each other folder goes into the map.
+  - PathResolver::ResolveFolder: a path walk through ChildFolders at each part. It loads no file
+    element and no children of a folder on the path.
+  - FileSystem::ListChildFolders and SleeveServiceImpl::ListChildFolders (read lock).
+  - AlbumBrowseService::ListFolders uses ListChildFolders. A failure writes
+    ALCEDO_LOG_WARN(Library) with the path and the text, then throws.
+  - NodeStorageHandler::EnsureChildrenLoaded writes ALCEDO_LOG_WARN(Library) with the folder id
+    and the text.
+  - FolderController::LoadChildren writes qCWarning(diag::libraryLog) and leaves the folder
+    unloaded.
+Decisions made during the work:
+  - PathResolver::ResolveFolder is new. The plan did not name it: Resolve calls
+    EnsureChildrenLoaded for each folder on the path and for the target, so a listing of
+    /Trip through Resolve loads every file of the root.
+  - ListFolders throws after the log line instead of returning the folders that it has. The
+    listing is one store read, so a failure has no partial result; an empty result would make
+    FolderController mark the folder loaded, and the next expand would not read it again. The
+    automation command library.folders returns the error through the command registry.
+  - ReadChildFolders returns std::shared_ptr<SleeveFolder> instead of SleeveElement.
+  - FileSystem::IsInNodeMap(id) (memory read) gives the tests their observation. SN2 changes
+    it to NodeCache::Find.
+  - Test names: the plan fixture SleeveServiceTest is SleeveServiceTests in the source, and the
+    first test uses its subclass MountedFolderStructureTest, which already builds files in the
+    root and one mount.
+Explicitly unimplemented items: none of SN1. The sidebar still sends one ListFolders call for
+  each folder, and each call walks the path from the root; SN3 makes the tree resident.
+Primary success call chain:
+  FolderController::LoadChildren(path)
+    -> AlbumBrowseService::ListFolders(path)
+    -> SleeveServiceImpl::ListChildFolders(path)                   (Read, fs_lock_)
+    -> FileSystem::ListChildFolders(path)
+    -> PathResolver::ResolveFolder(path)
+         -> NodeStorageHandler::ChildFolders(folder) at each part
+              -> memory (children loaded) or FolderEntryStore::ReadChildFolders (one statement)
+    -> NodeStorageHandler::ChildFolders(target)
+    -> AlbumFolderView values -> child_keys_by_path_, loaded_paths_
+Primary failure and restore call chain:
+  FolderEntryStore::ReadChildFolders throws (DuckDB error, refused row)
+    -> no folder changed; the folders read before stay in the node map as SYNCED elements
+    -> AlbumBrowseService::ListFolders: ALCEDO_LOG_WARN(Library) path + text, rethrow
+    -> FolderController::LoadChildren: qCWarning(libraryLog), loaded_paths_ unchanged
+    -> the next expand of the folder reads it again
+Build and test commands with exit codes:
+  cmd /c "scripts\msvc_env.cmd --build build\debug --target SleeveServiceTest SleeveFSTest
+    AlbumBrowseServiceMountTest --parallel 8"                                   exit 0
+  cmd /c "scripts\msvc_env.cmd --build build\debug --target <folder_controller.cpp.obj>
+    <library_commands.cpp.obj>"                                                 exit 0
+  SleeveServiceTest.exe --gtest_brief=1                                         exit 0
+  SleeveFSTest.exe --gtest_brief=1                                              exit 0
+  AlbumBrowseServiceMountTest.exe --gtest_brief=1                               exit 0
+  python scripts\check_storage_boundary.py                                      exit 0
+Discovered / passed / failed / skipped counts:
+  SleeveServiceTest 32 / 32 / 0 / 0, with
+    SleeveServiceTests.ListChildFoldersKeepsFoldersWhenOneRowHasNoElement and
+    MountedFolderStructureTest.ListChildFoldersLeavesFileElementsUnloaded
+  SleeveFSTest 13 / 13 / 0 / 0
+  AlbumBrowseServiceMountTest 3 / 3 / 0 / 0
+Manual verification: none. The application was not started.
+Performance or resource evidence, if required: not required for SN1.
+Evidence path: build/tmp/sn1/ (build.log, build2.log, build_ui.log, suite logs).
+Remaining defects or unavailable platforms: macOS and Linux builds not run.
+  sleeve/sleeve_filesystem.cpp grows from 785 to 790 lines (ListChildFolders); SN2 makes it
+  smaller (D7).
+```
 
 ### SN2: NodeCache, dirty list, one sync transaction
 

@@ -100,6 +100,26 @@ auto PathResolver::Resolve(const std::filesystem::path& path) -> std::shared_ptr
   return current;
 }
 
+auto PathResolver::ResolveFolder(const std::filesystem::path& path)
+    -> std::shared_ptr<SleeveFolder> {
+  auto current = root_;
+  for (const auto& part : path.lexically_normal().relative_path()) {
+    const auto name = part.wstring();
+    if (name.empty() || name == L".") {
+      continue;
+    }
+    const auto children = storage_handler_.ChildFolders(*current);
+    const auto next = std::find_if(children.begin(), children.end(), [&name](const auto& child) {
+      return child->element_name_ == name;
+    });
+    if (next == children.end()) {
+      throw std::runtime_error("Path Resolver: Illegal path. Target folder does not exist");
+    }
+    current = *next;
+  }
+  return current;
+}
+
 void PathResolver::Invalidate(const std::filesystem::path& path) {
   directory_cache_.RemoveRecord(path.wstring());
 }

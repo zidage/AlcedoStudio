@@ -111,6 +111,19 @@ class FileSystem {
   auto ListFolderContent(const std::filesystem::path& folder_path, bool write = false)
       -> std::vector<sl_element_id_t>;
   auto ListFolderContent(sl_element_id_t folder_id) -> std::vector<sl_element_id_t>;
+  /**
+   * @brief The live child folders of the folder at @p folder_path. Loads no file element: the
+   *        path walk and the listing read folders only (Sleeve Node Cache Plan, SN1).
+   *
+   * Folders that the node map holds keep their live state; the other read folders go into the
+   * map. Order is unspecified.
+   * @throws std::runtime_error when @p folder_path names no live folder, and the store error of
+   *         a child folder read.
+   */
+  auto ListChildFolders(const std::filesystem::path& folder_path)
+      -> std::vector<std::shared_ptr<SleeveFolder>>;
+  /// True when the node map holds the element @p id. Reads memory only.
+  [[nodiscard]] auto IsInNodeMap(sl_element_id_t id) const -> bool { return storage_.contains(id); }
 
   auto ApplyFilterToFolder(const std::filesystem::path&       folder_path,
                            const std::shared_ptr<FilterCombo> filter)

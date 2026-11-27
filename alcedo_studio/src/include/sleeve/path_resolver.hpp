@@ -42,6 +42,13 @@ class PathResolver {
   auto Contains(const std::filesystem::path& path, ElementType type) -> bool;
   auto Contains(const std::filesystem::path& path) -> bool;
   auto Resolve(const std::filesystem::path& path) -> std::shared_ptr<SleeveElement>;
+  /**
+   * @brief The live folder at @p path, found through NodeStorageHandler::ChildFolders at each
+   *        part of the path. Loads no file element and no children of a folder on the path.
+   * @throws std::runtime_error when a part of the path names no live folder, and the store error
+   *         of a child folder read.
+   */
+  auto ResolveFolder(const std::filesystem::path& path) -> std::shared_ptr<SleeveFolder>;
   auto ResolveForWrite(const std::filesystem::path& path) -> std::shared_ptr<SleeveElement>;
   void Invalidate(const std::filesystem::path& path);
   /// Removes every cached path. A rename or a move changes the path of a whole subtree.

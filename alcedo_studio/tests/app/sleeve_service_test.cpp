@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "../support/storage_test_access.hpp"
+#include "app/album_browse_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_error.hpp"
@@ -109,6 +110,30 @@ auto FolderContentRowIds(ProjectService& project, sl_element_id_t folder_id)
   }
   duckdb_destroy_result(&result);
   return rows;
+}
+
+/// Runs @p sql on the project's connection; throws the DuckDB message when it fails.
+void ExecuteOnProjectDatabase(ProjectService& project, const std::string& sql) {
+  auto          guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
+  auto          lock  = guard.Lock();
+  duckdb_result result;
+  const bool    ok        = duckdb_query(guard.conn_, sql.c_str(), &result) == DuckDBSuccess;
+  const std::string error = ok ? std::string{} : duckdb_result_error(&result);
+  duckdb_destroy_result(&result);
+  if (!ok) {
+    throw std::runtime_error(error);
+  }
+}
+
+/// The folder names of a listing in ascending order.
+auto SortedFolderNames(const std::vector<AlbumFolderView>& folders) -> std::vector<std::wstring> {
+  std::vector<std::wstring> names;
+  names.reserve(folders.size());
+  for (const auto& folder : folders) {
+    names.push_back(folder.folder_name_);
+  }
+  std::sort(names.begin(), names.end());
+  return names;
 }
 
 /// Exposure in the element pipeline JSON of @p id: the data SleeveService copies when it
@@ -1282,6 +1307,60 @@ TEST_F(MountedFolderStructureTest, OrdinaryFolderCannotMoveIntoAMountedFolder) {
   Reopen();
   EXPECT_EQ(Tree(), before);
   EXPECT_EQ(Sleeve().ResolveFolder(L"/Ordinary")->element_id_, ordinary_folder_id_);
+}
+
+// Sleeve Node Cache Plan SN1: the sidebar listing walks and lists folders only, so the files of
+// the root and of the mount stay out of the node map.
+TEST_F(MountedFolderStructureTest, ListChildFoldersLeavesFileElementsUnloaded) {
+  Reopen();
+  const auto browse = project_->GetAlbumBrowseService();
+  ASSERT_NE(browse, nullptr);
+
+  EXPECT_EQ(SortedFolderNames(browse->ListFolders(L"/")),
+            (std::vector<std::wstring>{L"Ordinary", L"Trip"}));
+  const auto trip_folders = browse->ListFolders(L"/Trip");
+  ASSERT_EQ(trip_folders.size(), 1u);
+  EXPECT_EQ(trip_folders.front().folder_id_, mounted_folder_id_);
+  EXPECT_EQ(trip_folders.front().mount_id_, std::optional<mount_id_t>{kMount});
+  EXPECT_TRUE(browse->ListFolders(L"/Trip/Day").empty());
+
+  const std::vector<sl_element_id_t> file_ids{present_file_id_, missing_file_id_,
+                                              ordinary_file_id_};
+  const auto loaded_files = Sleeve().Read<std::vector<sl_element_id_t>>([&](FileSystem& fs) {
+    std::vector<sl_element_id_t> loaded;
+    for (const auto id : file_ids) {
+      if (fs.IsInNodeMap(id)) {
+        loaded.push_back(id);
+      }
+    }
+    return loaded;
+  });
+  EXPECT_TRUE(loaded_files.empty());
+}
+
+// Sleeve Node Cache Plan SN1: a FolderContent row of the root whose element row is missing does
+// not empty the listing of the root.
+TEST_F(SleeveServiceTests, ListChildFoldersKeepsFoldersWhenOneRowHasNoElement) {
+  constexpr sl_element_id_t kMissingElementId = 900000;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    service->CreateFolder(L"/", L"Kept");
+    service->CreateFolder(L"/", L"Other");
+    service->Write<std::shared_ptr<SleeveElement>>(
+        [](FileSystem& fs) { return fs.Create(L"/Kept", L"Image", ElementType::FILE); });
+    ExecuteOnProjectDatabase(
+        project, "INSERT INTO FolderContent VALUES (0, " + std::to_string(kMissingElementId) + ")");
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService reopened(db_path_, meta_path_);
+  ASSERT_EQ(FolderContentRowIds(reopened, 0).count(kMissingElementId), 1u);
+  const auto browse = reopened.GetAlbumBrowseService();
+  ASSERT_NE(browse, nullptr);
+  EXPECT_EQ(SortedFolderNames(browse->ListFolders(L"/")),
+            (std::vector<std::wstring>{L"Kept", L"Other"}));
+  EXPECT_TRUE(browse->ListFolders(L"/Kept").empty());
 }
 
 }  // namespace alcedo
