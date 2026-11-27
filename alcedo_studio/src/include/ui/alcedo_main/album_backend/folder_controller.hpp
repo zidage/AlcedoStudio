@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -227,6 +228,14 @@ class FolderController final : public QObject {
     return image_counts_loaded_ ? static_cast<qint64>(project_image_count_) : -1;
   }
   [[nodiscard]] auto ArrivedVolume() const -> QVariantMap { return arrived_volume_; }
+  /// The mount point of the volume of the card; empty when arrivedVolume is empty.
+  [[nodiscard]] auto arrived_mount_point() const -> const std::filesystem::path& {
+    return arrived_mount_point_;
+  }
+  /// The identity of the volume of the card; empty when it has none or there is no card.
+  [[nodiscard]] auto arrived_volume_identity() const -> const std::string& {
+    return arrived_identity_;
+  }
   [[nodiscard]] auto current_folder_path_text() const -> const QString& {
     return current_folder_path_text_;
   }

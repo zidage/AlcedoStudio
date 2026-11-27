@@ -82,6 +82,7 @@ class ManualClock final : public MountScanClock {
   }
   void StopTimer(mount_id_t mount_id) override { timers_.erase(mount_id); }
   void StopAllTimers() override { timers_.clear(); }
+  [[nodiscard]] auto HasRunningTimer() const -> bool override { return !timers_.empty(); }
 
   /// Move the time forward and run each timer that is due, in the order of its time.
   void Advance(milliseconds step) {
@@ -316,6 +317,17 @@ auto MountScanTasks(BackgroundTaskController& tasks) -> std::vector<QVariantMap>
     }
   }
   return result;
+}
+
+/// The state of the task @p task_id of the task list; empty when the list does not hold it.
+auto TaskState(BackgroundTaskController& tasks, const QString& task_id) -> QString {
+  for (const auto& value : tasks.Tasks()) {
+    const auto task = value.toMap();
+    if (task.value(QStringLiteral("id")).toString() == task_id) {
+      return task.value(QStringLiteral("state")).toString();
+    }
+  }
+  return {};
 }
 
 class MountScanCoordinatorTest : public ::testing::Test {
@@ -892,6 +904,7 @@ TEST_F(MountScanCoordinatorTest, HoldWaitsForTheBatchAndTheScanRunsAgainAfterThe
   ASSERT_TRUE(WaitUntil([&ready] { return ready; }));
   EXPECT_TRUE(port_->SawStopRequest());
   EXPECT_FALSE(coordinator_->HasWorker());
+  EXPECT_EQ(coordinator_->ScanActivity(kMount), MountScanActivity::kPaused);
   EXPECT_TRUE(ended.empty()) << "the request waits for the scan that runs again";
   auto tasks = MountScanTasks(tasks_);
   ASSERT_EQ(tasks.size(), 1U);
@@ -983,6 +996,144 @@ TEST_F(MountScanCoordinatorTest, CancelOfAPausedTaskDropsTheScan) {
   ProcessQueuedEvents();
   EXPECT_FALSE(coordinator_->HasPendingScans());
   EXPECT_EQ(port_->ScanCount(), 2);
+}
+
+// ── Synchronize tasks and scan activity (#1189) ─────────────────────────────
+
+TEST_F(MountScanCoordinatorTest, WaitingSynchronizeShowsAQueuedTaskThatItsScanTakesOver) {
+  StartAndWaitForTheOpenScan();
+  port_->HoldScans();
+  ASSERT_TRUE(coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize));
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+  const QString running_task = coordinator_->SynchronizeTaskId(kMount);
+  ASSERT_FALSE(running_task.isEmpty());
+  EXPECT_EQ(coordinator_->ScanActivity(kMount), MountScanActivity::kRunning);
+
+  // The request during the scan waits for the scan after it, in a task of its own.
+  std::vector<MountScanStatus> ended;
+  ASSERT_TRUE(coordinator_->RequestScan(
+      kMount, MountScanTrigger::kSynchronize,
+      [&ended](const MountScanResult& result) { ended.push_back(result.status); }));
+  const QString waiting_task = coordinator_->SynchronizeTaskId(kMount);
+  ASSERT_FALSE(waiting_task.isEmpty());
+  EXPECT_NE(waiting_task, running_task);
+  EXPECT_EQ(TaskState(tasks_, waiting_task), QStringLiteral("queued"));
+  EXPECT_EQ(TaskState(tasks_, running_task), QStringLiteral("running"));
+
+  port_->ReleaseScans();
+  ASSERT_TRUE(WaitForScans(3));
+  EXPECT_EQ(ended, (std::vector<MountScanStatus>{MountScanStatus::kComplete}));
+  EXPECT_EQ(MountScanTasks(tasks_).size(), 2U) << "the second scan runs in the queued task";
+  EXPECT_EQ(TaskState(tasks_, running_task), QStringLiteral("succeeded"));
+  EXPECT_EQ(TaskState(tasks_, waiting_task), QStringLiteral("succeeded"));
+  EXPECT_EQ(coordinator_->ScanActivity(kMount), MountScanActivity::kIdle);
+  EXPECT_TRUE(coordinator_->SynchronizeTaskId(kMount).isEmpty());
+}
+
+TEST_F(MountScanCoordinatorTest, CancelOfAWaitingSynchronizeKeepsTheRunningScan) {
+  StartAndWaitForTheOpenScan();
+  port_->HoldScans();
+  ASSERT_TRUE(coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize));
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+  const QString                running_task = coordinator_->SynchronizeTaskId(kMount);
+  std::vector<MountScanStatus> ended;
+  ASSERT_TRUE(coordinator_->RequestScan(
+      kMount, MountScanTrigger::kSynchronize,
+      [&ended](const MountScanResult& result) { ended.push_back(result.status); }));
+  const QString waiting_task = coordinator_->SynchronizeTaskId(kMount);
+
+  ASSERT_TRUE(tasks_.CancelTask(waiting_task));
+  ProcessQueuedEvents();
+  EXPECT_EQ(TaskState(tasks_, waiting_task), QStringLiteral("canceled"));
+  EXPECT_EQ(ended, (std::vector<MountScanStatus>{MountScanStatus::kCanceled}));
+  EXPECT_EQ(coordinator_->ScanActivity(kMount), MountScanActivity::kRunning);
+  EXPECT_EQ(coordinator_->SynchronizeTaskId(kMount), running_task);
+
+  port_->ReleaseScans();
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_EQ(port_->ScanCount(), 2) << "the canceled request starts no scan";
+  EXPECT_EQ(TaskState(tasks_, running_task), QStringLiteral("succeeded"));
+}
+
+TEST_F(MountScanCoordinatorTest, CancelOfTheRunningScanKeepsAWaitingSynchronize) {
+  StartAndWaitForTheOpenScan();
+  port_->HoldScans();
+  ASSERT_TRUE(coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize));
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+  const QString                running_task = coordinator_->SynchronizeTaskId(kMount);
+  std::vector<MountScanStatus> ended;
+  ASSERT_TRUE(coordinator_->RequestScan(
+      kMount, MountScanTrigger::kSynchronize,
+      [&ended](const MountScanResult& result) { ended.push_back(result.status); }));
+  const QString waiting_task = coordinator_->SynchronizeTaskId(kMount);
+
+  ASSERT_TRUE(tasks_.CancelTask(running_task));
+  port_->ReleaseScans();
+  ASSERT_TRUE(WaitForScans(3));
+  EXPECT_EQ(port_->ScanCount(), 3);
+  EXPECT_EQ(TaskState(tasks_, running_task), QStringLiteral("canceled"));
+  EXPECT_EQ(TaskState(tasks_, waiting_task), QStringLiteral("succeeded"));
+  EXPECT_EQ(ended, (std::vector<MountScanStatus>{MountScanStatus::kComplete}));
+}
+
+TEST_F(MountScanCoordinatorTest, HoldOfAScanWithAWaitingSynchronizeKeepsTheQueuedTask) {
+  StartAndWaitForTheOpenScan();
+  port_->HoldScans();
+  ASSERT_TRUE(coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize));
+  ASSERT_TRUE(port_->WaitUntilScanIsHeld());
+  const QString running_task = coordinator_->SynchronizeTaskId(kMount);
+  ASSERT_TRUE(coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize));
+  const QString waiting_task = coordinator_->SynchronizeTaskId(kMount);
+
+  auto          hold         = coordinator_->Hold();
+  bool          ready        = false;
+  hold.WhenReady([&ready] { ready = true; });
+  ASSERT_TRUE(WaitUntil([&ready] { return ready; }));
+  // One scan serves both requests after the hold: the task of the stopped scan ends.
+  EXPECT_EQ(TaskState(tasks_, running_task), QStringLiteral("canceled"));
+  EXPECT_EQ(TaskState(tasks_, waiting_task), QStringLiteral("queued"));
+  EXPECT_EQ(coordinator_->ScanActivity(kMount), MountScanActivity::kPaused);
+  EXPECT_EQ(coordinator_->SynchronizeTaskId(kMount), waiting_task);
+
+  port_->ReleaseScans();
+  hold.Release();
+  ASSERT_TRUE(WaitForScans(3));
+  EXPECT_EQ(port_->ScanCount(), 3);
+  EXPECT_EQ(TaskState(tasks_, waiting_task), QStringLiteral("succeeded"));
+  EXPECT_EQ(MountScanTasks(tasks_).size(), 2U);
+}
+
+TEST_F(MountScanCoordinatorTest, ScanActivityAndPendingTimersShowWhatTheMountWaitsFor) {
+  StartAndWaitForTheOpenScan();
+  EXPECT_EQ(coordinator_->ScanActivity(kMount), MountScanActivity::kIdle);
+  EXPECT_FALSE(coordinator_->HasPendingTimers());
+
+  // The watcher delay runs: no scan waits yet, but one follows.
+  watcher_->Notify(kMount);
+  EXPECT_TRUE(coordinator_->HasPendingTimers());
+  EXPECT_FALSE(coordinator_->HasPendingScans());
+  EXPECT_EQ(coordinator_->ScanActivity(kMount), MountScanActivity::kIdle);
+
+  // A hold keeps the requested scan queued.
+  auto hold = coordinator_->Hold();
+  clock_->Advance(seconds(5));
+  EXPECT_FALSE(coordinator_->HasPendingTimers());
+  EXPECT_TRUE(coordinator_->HasPendingScans());
+  EXPECT_EQ(coordinator_->ScanActivity(kMount), MountScanActivity::kQueued);
+  EXPECT_TRUE(coordinator_->SynchronizeTaskId(kMount).isEmpty())
+      << "an automatic scan shows no task while it waits";
+
+  // A Synchronize request that waits for the hold has a queued task at once.
+  ASSERT_TRUE(coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize));
+  const QString task_id = coordinator_->SynchronizeTaskId(kMount);
+  ASSERT_FALSE(task_id.isEmpty());
+  EXPECT_EQ(TaskState(tasks_, task_id), QStringLiteral("queued"));
+
+  hold.Release();
+  ASSERT_TRUE(WaitForScans(2));
+  EXPECT_EQ(port_->ScanCount(), 2);
+  EXPECT_EQ(TaskState(tasks_, task_id), QStringLiteral("succeeded"));
+  EXPECT_EQ(coordinator_->ScanActivity(kMount), MountScanActivity::kIdle);
 }
 
 TEST_F(MountScanCoordinatorTest, HoldOutlivesTheStopAndWaitsForTheStoppedWorker) {
