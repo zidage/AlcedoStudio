@@ -115,7 +115,8 @@ void ReportSurvivingProjectServices(const ProjectServiceWatch& watch) {
 // ── ApplicationModuleHost ───────────────────────────────────────────────────
 
 ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer,
-                                             PackageServiceFactories package_services)
+                                             PackageServiceFactories package_services,
+                                             MountWatcherMode        mount_watcher)
     : QObject(parent), lifecycle_observer_(std::move(observer)) {
   // Removes the runtime workspaces and DB snapshots that an abnormal exit or a failed removal
   // left in the project temp root. Workspaces that a live process holds stay.
@@ -751,6 +752,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   mount_scan_dependencies.tasks           = background_tasks_.get();
   mount_scan_dependencies.clock           = CreateSteadyMountScanClock();
   mount_scan_dependencies.watcher         = CreatePlatformMountDirectoryWatcher();
+  mount_scan_dependencies.watcher_mode    = mount_watcher;
   mount_scan_dependencies.on_batch_stored = [library = library_.get(),
                                              folders = folders_.get()](mount_id_t) {
     // The Library shows the photos of each stored batch in place.

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <map>
@@ -1552,6 +1553,93 @@ TEST_F(SleeveServiceTests, EvictedFileReloadsItsStoredFieldsAndHeldFileKeepsItsI
                 [folder_id](FileSystem& fs) { return fs.ListFileIds(folder_id); }),
             ids);
   EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().DirtyCount(); }), 0u);
+}
+
+/// Sets an environment variable for the length of a scope and removes it at the end.
+class ScopedEnvironmentVariable {
+ public:
+  ScopedEnvironmentVariable(const char* name, const std::string& value) : name_(name) {
+    Set(value);
+  }
+  ~ScopedEnvironmentVariable() { Set({}); }
+  ScopedEnvironmentVariable(const ScopedEnvironmentVariable&)                    = delete;
+  auto operator=(const ScopedEnvironmentVariable&) -> ScopedEnvironmentVariable& = delete;
+
+  void Set(const std::string& value) {
+#ifdef _WIN32
+    // An empty value removes the variable.
+    _putenv_s(name_, value.c_str());
+#else
+    if (value.empty()) {
+      unsetenv(name_);
+    } else {
+      setenv(name_, value.c_str(), 1);
+    }
+#endif
+  }
+
+ private:
+  const char* name_;
+};
+
+// #1191: ALCEDO_TEST_SLEEVE_CLEAN_FILE_LIMIT sets the clean file limit when the project opens, so
+// the file management fuzz runs the eviction with a few files. With a limit of 2 the read of a
+// third file evicts the least recently used clean file.
+TEST_F(SleeveServiceTests, CleanFileLimitFromTheEnvironmentEvictsACleanFileAtTheThirdRead) {
+  std::vector<sl_element_id_t> ids;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    const auto     write   = service->Write<std::vector<sl_element_id_t>>([](FileSystem& fs) {
+      std::vector<sl_element_id_t> created;
+      for (int i = 0; i < 3; ++i) {
+        const auto file = fs.CreateFileInLibrary(L"IMG_" + std::to_wstring(i) + L".ARW");
+        created.push_back(file->element_id_);
+      }
+      return created;
+    });
+    ASSERT_TRUE(write.second.success_) << write.second.message_;
+    ids = write.first;
+    EXPECT_EQ(
+        service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().CleanFileCount(); }), 3u)
+        << "the default limit keeps the three files";
+  }
+
+  const ScopedEnvironmentVariable limit(kTestCleanFileLimitVariable, "2");
+  ProjectService                  project(db_path_, meta_path_);
+  auto                            service = project.GetSleeveService();
+  EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().Limit(); }), 2u);
+  const auto read_file = [&service](sl_element_id_t id) {
+    return service->Read<bool>([id](FileSystem& fs) { return fs.Get(id) != nullptr; });
+  };
+  const auto is_cached = [&service](sl_element_id_t id) {
+    return service->Read<bool>([id](FileSystem& fs) { return fs.Nodes().Contains(id); });
+  };
+  ASSERT_TRUE(read_file(ids[0]));
+  ASSERT_TRUE(read_file(ids[1]));
+  ASSERT_TRUE(is_cached(ids[0]));
+  ASSERT_TRUE(is_cached(ids[1]));
+
+  ASSERT_TRUE(read_file(ids[2]));
+  EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().CleanFileCount(); }),
+            2u);
+  EXPECT_FALSE(is_cached(ids[0])) << "the least recently used clean file left the cache";
+  EXPECT_TRUE(is_cached(ids[1]));
+  EXPECT_TRUE(is_cached(ids[2]));
+}
+
+// #1191: the variable holds a decimal number of files; any other text is refused.
+TEST(SleeveCleanFileLimitVariableTest, ReadsADecimalNumberAndRefusesOtherText) {
+  ScopedEnvironmentVariable limit(kTestCleanFileLimitVariable, "");
+  EXPECT_EQ(ReadTestCleanFileLimit(), std::nullopt);
+  limit.Set("0");
+  EXPECT_EQ(ReadTestCleanFileLimit(), std::optional<std::size_t>{0});
+  limit.Set("262144");
+  EXPECT_EQ(ReadTestCleanFileLimit(), std::optional<std::size_t>{262'144});
+  for (const char* text : {"two", "2 files", "-1", " 2", "0x10"}) {
+    limit.Set(text);
+    EXPECT_THROW((void)ReadTestCleanFileLimit(), std::invalid_argument) << text;
+  }
 }
 
 // Issue #1177: Sync takes fs_lock_, so a caller on another thread (the import finalize thread)

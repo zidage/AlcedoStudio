@@ -95,6 +95,31 @@ TEST(HeadlessHostTest, ProjectAndCreateTogetherAreRejected) {
                                         &bad_viewport, &error));
 }
 
+// #1191: --mount-watcher takes on or off; the watcher is on without the option.
+TEST(HeadlessHostTest, MountWatcherOptionTakesOnOrOff) {
+  QString             error;
+  HeadlessHostOptions defaults;
+  ASSERT_TRUE(ParseHeadlessHostOptions({"--project", "a.alcd"}, &defaults, &error))
+      << error.toStdString();
+  EXPECT_EQ(defaults.mount_watcher, ui::MountWatcherMode::kOn);
+
+  HeadlessHostOptions off;
+  ASSERT_TRUE(
+      ParseHeadlessHostOptions({"--project", "a.alcd", "--mount-watcher", "off"}, &off, &error))
+      << error.toStdString();
+  EXPECT_EQ(off.mount_watcher, ui::MountWatcherMode::kOff);
+
+  HeadlessHostOptions on;
+  ASSERT_TRUE(ParseHeadlessHostOptions({"--project", "a.alcd", "--mount-watcher=on"}, &on, &error))
+      << error.toStdString();
+  EXPECT_EQ(on.mount_watcher, ui::MountWatcherMode::kOn);
+
+  HeadlessHostOptions bad;
+  EXPECT_FALSE(
+      ParseHeadlessHostOptions({"--project", "a.alcd", "--mount-watcher", "no"}, &bad, &error));
+  EXPECT_TRUE(error.contains(QStringLiteral("--mount-watcher"))) << error.toStdString();
+}
+
 TEST(HeadlessHostTest, UnknownOptionExitsWithUsageCode) {
   const HostRun run = RunHost({"--headless", "--project", "a.alcd", "--bogus"});
 

@@ -45,6 +45,17 @@ enum class MountScanTrigger : std::uint8_t {
   kVolumeChange,
 };
 
+/**
+ * @brief Whether a change notification of a mount directory starts a scan (#1191).
+ *
+ * kOff is a test entry point of `alcedo_main --headless --mount-watcher off`: the file
+ * management fuzz needs the counts of each `library.sync`, and a scan that a notification
+ * starts changes them at a time that depends on the file system. With kOff the watcher still
+ * watches each mount, so the volume events of a watched mount stay; only the
+ * kDirectoryChange trigger is gone. The GUI host always uses kOn.
+ */
+enum class MountWatcherMode : std::uint8_t { kOn, kOff };
+
 /// Time after the last change notification of a mount before its scan starts (section 14).
 inline constexpr std::chrono::milliseconds kMountScanWatcherDelay{5000};
 /// Time after the arrival of a volume before the scans of the offline mounts start. Windows
@@ -136,6 +147,8 @@ struct MountScanCoordinatorDependencies {
   std::unique_ptr<MountScanClock>        clock;
   /// Required.
   std::unique_ptr<MountDirectoryWatcher> watcher;
+  /// kOff: a change notification starts no scan (MountWatcherMode).
+  MountWatcherMode                       watcher_mode         = MountWatcherMode::kOn;
   std::chrono::milliseconds              watcher_delay        = kMountScanWatcherDelay;
   std::chrono::milliseconds              activation_interval  = kMountScanActivationInterval;
   std::chrono::milliseconds              volume_arrival_delay = kMountScanVolumeArrivalDelay;
@@ -157,7 +170,8 @@ struct MountScanCoordinatorDependencies {
  *
  * Triggers: Start (project open), an activation of the application after the activation
  * interval or more in the background, the watcher delay after the last change notification of
- * a mount, the volume events of the watcher, and RequestScan.
+ * a mount, the volume events of the watcher, and RequestScan. With MountWatcherMode::kOff a
+ * change notification starts no scan; the other triggers stay.
  *
  * Volume events (#1020): the removal of the volume of a watched mount, or the cancel of that
  * removal, requests a scan of the mount at once; the scan finds the mount offline or watches it
@@ -428,6 +442,7 @@ class MountScanCoordinator final : public QObject {
   BackgroundTaskController*                               tasks_ = nullptr;
   std::unique_ptr<MountScanClock>                         clock_;
   std::unique_ptr<MountDirectoryWatcher>                  watcher_;
+  MountWatcherMode                                        watcher_mode_;
   std::chrono::milliseconds                               watcher_delay_;
   std::chrono::milliseconds                               activation_interval_;
   std::chrono::milliseconds                               volume_arrival_delay_;

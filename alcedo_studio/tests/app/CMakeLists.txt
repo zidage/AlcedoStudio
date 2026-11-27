@@ -610,6 +610,27 @@ target_link_libraries(StorageCliCompareProjectWriter
 alcedo_copy_duckdb_extensions(StorageCliCompareProjectWriter)
 alcedo_register_test_target(StorageCliCompareProjectWriter)
 
+# StorageInvariantCheck <database> (#1191): the storage invariant check (#805) on a saved project
+# database for the file management fuzz (scripts/file_fuzz/). Built with the test targets and
+# not installed. Exit codes: 0 no broken row, 1 broken rows, 2 usage or read error.
+add_executable(StorageInvariantCheck ${ALCEDO_TEST_ROOT}/app/storage_invariant_check_main.cpp)
+target_include_directories(StorageInvariantCheck PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(StorageInvariantCheck PRIVATE StorageInvariantsTestSupport)
+alcedo_copy_duckdb_extensions(StorageInvariantCheck)
+# ci_core: the macOS CI build tree holds it for the scheduled fuzz step (#1193).
+alcedo_register_test_target(StorageInvariantCheck app ci_core)
+
+add_executable(StorageInvariantCheckTest ${ALCEDO_TEST_ROOT}/app/storage_invariant_check_test.cpp)
+target_include_directories(StorageInvariantCheckTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(StorageInvariantCheckTest
+  StorageInvariantsTestSupport ProjectService PipelineMgmtService Qt6::Core GTest::gtest_main)
+target_compile_definitions(StorageInvariantCheckTest PRIVATE
+  ALCEDO_STORAGE_INVARIANT_CHECK_PATH="$<TARGET_FILE:StorageInvariantCheck>")
+add_dependencies(StorageInvariantCheckTest StorageInvariantCheck)
+gtest_discover_tests(StorageInvariantCheckTest TEST_PREFIX "StorageInvariantCheckTest.")
+alcedo_copy_duckdb_extensions(StorageInvariantCheckTest)
+alcedo_register_test_target(StorageInvariantCheckTest app)
+
 # Typed Image and AI search columns and the SQL that reads them (same plan, Phase S3).
 add_executable(LibrarySearchColumnsTest ${ALCEDO_TEST_ROOT}/app/library_search_columns_test.cpp)
 target_include_directories(LibrarySearchColumnsTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
