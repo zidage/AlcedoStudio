@@ -8,6 +8,7 @@ Status: planned. Experiments VX1 to VX5 come first. VX1, VX2, VX3, and VX5 are c
 changed B5 to two devices and stopped VK18 until the plan has a new resize design (section 9.2).
 VK0 is complete (2026-11-23, #1063). VK1 is complete (2026-11-23, #1065). VK2 is complete
 (2026-11-23, #1067). VK3 is complete (2026-11-23, #1080). VK4 is complete (2026-11-27, #1196).
+VK5 is complete (2026-11-27, #1203).
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -389,6 +390,13 @@ program has `#pragma OPENCL FP_CONTRACT OFF` uses `AlcedoExactMul` for each mult
 `AlcedoExactAdd` for each sum of three or more terms (`math.slangh`: an `OpFMul` or `OpFAdd` with
 `NoContraction` from a `spirv_asm` block). Today that is the RCD group (VK4 record).
 
+The GLSL.std.450 `sin` and `cos` have only an absolute error of 2^-11 in [-pi, pi], and `tan`,
+`asin`, `atan`, and `atan2` are derived from them. A kernel that needs the precision of the OpenCL
+trigonometric functions calls `AlcedoSin`, `AlcedoCos`, `AlcedoTan`, `AlcedoAsin`, `AlcedoAtan`,
+and `AlcedoAtan2` of `math.slangh` (the single-precision Cephes forms, about 1 ulp for
+|x| < 8192). Today that is the lens group: with the built-in functions the lens projections
+differed from OpenCL by up to 4e-2 at up to 9937 values of a 640 x 480 image (VK5 record).
+
 ### 4.4 Primary call chains
 
 Success, host output (export, thumbnail, test):
@@ -578,7 +586,7 @@ test of its kernels (B9).
 | VK2 | `VulkanBackend`, `VulkanCommandContext`, workspace instance | `edit/runtime/vulkan/` | VK1, VX3, VX5 | 1600 to 1900 | complete (#1067) |
 | VK3 | Kernel dispatch, shared color math, geometry utilities, comparison test support | `edit/runtime/vulkan/`, `src/vulkan/shader/`, `color_encoding_math.h` | VK2 | 1300 to 1700 | complete (#1080) |
 | VK4 | RAW operators: linearize, CFA clamp, reference space, RCD, X-Trans, pack | `decoders/processor/operators/gpu/` | VK3 | 1400 to 1800 | complete (#1196) |
-| VK5 | RAW operators: highlight reconstruction, lens calibration, DNG warp | `decoders/processor/operators/gpu/`, `edit/runtime/lens/vulkan/` | VK4 | 1500 to 1900 | planned |
+| VK5 | RAW operators: highlight reconstruction, lens calibration, DNG warp | `decoders/processor/operators/gpu/`, `edit/runtime/lens/vulkan/` | VK4 | 1500 to 1900 | complete (#1203) |
 | VK6 | Develop pass (UploadRaw) | `edit/runtime/vulkan/` | VK5 | 1400 to 1800 | planned |
 | VK7 | GeometryResample, CameraToAp1, UploadRgb, DisplayToAp1 | `edit/runtime/vulkan/` | VK6 | 1100 to 1500 | planned |
 | VK8 | Primary grade point kernels and LUT resources | `edit/runtime/vulkan/` | VK7 | 1400 to 1800 | planned |
@@ -1711,6 +1719,243 @@ lines) and the exact-rounding form of RCD. The largest file is `vulkan_raw_opera
 **Remaining gaps:** none for VK4. The highlight reconstruction, the lens calibration, and the DNG
 warp are VK5. The four OpenCL kernels without a caller are issue #1201.
 
+### Phase VK5: RAW operators: highlight reconstruction, lens calibration, DNG warp
+
+**Objective and deliverables.** The Develop pass of VK6 can record the rest of its RAW stages on
+Vulkan: the highlight reconstruction of an RGBA buffer and of the RCD planes, the DNG
+`WarpRectilinear` opcode, and the lens calibration of `develop.sensor_linear`. Each stage gives
+the OpenCL result on the same GPU (B9), and the lens stage also passes the CPU reference cases of
+`opencl_lens_calib_test.cpp`.
+
+**Inputs and prerequisites.** VK4 (`VulkanBufferView`, `RequireBufferRange`, the pack parameters,
+the comparison support of real RAW inputs). VK3 (`RecordKernelDispatch`, `EncodeCropResize`,
+`math.slangh`). The kernel rules of section 4.2.
+
+**Source audit of the VK5 entry (2026-11-27).** The scope entry named `highlight_reconstruct.cl`,
+`opencl_lens_calib_ops.cpp`, and `lens_calib.cl`. The callers in `opencl_develop_pass.cpp` show:
+
+| OpenCL entry point or kernel | Product caller | VK5 decision |
+| --- | --- | --- |
+| `EncodeHighlightReconstruct` (`hlr_build_mask`, `hlr_dilate_mask`, `hlr_chrominance_contrib`, `hlr_reconstruct_from_stats`) | Develop pass with highlight reconstruction: X-Trans RGBA, RGB input, neural output | VK5 |
+| `EncodeHighlightReconstructPlanarAndPack` (`hlr_build_mask_planar`, `hlr_dilate_mask`, `hlr_chrominance_contrib_planar`, `hlr_reconstruct_from_stats_planar_pack`) | Develop pass with highlight reconstruction: RCD planes | VK5 |
+| `hlr_reconstruct` | none | not ported; added to issue #1201 |
+| The `anyclipped` count of the two mask kernels | none: the OpenCL Develop pass fills it and never reads it (the CUDA form reads it on the host to skip the stage) | not ported |
+| `EncodeWarp` (`warp_rectilinear_rgba32f` of `geometry_camera.cl`) | Develop pass, DNG with `WarpRectilinear` | VK5 |
+| `OpenCL::Geometry::WarpRectilinear` (`opencl_geometry_utils.cpp`) | none in the Develop pass (geometry utility test only) | not ported |
+| `ApplyLensCalibration` (`edit_geometry_lens_vignetting_rgba32f`, `edit_geometry_lens_warp_rgba32f`, the rectangle crop) and the resize back to the sensor size (`ExecuteOpenClLensCalibration`) | Develop pass, `GpuPassKind::Lens` | VK5 |
+
+**Modules, files, and APIs.**
+
+- `VulkanBackend::FillBufferRange(buffer, offset, bytes, value, command_context)`
+  (`vkCmdFillBuffer`) and `VulkanBackend::CopyTexture2DRegion(source, rectangle, destination,
+  command_context)` (`vkCmdCopyImage` of a rectangle into a texture of its size): the Vulkan forms
+  of `OpenClBackend::FillDeviceMemory` and of `OpenClImage::CropTo`.
+- `vulkan_raw_encode.hpp/.cpp` (target `RawProcessorOpVulkan`): `HighlightScratch` (three views:
+  the clip mask, the dilated mask, the statistics), `HighlightMaskBytes(width, height)`,
+  `kHighlightStatisticsBytes`, `EncodeHighlightReconstruct`, and
+  `EncodeHighlightReconstructPlanarAndPack`, with the parameters of the OpenCL functions.
+- `inc/edit/runtime/vulkan/vulkan_dng_warp.hpp`, `edit/runtime/vulkan/vulkan_dng_warp.cpp` (target
+  `EditRuntimeVulkan`): `vulkan::geometry::EncodeWarpRectilinear(backend, command_context, source,
+  destination, warp)`.
+- `inc/edit/runtime/lens/vulkan/vulkan_lens_calib.hpp`,
+  `edit/runtime/lens/vulkan/vulkan_lens_calib.cpp` (new target `EditRuntimeLensVulkan`):
+  `vulkan::lens::ResolveLensCalibrationSteps(params, width, height)` (which stages run, and the
+  rectangle crop), `kLensCalibParameterBytes`, and `EncodeLensCalibration(backend,
+  command_context, image, scratch, parameters, params)`, where the scratch has the warp texture
+  (the image size) and the crop texture (the crop size). The caller allocates the scratch of the
+  steps (a pass encoder does not allocate).
+- Kernel groups:
+
+  | Group | Kernels | Header |
+  | --- | --- | --- |
+  | `highlight_reconstruct` | `hlr_build_mask`, `hlr_dilate_mask`, `hlr_chrominance_contrib`, `hlr_reconstruct_from_stats`, `hlr_build_mask_planar`, `hlr_chrominance_contrib_planar`, `hlr_reconstruct_from_stats_planar_pack` | `vulkan_highlight_kernels.hpp` |
+  | `dng_warp` | `warp_rectilinear_rgba32f` | `vulkan_dng_warp_kernels.hpp` |
+  | `lens_calib` | `edit_geometry_lens_vignetting_rgba32f`, `edit_geometry_lens_warp_rgba32f` | `vulkan_lens_calib_kernels.hpp` |
+
+- Tests: `tests/raw/vulkan_highlight_reconstruct_test.cpp` (`VulkanHighlightReconstructTest`),
+  `tests/edit/runtime/vulkan_lens_calib_test.cpp` (`VulkanLensCalibTest`, with
+  `lens_warp_test_support.hpp`), and `tests/edit/runtime/vulkan_dng_warp_test.cpp`
+  (`VulkanDngWarpTest`), when Vulkan and OpenCL are both enabled.
+
+**Data rules and invariants.**
+
+- The highlight input (an RGBA buffer or three planes) and the RGBA result are buffers; the planar
+  form writes the RGBA32F image of the graph with the pack rule of VK4. The DNG warp and the lens
+  calibration read and write RGBA32F storage images, the form of `develop.sensor_unwarped` and
+  `develop.sensor_linear`.
+- The clip mask and the dilated mask have one 32-bit word for each texel with one bit for each of
+  R, G, and B. The OpenCL masks have one byte for each channel (six planes in each buffer); the
+  devices have no 8-bit storage feature (VK0 enables none), and a byte written by a texel would
+  share its word with the bytes of other texels. Scratch: 8 bytes for each texel against 12 in
+  OpenCL.
+- The statistics record (sums of R, G, B, and counts of R, G, B) is cleared by the encode function
+  with `FillBufferRange` before the mask kernel, so the caller does not clear it. The chrominance
+  sums are float sums by compare-and-swap, as in OpenCL; the order of the sums is not fixed on
+  either backend, so the comparison tolerance covers a different rounding of the sums.
+- The lens parameter record (`LensCalibGpuParams`, a flat record) is in a buffer: it is above the
+  128 push constant bytes. `EncodeLensCalibration` records its upload, as `EncodeToLinearRef`.
+- The lens stages are the OpenCL stages: vignetting in place; the warp to the warp texture; the
+  rectangle crop (`ComputeRectCropRoi` of OpenCL) copied to the crop texture; then the bilinear
+  resize of the crop (or of the warp result) back to the image size. The resize reads 0 outside
+  the crop, as the OpenCL resize of the cropped image.
+- An encode function records into the open recording; it does not submit or wait. An invalid
+  request fails with `std::invalid_argument` before a command is recorded.
+
+**Implementation steps.**
+
+1. `FillBufferRange` and `CopyTexture2DRegion`.
+2. The three kernel groups, their headers, catalog entries, and build rules.
+3. The encode functions and the target `EditRuntimeLensVulkan`.
+4. The three tests: the same host input on OpenCL (the product functions or kernels) and on
+   Vulkan; the lens test also runs the three CPU reference cases.
+5. Run the tests on both devices with the validation layer, and `alcedo-gpu-check --vulkan`.
+
+**Tests and evidence.**
+
+- `VulkanHighlightReconstructTest.RgbaHighlightsOfAnXTransRawEqualOpenCl`
+- `VulkanHighlightReconstructTest.PlanarHighlightsOfABayerRawEqualOpenClForEachOrientation`
+- `VulkanHighlightReconstructTest.UnclippedTexelsKeepTheirValues`
+- `VulkanHighlightReconstructTest.HighlightStagesRecordIntoOneRecordingWithoutASubmission`
+- `VulkanHighlightReconstructTest.InvalidRequestIsRejectedBeforeACommand`
+- `VulkanDngWarpTest.OneCoefficientSetEqualsOpenCl`, `ThreeCoefficientSetsEqualOpenCl`,
+  `WarpOfARealDngEqualsOpenCl`, `InvalidRequestIsRejectedBeforeACommand`
+- `VulkanLensCalibTest.Issue713GratingKeepsAmplitudeAndMatchesCpuReference`,
+  `HighlightEdgeHasNoRingingAndMatchesCpuReference`, `VignettingOnlyDoesNotResample` (the three
+  OpenCL cases), `EachProjectionEqualsOpenCl`, `RectangleCropEqualsOpenCl`,
+  `CircleCropEqualsOpenCl`, `StepsWithoutAnEffectRecordNothing`,
+  `InvalidRequestIsRejectedBeforeACommand`
+
+Tolerances come from the measurement of this phase; the completion record gives the measured
+differences and the reason for each tolerance.
+
+**Build and run commands.**
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels VulkanHighlightReconstructTest VulkanLensCalibTest VulkanDngWarpTest alcedo_gpu_check
+ctest --test-dir build/debug -R "VulkanHighlightReconstructTest|VulkanLensCalibTest|VulkanDngWarpTest" -j 1 --output-on-failure
+ALCEDO_VULKAN_DEVICE=Iris: the same ctest command
+```
+
+**Exit criteria.**
+
+- [x] The listed tests pass on both local devices with no validation error.
+- [x] `alcedo-gpu-check --vulkan` creates the pipeline of each catalog kernel.
+- [x] The OpenCL, CUDA, and Metal results are unchanged: VK5 changes no shared kernel source.
+
+**Expected diff.** 1500 to 1900 lines.
+
+##### Phase VK5 completion record (2026-11-27)
+
+**Status:** complete. Issue #1203. Branch `feature/vulkan-vk5-highlight-lens-warp` on the VK4
+branch `feature/vulkan-vk4-raw-operators` (pull request #1202).
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Highlight masks | One word for each texel | As planned: bit 0 R, bit 1 G, bit 2 B, in the clip mask and in the dilated mask. The 7 x 7 dilation ORs the words of the window and stops when all three bits are set. | No 8-bit storage feature (VK0). The result is the OpenCL result: the masks are internal. |
+| Highlight statistics | Cleared by the encode function | One record of six float words (sums, then counts of R, G, B), cleared with `FillBufferRange`; the sums are the OpenCL compare-and-swap float adds of one value for each workgroup. The first guess of the loop is 0, so the word is read only by the atomic operation. | The OpenCL caller clears five buffers before the call; a Vulkan caller cannot forget it. |
+| `HighlightParams` | The layout of the OpenCL struct | `HighlightLimits` (36 bytes): the clip levels and the dark limits as named fields, without the chrominance array (only `hlr_reconstruct` reads it, and it has no caller). Three push constant layouts: RGBA (80 bytes, also the dilation), planar (96), planar pack (120, with the `PackOrientParams` of VK4). | Named fields keep constant indices (section 4.2). The planar pack record fits in 128 bytes only without the chrominance. |
+| Cube root of the reference mean | `pow(m, 1/3)` (OpenCL) | `AlcedoPow(m, 1/3)`, and 0 for a mean of 0 | GLSL.std.450 `pow` is `exp2(y log2 x)` (VK3 record). |
+| `PackOrientParams` and the orientation rule | In `raw_pack.slang` | Moved to `raw_pack.slangh`, included by `raw_pack.slang` and `highlight_reconstruct.slang` | One definition for the two groups. |
+| Lens trigonometric functions | Port of `lens_calib.cl` | `AlcedoSin`, `AlcedoCos`, `AlcedoTan`, `AlcedoAsin`, `AlcedoAtan`, `AlcedoAtan2` (`math.slangh`, Cephes single-precision forms); `sinpi` of the Lanczos weights is the reduced `AlcedoSin(pi r)`. Rule added to section 4.3. | With the GLSL.std.450 functions the projections differed from OpenCL by up to 4.4e-2 at 550 to 9937 values of the 640 x 480 image (RTX 3080 Laptop GPU). With the Cephes forms 11 to 99 values remained, and the CPU evaluation in double (next row) showed that they are not a precision problem. |
+| Lens comparison input | `opencl_lens_calib_test.cpp` cases | The three CPU reference cases with their patterns (grating, highlight edge), and the comparisons with OpenCL on a position ramp, with two tolerances (inside the source; every texel). Rule added to section 11. | A double-precision evaluation of the differing texels on a pattern with detail: each one had a source position within 2e-5 pixel of an integer row, where the 2 x 2 clamp of the sampler (#713) switches to other rows. The CPU reference gave the OpenCL value at some of these texels and the Vulkan value at others, so the sampler is discontinuous there by design and neither backend is wrong. On the ramp the clamp does not act inside the source. |
+| DNG warp comparison input | The OpenCL test tolerance 1e-5 | The position ramp, 1e-5 for texels whose bilinear footprint is inside the source (classified with the source positions in double), 8 ulp of the largest coordinate for the others | On a pattern with detail at 641 x 427 the differences were 3.5e-5: about 2 ulp of a source position near 600 times the gradient of the pattern. An exact-rounding form of the position (`AlcedoExactMul`, `AlcedoExactAdd`) did not reduce them, so it was removed. On Iris Xe the real DNG gave 9.8e-4 at the border: 2 ulp of a position near 8000. |
+| Lens stages | The OpenCL stages and the resize | `EncodeLensCalibration`: vignetting in place; the warp into the warp texture; `CopyTexture2DRegion` of the rectangle crop (`OpenClImage::CropTo`); `EncodeCropResize` of the whole result back to the image size (a copy when the result has the image size). `ResolveLensCalibrationSteps` gives the stages and the crop, so the caller allocates the scratch. The sizes of the parameters must be the image size. | The resize of OpenCL reads 0 outside the cropped image; the copy to a texture of the crop size keeps that rule. A size of the parameters that is not the image size makes the OpenCL warp read outside its image. |
+| DNG warp coefficients | `float coefficient_sets[3][6]` | Three arrays `set_r`, `set_g`, `set_b` in the push constants (92 bytes) and a selection with constant indices | The rule of section 4.2 for push constant arrays. |
+| Backend transfers | Not in the plan | `VulkanBackend::FillBufferRange` (`vkCmdFillBuffer`) and `CopyTexture2DRegion` (`vkCmdCopyImage` with a source offset), with tests in `GpuDagVulkanWorkspaceTest` | The forms of `OpenClBackend::FillDeviceMemory` and `OpenClImage::CropTo`; VK6 needs both. |
+| Bayer test RAW | A real RAW with clipped highlights | `raw/street/_DSC0155.NEF` (1.3 million reconstructed texels of 24.4 megapixels). The X-Trans RAW of VK4 has 24037. | `raw/blue_clipping/_DSC9729.ARW` changed only 430 texels, `raw/airplane/_DSC1704.NEF` 1076, `raw/landscape/_DSC4735.ARW` none. |
+| Not ported | Source audit | `hlr_reconstruct` and the `anyclipped` count | No caller; added to issue #1201. |
+
+**Primary success call chain:**
+
+```text
+VulkanHighlightReconstructTest (VK6: the Develop pass with highlight reconstruction)
+  -> OpenCL ToLinearRef (no clamp) -> EncodeBayerRcd or EncodeXTrans -> the same host input
+  -> vulkan::raw::EncodeHighlightReconstructPlanarAndPack(backend, context, r, g, b, destination,
+                                                          scratch, cam_mul, crop, w, h, flip)
+       -> RequireBufferRange (planes), PackParams (crop, RGBA32F of the oriented crop size)
+       -> RequireHighlightScratch (masks of the crop size, statistics) -> MakeHighlightLimits
+       -> FillBufferRange(statistics, 0) -> RecordKernelDispatch x 4: build mask, dilate,
+          chrominance (workgroup sum, CAS float add), reconstruct and pack (push descriptor)
+  -> DownloadTexture2D -> ExpectEqualWithinTolerance(OpenCL::EncodeHighlight..., Vulkan)
+VulkanLensCalibTest (VK6: GpuPassKind::Lens)
+  -> ResolveLensCalibrationSteps(params, w, h) -> the caller creates the warp and crop textures
+  -> vulkan::lens::EncodeLensCalibration(backend, context, image, scratch, parameters, params)
+       -> size checks -> UploadBufferRange(LensCalibGpuParams) -> vignetting dispatch (in place)
+       -> warp dispatch (AlcedoSin/Cos/Tan/Atan, Lanczos-3 with the 2 x 2 clamp) -> warped
+       -> CopyTexture2DRegion(crop) -> EncodeCropResize(result -> image)
+VulkanDngWarpTest (VK6: develop.sensor_unwarped -> develop.sensor_linear)
+  -> vulkan::geometry::EncodeWarpRectilinear(backend, context, source, destination, warp)
+       -> RGBA32F, equal sizes, 1 to 3 sets -> RecordKernelDispatch(warp_rectilinear_rgba32f)
+```
+
+**Primary failure call chain:**
+
+```text
+a range outside its buffer, an unaligned view, masks smaller than the region, a crop outside
+the planes, a destination of another size or format, a missing or wrong lens scratch texture,
+lens parameters for another size, one texture as warp source and destination, an opcode without
+coefficient sets
+  -> std::invalid_argument with the function, the view or texture, and the values
+  -> no fill, no upload, no pipeline request, no dispatch, no recording
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `RgbaHighlightsOfAnXTransRawEqualOpenCl` (RAF, 7872 x 5196) | `VulkanHighlightReconstructTest` | PASS: 8.9e-7 (RTX 3080), 8.5e-7 (Iris Xe), relative above 1 |
+| `PlanarHighlightsOfABayerRawEqualOpenClForEachOrientation` (NEF, flip 0, 3, 5, 6) | `VulkanHighlightReconstructTest` | PASS: 9.3e-7 (RTX 3080), 8.7e-7 (Iris Xe) |
+| `UnclippedTexelsKeepTheirValues` (no change below 95 % of the clip level; no clipped channel darker) | `VulkanHighlightReconstructTest` | PASS (both) |
+| `HighlightStagesRecordIntoOneRecordingWithoutASubmission` (8 dispatches, 0 submissions, 0 uploads, then one submission) | `VulkanHighlightReconstructTest` | PASS (both) |
+| `InvalidRequestIsRejectedBeforeACommand` (8 requests) | `VulkanHighlightReconstructTest` | PASS (both) |
+| `OneCoefficientSetEqualsOpenCl`, `ThreeCoefficientSetsEqualOpenCl` (641 x 427) | `VulkanDngWarpTest` | PASS: 3.0e-7 inside the source (both); no border texel |
+| `WarpOfARealDngEqualsOpenCl` (the WarpRectilinear of a real DNG, 3 sets, 200 million values) | `VulkanDngWarpTest` | PASS: inside 1.8e-7 / 3.0e-7, border 1.2e-7 / 9.8e-4 (RTX 3080 / Iris Xe; border tolerance 7.8e-3) |
+| `InvalidRequestIsRejectedBeforeACommand` (5 requests) | `VulkanDngWarpTest` | PASS (both) |
+| `Issue713GratingKeepsAmplitudeAndMatchesCpuReference` | `VulkanLensCalibTest` | PASS: 8.3e-5 / 7.2e-5 from the CPU reference (tolerance 2e-4), amplitude 0.931 |
+| `HighlightEdgeHasNoRingingAndMatchesCpuReference`, `VignettingOnlyDoesNotResample` | `VulkanLensCalibTest` | PASS (both) |
+| `EachProjectionEqualsOpenCl` (13 pairs: each conversion to and from erect) | `VulkanLensCalibTest` | PASS: inside the source 1.5e-6 at most (both); every texel 3.0e-4 (RTX 3080), 3.7e-4 (Iris Xe) |
+| `RectangleCropEqualsOpenCl` (after the warp; after the vignetting), `CircleCropEqualsOpenCl` | `VulkanLensCalibTest` | PASS: 4.2e-7, 1.8e-7, 4.8e-7 (RTX 3080); 4.2e-7, 1.2e-7, 6.0e-7 (Iris Xe) |
+| `StepsWithoutAnEffectRecordNothing`, `InvalidRequestIsRejectedBeforeACommand` (8 requests) | `VulkanLensCalibTest` | PASS (both) |
+| `BufferFillWritesTheValueOnlyInItsRange`, `TextureRegionCopyKeepsTheTexelsOfTheRectangle` | `GpuDagVulkanWorkspaceTest` | PASS (both) |
+| Validation errors | `TearDown` of each GPU test | 0 on both devices |
+| `alcedo-gpu-check --vulkan` | `alcedo_gpu_check` | PASS on both devices: `gpu.kernels.ok=vulkan kernels=27`, exit 0 |
+| VK0 to VK4 suites after the `math.slangh`, `raw_pack.slang`, backend, and catalog change | `ctest -R Vulkan` (111 tests) | PASS on both devices (1 skipped: the accelerator test for a build without Vulkan) |
+
+Commands (worktree `build/debug`, `ALCEDO_ENABLE_VULKAN=ON`, logs in
+`build/tmp/vulkan_backend/vk5/`):
+
+```text
+cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels VulkanRawOperatorsTest VulkanHighlightReconstructTest VulkanLensCalibTest VulkanDngWarpTest GpuDagVulkanWorkspaceTest VulkanColorMathTest VulkanGeometryTest VulkanComputePipelineCacheTest VulkanShaderModuleRegistryTest VulkanContextTest VulkanRequirementsTest PipelineAcceleratorTest alcedo_gpu_check
+ctest --test-dir build/debug -R "Vulkan" -j 1                          default device: 111/111 (1 skipped)
+ALCEDO_VULKAN_DEVICE=Iris ctest --test-dir build/debug -R "Vulkan" -j 1  111/111 (1 skipped)
+build/debug/alcedo_studio/src/alcedo-gpu-check.exe --vulkan              both devices: exit 0
+VulkanHighlightReconstructTest.exe, VulkanLensCalibTest.exe, VulkanDngWarpTest.exe (direct runs on both devices for the measured differences)
+```
+
+The OpenCL, CUDA, and Metal tests did not run: VK5 changes no OpenCL, CUDA, Metal, or shared
+kernel source and no shared C++ code (the changed shared files are CMake lists, the Vulkan kernel
+catalog, the Vulkan-only `math.slangh` and `raw_pack.slang`, and the test support of VK4). The
+full test suite was not run (repository rule).
+
+**Checklist / exit condition:** all three exit criteria are met.
+
+**LOC note:** 3638 lines added and 113 removed in 14 new files and 15 existing files: 1336 lines
+of Slang kernels and math (the ports of about 1090 lines of OpenCL C, and 174 lines of
+trigonometric functions), 1010 lines of production C++, headers, and CMake, and 1292 lines of
+tests and test support (74 lines moved from `vulkan_raw_operators_test.cpp` to its support
+header). Above the estimate of 1500 to 1900 and above the phase limit of 2000 lines (section
+13): the estimate did not count the trigonometric functions, the two backend transfers, or the
+three comparison tests of real RAW and DNG inputs with the position classification that the
+measurements needed. Each operator is a separate group of files (kernel group, header, encode
+function, test), so the pull request can be read one operator at a time. The largest file is
+`lens_calib.slang` (531 lines).
+
+**Remaining gaps:** none for VK5. The Develop pass that calls these functions is VK6. The OpenCL
+kernel and the count without a caller are in issue #1201.
+
 ### Phases VK3 to VK23: scope of each phase
 
 Each entry gives the objective, the OpenCL model, and the main tests. The detailed section replaces
@@ -1720,7 +1965,7 @@ the entry before the implementation.
 | --- | --- | --- | --- |
 | VK3 | Detailed section above | | |
 | VK4 | Detailed section above | | |
-| VK5 | Highlight reconstruction, lens calibration, DNG rectilinear warp | `highlight_reconstruct.cl`, `opencl_lens_calib_ops.cpp`, `lens_calib.cl` | Clipped highlights equal OpenCL. Lens results equal `opencl_lens_calib_test.cpp` cases. |
+| VK5 | Detailed section above | | |
 | VK6 | `PassEncoder<VulkanBackend, UploadRaw>` with the Develop steps and the scratch lifetime rule of `PlanExecutor` | `opencl_develop_pass.cpp` | `develop.sensor_linear` equals OpenCL. A stable render allocates nothing. |
 | VK7 | GeometryResample, CameraToAp1, UploadRgb, DisplayToAp1 | `geometry_camera.cl`, `display_to_ap1.cl`, `opencl_display_to_ap1_pass.cpp` | `develop.image` equals OpenCL for a RAW and for a raster input. |
 | VK8 | `VulkanGradeOps` point kernels, LUT images by content key | `opencl_primary_grade_pass.cpp`, `primary_grade.cl` | Each adjustment equals OpenCL. LUT resources are reused by content key. |
@@ -2315,6 +2560,16 @@ Update this plan before the implementation continues.
 - Debug test runs enable the Vulkan validation layer. A validation error is a test failure.
 - Logs and evidence go to `build/tmp/vulkan_backend/<phase>/`.
 - A result that is unavailable is recorded as unavailable. A skipped test is recorded as skipped.
+- A comparison of a resampling kernel (a warp, a lens correction) with OpenCL uses a position
+  ramp as its input (R = (x + 0.5) / width, G = (y + 0.5) / height), so a value difference is a
+  difference of the source position. Texels that sample inside the source have a tolerance of
+  the position divided by the image size; texels whose footprint reaches the source border have
+  a tolerance in ulp of the largest coordinate, because the border makes a value difference the
+  position difference itself. A pattern with detail is not compared between backends: the 2 x 2
+  clamp of the Lanczos sampler (issue #713) changes a result by a few hundredths when a position
+  crosses an integer row or column, so a position difference of 1e-5 pixel at such a crossing
+  changes the value by that amount (VK5 record). The CPU reference tests of a sampler keep their
+  patterns with detail.
 
 ## 12. Completion record template
 
@@ -2352,6 +2607,10 @@ Remaining defects or unavailable platforms:
 | OkLab tolerance | Largest `ScaledDifference` of the Vulkan ACEScc and OkLab functions from OpenCL; `OkLabToLinearAp1` | 1e-6; 4e-6 | `ColorEncodingOpenCl`; phase VK3 record (float32 limit 3.2e-6) |
 | Geometry tolerance | Largest difference of the Vulkan crop and bilinear resize from OpenCL; crop at its own size | 1e-5; 0 | `OpenClGeometryUtilsTest` |
 | Vulkan math functions | `CE_POW`, `CE_EXP`, `CE_EXP2`, `CE_LOG`, `CE_LOG2` of the Slang branch | `AlcedoPow`, `AlcedoExp`, `AlcedoExp2`, `AlcedoLog`, `AlcedoLog2` of `math.slangh`, about 1 ulp | phase VK3 record |
+| Vulkan trigonometric functions | The trigonometric functions of the lens kernels | `AlcedoSin`, `AlcedoCos`, `AlcedoTan`, `AlcedoAsin`, `AlcedoAtan`, `AlcedoAtan2` of `math.slangh` (Cephes, about 1 ulp for \|x\| < 8192) | phase VK5 record |
+| Highlight tolerance | Largest `ScaledDifference` of the Vulkan highlight reconstruction from OpenCL | 1e-5 | phase VK5 record (measured 9.3e-7) |
+| DNG warp tolerance | Largest difference on the position ramp: footprint inside the source; footprint at the border | 1e-5; 8 ulp of the largest coordinate | `OpenClGeometryUtilsTest`; phase VK5 record |
+| Lens tolerance | Largest difference on the position ramp: Lanczos footprint inside the source; every texel | 1e-5; 5e-4 (8 ulp of 640) | phase VK5 record |
 | `slangc` arguments | Arguments of each kernel group build | `-target spirv -profile spirv_1_6 -fvk-use-scalar-layout -fvk-use-entrypoint-name -O2` | VX1 (section 9.1) |
 | `spirv-val` arguments | Validation of each module in the build | `--target-env vulkan1.3 --scalar-block-layout` | VX1 |
 | `cbrt` Newton steps | Steps after `exp2(log2(\|x\|) / 3)` in the Slang `cbrt` | 1 | VX1 |
