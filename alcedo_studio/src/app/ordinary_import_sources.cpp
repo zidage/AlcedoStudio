@@ -65,16 +65,29 @@ void OrdinaryImportSources::LoadCandidates() {
   }
 }
 
-auto OrdinaryImportSources::TrackPath(const image_path_t& path) -> Candidates* {
+auto OrdinaryImportSources::LookupPath(const image_path_t& path) const
+    -> std::optional<PathLookup> {
   if (!candidates_) {
-    return nullptr;
+    return std::nullopt;
   }
   try {
-    return &(*candidates_)[SourcePathKey(path)];
+    auto       key    = SourcePathKey(path);
+    const auto found  = candidates_->find(key);
+    auto       status = CandidateStatus::kNone;
+    if (found != candidates_->end()) {
+      status =
+          found->second.submitted.empty() ? CandidateStatus::kStored : CandidateStatus::kSubmitted;
+    }
+    return PathLookup{std::move(key), status};
   } catch (const std::exception& error) {
     ALCEDO_LOG_WARN(Library) << "Import duplicate check for " << path << ": " << error.what();
-    return nullptr;
+    return std::nullopt;
   }
+}
+
+void OrdinaryImportSources::RecordSubmission(std::filesystem::path::string_type key,
+                                             sl_element_id_t                    element_id) {
+  (*candidates_)[std::move(key)].submitted.push_back(element_id);
 }
 
 auto OrdinaryImportSources::Measure(const image_path_t& path, sl_element_id_t element_id)
@@ -87,9 +100,10 @@ auto OrdinaryImportSources::Measure(const image_path_t& path, sl_element_id_t el
   }
 }
 
-auto OrdinaryImportSources::FindMatch(const Candidates&       candidates,
-                                      const SourceFileRecord& source) const
+auto OrdinaryImportSources::FindMatch(const std::filesystem::path::string_type& key,
+                                      const SourceFileRecord&                   source) const
     -> std::optional<Match> {
+  const auto& candidates = candidates_->at(key);
   for (const auto id : candidates.submitted) {
     if (CompareMeasurement(id, source).value_or(false)) {
       return Match{id, false};

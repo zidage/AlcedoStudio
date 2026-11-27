@@ -153,9 +153,9 @@ struct ImportOutcome {
 /// Run the folder import the album backend runs: ImportToFolder, wait, then SyncImports.
 /// @p before_sync runs after every metadata task finished and before SyncImports, the window
 /// in which the library UI keeps reading the image pool.
-auto ImportToLibraryRoot(ProjectService& project, const std::vector<image_path_t>& paths,
-                         const std::function<void()>& before_sync = {},
-                         const ImportOptions& options = {}, const image_path_t& dest = {})
+auto ImportIntoCollection(ProjectService& project, const std::vector<image_path_t>& paths,
+                          const std::function<void()>& before_sync = {},
+                          const ImportOptions& options = {}, const image_path_t& dest = {})
     -> ImportOutcome {
   ImportServiceImpl import_service(project.GetSleeveService(), project.GetImagePoolService(),
                                    std::make_shared<PipelineMgmtService>(project.GetStorage()));
@@ -172,7 +172,7 @@ auto ImportToLibraryRoot(ProjectService& project, const std::vector<image_path_t
   return outcome;
 }
 
-class ImportContentClassificationTest : public ::testing::Test {
+class ImportProjectTest : public ::testing::Test {
  protected:
   /// The test closed its project after production writes; TearDown checks the stored rows
   /// (#805). A test that writes broken rows on purpose sets it to false.
@@ -204,6 +204,15 @@ class ImportContentClassificationTest : public ::testing::Test {
     return 0;
   }
 
+  std::filesystem::path db_path_;
+  std::filesystem::path meta_path_;
+  std::filesystem::path scratch_dir_;
+};
+
+class ImportDuplicateSkippingTest : public ImportProjectTest {};
+
+class ImportContentClassificationTest : public ImportProjectTest {
+ protected:
   /// Copy the CI RAW fixture into the scratch folder as @p file_name.
   auto CopyRawFixture(const std::string& file_name) -> std::filesystem::path {
     const auto target = scratch_dir_ / file_name;
@@ -211,13 +220,9 @@ class ImportContentClassificationTest : public ::testing::Test {
                                std::filesystem::copy_options::overwrite_existing);
     return target;
   }
-
-  std::filesystem::path db_path_;
-  std::filesystem::path meta_path_;
-  std::filesystem::path scratch_dir_;
 };
 
-TEST_F(ImportContentClassificationTest, OrdinaryCollectionSkipsRepeatedSourceAcrossProjectReopen) {
+TEST_F(ImportDuplicateSkippingTest, OrdinaryCollectionSkipsRepeatedSourceAcrossProjectReopen) {
   const auto photo = scratch_dir_ / "photo.jpg";
   const auto copy  = scratch_dir_ / "copy.jpg";
   test_support::WriteRgbRaster(photo, ".jpg");
@@ -227,9 +232,9 @@ TEST_F(ImportContentClassificationTest, OrdinaryCollectionSkipsRepeatedSourceAcr
     ProjectService project(db_path_, meta_path_);
     const auto     created = project.GetSleeveService()->CreateFolder(L"/", L"Imports");
     ASSERT_TRUE(created.second.success_);
-    const auto imported = ImportToLibraryRoot(project, {photo, photo, copy}, {}, {}, L"/Imports");
+    const auto imported = ImportIntoCollection(project, {photo, photo, copy}, {}, {}, L"/Imports");
     EXPECT_EQ(imported.result_.imported_, 2u);
-    EXPECT_EQ(imported.result_.duplicates_, 1u);
+    EXPECT_EQ(imported.result_.duplicates_skipped, 1u);
     EXPECT_EQ(imported.result_.failed_, 0u);
     original_id       = ElementOf(imported, "photo.jpg");
     const auto source = project.GetStorage()->GetSourceFileStore().ReadSourceFile(original_id);
@@ -240,23 +245,23 @@ TEST_F(ImportContentClassificationTest, OrdinaryCollectionSkipsRepeatedSourceAcr
 
   ProjectService reopened(db_path_, meta_path_);
   const auto     repeated =
-      ImportToLibraryRoot(reopened, {scratch_dir_ / "." / photo.filename()}, {}, {}, L"/Imports");
+      ImportIntoCollection(reopened, {scratch_dir_ / "." / photo.filename()}, {}, {}, L"/Imports");
   EXPECT_EQ(repeated.result_.imported_, 0u);
-  EXPECT_EQ(repeated.result_.duplicates_, 1u);
+  EXPECT_EQ(repeated.result_.duplicates_skipped, 1u);
   EXPECT_EQ(repeated.result_.failed_, 0u);
   EXPECT_TRUE(repeated.snapshot_.created_.empty());
   EXPECT_TRUE(reopened.GetStorage()->GetSourceFileStore().ReadSourceFile(original_id));
   EXPECT_EQ(CountRows(reopened, "Image"), 2);
 }
 
-TEST_F(ImportContentClassificationTest, SameSizeAndTimeWithDifferentFingerprintImportsNewEntry) {
+TEST_F(ImportDuplicateSkippingTest, SameSizeAndTimeWithDifferentFingerprintImportsNewEntry) {
   const auto photo = scratch_dir_ / "photo.jpg";
   test_support::WriteRgbRaster(photo, ".jpg");
   std::ofstream(photo, std::ios::binary | std::ios::app).put('\0');
   const auto     original_time = std::filesystem::last_write_time(photo);
   const auto     size          = std::filesystem::file_size(photo);
   ProjectService project(db_path_, meta_path_);
-  const auto     initial = ImportToLibraryRoot(project, {photo});
+  const auto     initial = ImportIntoCollection(project, {photo});
   ASSERT_EQ(initial.result_.imported_, 1u);
   auto&      store    = project.GetStorage()->GetSourceFileStore();
   const auto original = store.ReadSourceFile(ElementOf(initial, "photo.jpg"));
@@ -269,62 +274,62 @@ TEST_F(ImportContentClassificationTest, SameSizeAndTimeWithDifferentFingerprintI
   }
   std::filesystem::last_write_time(photo, original_time);
   ASSERT_EQ(std::filesystem::file_size(photo), size);
-  const auto changed = ImportToLibraryRoot(project, {photo});
+  const auto changed = ImportIntoCollection(project, {photo});
   EXPECT_EQ(changed.result_.imported_, 1u);
-  EXPECT_EQ(changed.result_.duplicates_, 0u);
+  EXPECT_EQ(changed.result_.duplicates_skipped, 0u);
   const auto replacement = store.ReadSourceFile(ElementOf(changed, "photo.jpg"));
   ASSERT_TRUE(replacement.has_value());
   EXPECT_EQ(replacement->byte_size, original->byte_size);
   EXPECT_EQ(replacement->modified_ns, original->modified_ns);
   EXPECT_NE(replacement->fingerprint, original->fingerprint);
   EXPECT_EQ(store.ReadSourceFile(original->element_id), original);
-  EXPECT_EQ(ImportToLibraryRoot(project, {photo}).result_.duplicates_, 1u);
+  EXPECT_EQ(ImportIntoCollection(project, {photo}).result_.duplicates_skipped, 1u);
 }
 
-TEST_F(ImportContentClassificationTest, ExistingEntryWithoutSourceRecordIsRecordedOnReimport) {
+TEST_F(ImportDuplicateSkippingTest, ExistingEntryWithoutSourceRecordIsRecordedOnReimport) {
   const auto photo = scratch_dir_ / "photo.jpg";
   test_support::WriteRgbRaster(photo, ".jpg");
   ProjectService project(db_path_, meta_path_);
-  const auto     initial = ImportToLibraryRoot(project, {photo});
+  const auto     initial = ImportIntoCollection(project, {photo});
   ASSERT_EQ(initial.result_.imported_, 1u);
   const auto id    = ElementOf(initial, "photo.jpg");
   auto&      store = project.GetStorage()->GetSourceFileStore();
   store.RemoveSourceFiles(std::span(&id, 1));
   ASSERT_FALSE(store.ReadSourceFile(id));
 
-  const auto repeated = ImportToLibraryRoot(project, {photo});
-  EXPECT_EQ(repeated.result_.duplicates_, 1u);
+  const auto repeated = ImportIntoCollection(project, {photo});
+  EXPECT_EQ(repeated.result_.duplicates_skipped, 1u);
   EXPECT_TRUE(repeated.snapshot_.created_.empty());
   EXPECT_TRUE(store.ReadSourceFile(id));
   EXPECT_EQ(CountRows(project, "Image"), 1);
 }
 
-TEST_F(ImportContentClassificationTest, RepeatedSourceFailsWhenItsDestinationDoesNotExist) {
+TEST_F(ImportDuplicateSkippingTest, RepeatedSourceFailsWhenItsDestinationDoesNotExist) {
   const auto photo = scratch_dir_ / "photo.jpg";
   test_support::WriteRgbRaster(photo, ".jpg");
   ProjectService project(db_path_, meta_path_);
-  ASSERT_EQ(ImportToLibraryRoot(project, {photo}).result_.imported_, 1u);
+  ASSERT_EQ(ImportIntoCollection(project, {photo}).result_.imported_, 1u);
 
-  const auto repeated = ImportToLibraryRoot(project, {photo}, {}, {}, L"/Missing");
-  EXPECT_EQ(repeated.result_.duplicates_, 0u);
+  const auto repeated = ImportIntoCollection(project, {photo}, {}, {}, L"/Missing");
+  EXPECT_EQ(repeated.result_.duplicates_skipped, 0u);
   EXPECT_EQ(repeated.result_.failed_, 1u);
   EXPECT_EQ(CountRows(project, "Image"), 1);
 }
 
-TEST_F(ImportContentClassificationTest, DisabledSkippingImportsBothOccurrences) {
+TEST_F(ImportDuplicateSkippingTest, DisabledSkippingImportsBothOccurrences) {
   const auto photo = scratch_dir_ / "photo.jpg";
   test_support::WriteRgbRaster(photo, ".jpg");
   ProjectService project(db_path_, meta_path_);
   ImportOptions  options;
-  options.skip_duplicates_ = false;
-  const auto imported      = ImportToLibraryRoot(project, {photo, photo}, {}, options);
+  options.skip_duplicates = false;
+  const auto imported     = ImportIntoCollection(project, {photo, photo}, {}, options);
   EXPECT_EQ(imported.result_.imported_, 2u);
-  EXPECT_EQ(imported.result_.duplicates_, 0u);
+  EXPECT_EQ(imported.result_.duplicates_skipped, 0u);
   EXPECT_EQ(CountRows(project, "Image"), 2);
   EXPECT_EQ(CountRows(project, "SourceFile"), 2);
 }
 
-TEST_F(ImportContentClassificationTest, ExcludedOccurrenceDoesNotHideAcceptedImportOfSamePath) {
+TEST_F(ImportDuplicateSkippingTest, ExcludedOccurrenceDoesNotHideAcceptedImportOfSamePath) {
   const auto photo = scratch_dir_ / "photo.jpg";
   const auto alias = scratch_dir_ / "." / photo.filename();
   test_support::WriteRgbRaster(photo, ".jpg");
@@ -332,29 +337,29 @@ TEST_F(ImportContentClassificationTest, ExcludedOccurrenceDoesNotHideAcceptedImp
   ImportOptions  options;
   options.allowed_categories_ = ImportCategoryBit(ImportFileCategory::Tiff);
   options.any_category_paths_.insert(alias.native());
-  const auto imported = ImportToLibraryRoot(project, {photo, alias}, {}, options);
+  const auto imported = ImportIntoCollection(project, {photo, alias}, {}, options);
   EXPECT_EQ(imported.result_.imported_, 1u);
-  EXPECT_EQ(imported.result_.duplicates_, 0u);
+  EXPECT_EQ(imported.result_.duplicates_skipped, 0u);
   EXPECT_EQ(imported.result_.excluded_type_, 1u);
   EXPECT_EQ(CountRows(project, "SourceFile"), 1);
 }
 
-TEST_F(ImportContentClassificationTest, CatalogLookupFailureStillImportsBothOccurrences) {
+TEST_F(ImportDuplicateSkippingTest, CatalogLookupFailureStillImportsBothOccurrences) {
   const auto photo = scratch_dir_ / "photo.jpg";
   test_support::WriteRgbRaster(photo, ".jpg");
   ProjectService project(db_path_, meta_path_);
   // The catalog read requires Image. Put it back before SyncImports writes the new rows.
   ExecuteStorageSql(project, "ALTER TABLE Image RENAME TO ImagesDuringImportTest");
-  const auto outcome = ImportToLibraryRoot(project, {photo, photo}, [&] {
+  const auto outcome = ImportIntoCollection(project, {photo, photo}, [&] {
     ExecuteStorageSql(project, "ALTER TABLE ImagesDuringImportTest RENAME TO Image");
   });
   EXPECT_EQ(outcome.result_.imported_, 2u);
-  EXPECT_EQ(outcome.result_.duplicates_, 0u);
+  EXPECT_EQ(outcome.result_.duplicates_skipped, 0u);
   EXPECT_EQ(outcome.result_.failed_, 0u);
   EXPECT_EQ(CountRows(project, "SourceFile"), 2);
 }
 
-TEST_F(ImportContentClassificationTest, ThrowingProgressCallbackDoesNotBlockImportCompletion) {
+TEST_F(ImportProjectTest, ThrowingProgressCallbackDoesNotBlockImportCompletion) {
   const auto photo   = scratch_dir_ / "photo.jpg";
   const auto unknown = scratch_dir_ / "unknown.bin";
   test_support::WriteRgbRaster(photo, ".jpg");
@@ -376,12 +381,12 @@ TEST_F(ImportContentClassificationTest, ThrowingProgressCallbackDoesNotBlockImpo
   ASSERT_EQ(result.wait_for(std::chrono::seconds(10)), std::future_status::ready);
   const auto completed = result.get();
   EXPECT_EQ(completed.imported_, 1u);
-  EXPECT_EQ(completed.duplicates_, 1u);
+  EXPECT_EQ(completed.duplicates_skipped, 1u);
   EXPECT_EQ(completed.failed_, 1u);
   importer.SyncImports(job->import_log_->Snapshot(), L"");
 }
 
-TEST_F(ImportContentClassificationTest, SyncFailureIsReportedWithoutSourceRecords) {
+TEST_F(ImportProjectTest, SyncFailureIsReportedWithoutSourceRecords) {
   ProjectService project(db_path_, meta_path_);
   auto           sleeve = project.GetSleeveService();
   sleeve->Write_NoSync<void>(
@@ -402,7 +407,7 @@ TEST_F(ImportContentClassificationTest, NikonCfaAndCameraTaggedRgbTiffImportAsDi
   std::filesystem::copy_file(raw, raw_as_nef);
   std::filesystem::copy_file(raw, raw_as_bin);
   ProjectService project(db_path_, meta_path_);
-  const auto     outcome = ImportToLibraryRoot(project, {raw_as_nef, raw_as_bin, tiff});
+  const auto     outcome = ImportIntoCollection(project, {raw_as_nef, raw_as_bin, tiff});
   EXPECT_EQ(outcome.result_.requested_, 3u);
   EXPECT_EQ(outcome.result_.imported_, 3u);
   EXPECT_EQ(outcome.result_.failed_, 0u);
@@ -437,7 +442,7 @@ TEST_F(ImportContentClassificationTest,
   test_support::WriteUnknownBinary(unknown);
 
   ProjectService project(db_path_, meta_path_);
-  const auto     outcome = ImportToLibraryRoot(project, {raw_path, jpeg, tiff, xmp, mov, unknown});
+  const auto     outcome = ImportIntoCollection(project, {raw_path, jpeg, tiff, xmp, mov, unknown});
 
   EXPECT_EQ(outcome.result_.requested_, 6u);
   EXPECT_EQ(outcome.result_.imported_, 3u);
@@ -477,7 +482,7 @@ TEST_F(ImportContentClassificationTest, ImportDecidesKindByContentNotByFileExten
   test_support::WriteRgbRaster(tiff_as_dng, ".tif");
 
   ProjectService project(db_path_, meta_path_);
-  const auto     outcome = ImportToLibraryRoot(project, {raw_as_bin, jpeg_as_nef, tiff_as_dng});
+  const auto     outcome = ImportIntoCollection(project, {raw_as_bin, jpeg_as_nef, tiff_as_dng});
 
   EXPECT_EQ(outcome.result_.imported_, 3u);
   EXPECT_EQ(outcome.result_.failed_, 0u);
@@ -510,7 +515,7 @@ TEST_F(ImportContentClassificationTest,
   }
 
   ProjectService project(db_path_, meta_path_);
-  const auto     outcome = ImportToLibraryRoot(project, {jpeg});
+  const auto     outcome = ImportIntoCollection(project, {jpeg});
   ASSERT_EQ(outcome.result_.imported_, 1u);
 
   const auto row = QueryImageRow(project, "display_p3.jpg");
@@ -538,7 +543,7 @@ TEST_F(ImportContentClassificationTest, ImportedExrIsSceneLinearAndHdr) {
   std::filesystem::copy_file(RasterFixturePath("chromaticities_p3_half.exr"), exr);
 
   ProjectService project(db_path_, meta_path_);
-  const auto     outcome = ImportToLibraryRoot(project, {exr});
+  const auto     outcome = ImportIntoCollection(project, {exr});
   ASSERT_EQ(outcome.result_.imported_, 1u);
 
   const auto row = QueryImageRow(project, "render.exr");
@@ -585,7 +590,7 @@ TEST_F(ImportContentClassificationTest, ContentOutsideTheAllowedCategoriesIsCoun
   options.allowed_categories_ =
       ImportCategoryBit(ImportFileCategory::Raw) | ImportFileCategory::Png;
   ProjectService project(db_path_, meta_path_);
-  const auto     outcome = ImportToLibraryRoot(project, {jpeg_as_nef, png, blob}, {}, options);
+  const auto     outcome = ImportIntoCollection(project, {jpeg_as_nef, png, blob}, {}, options);
 
   EXPECT_EQ(outcome.result_.imported_, 1u);
   EXPECT_EQ(outcome.result_.failed_, 2u);
@@ -607,7 +612,7 @@ TEST_F(ImportContentClassificationTest, CmykJpegIsUnsupportedAndLeavesNoImageRow
   std::filesystem::copy_file(RasterFixturePath("cmyk_icc.jpg"), cmyk);
 
   ProjectService project(db_path_, meta_path_);
-  const auto     outcome = ImportToLibraryRoot(project, {cmyk});
+  const auto     outcome = ImportIntoCollection(project, {cmyk});
   EXPECT_EQ(outcome.result_.imported_, 0u);
   ASSERT_EQ(outcome.snapshot_.metadata_failed_.size(), 1u);
   EXPECT_EQ(outcome.snapshot_.metadata_failed_.front().error_code_,
@@ -659,7 +664,7 @@ TEST_F(ImportContentClassificationTest,
   const auto     earlier_image_id =
       static_cast<image_id_t>(QueryCount(project, "SELECT MAX(id) FROM Image"));
 
-  const auto outcome = ImportToLibraryRoot(project, paths, [&project, earlier_image_id] {
+  const auto outcome = ImportIntoCollection(project, paths, [&project, earlier_image_id] {
     project.GetImagePoolService()->Read<void>(earlier_image_id,
                                               [](const std::shared_ptr<Image>&) {});
   });

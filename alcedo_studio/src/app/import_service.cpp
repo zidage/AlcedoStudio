@@ -80,7 +80,7 @@ class ImportRootBatchWriter {
     /// The file has a RAW extension; it decides the progress ring the image counts in.
     bool             raw_extension_ = false;
     EncodedImageRoot root_;
-    std::optional<SourceFileRecord> source_;
+    std::optional<SourceFileRecord> source_record;
   };
 
   /// Called once per submitted metadata task before it is queued.
@@ -179,8 +179,8 @@ static void TryFinishImportJob(const std::shared_ptr<ImportJob>&      job,
   result.raw_requested_ = progress->raw_total_;
   result.raw_imported_  = progress->raw_imported_.load();
   result.raw_failed_    = progress->raw_failed_.load();
-  result.duplicates_     = progress->duplicates_.load();
-  result.raw_duplicates_ = progress->raw_duplicates_.load();
+  result.duplicates_skipped     = progress->duplicates_skipped.load();
+  result.raw_duplicates_skipped = progress->raw_duplicates_skipped.load();
   SetImportResult(job, result);
 }
 
@@ -213,8 +213,8 @@ static void WriteImportRootBatch(std::vector<ImportRootBatchWriter::PendingRoot>
 
   for (auto& pending : batch) {
     if (written) {
-      if (pending.source_) {
-        sources->RecordSource(std::move(*pending.source_));
+      if (pending.source_record) {
+        sources->RecordSource(std::move(*pending.source_record));
       }
       if (import_log) {
         import_log->MarkMetadataSuccess(pending.image_id_);
@@ -376,11 +376,12 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     const std::shared_ptr<ImportProgress>& progress_ptr, const ImportOptions& options,
     const std::shared_ptr<OrdinaryImportSources>& sources,
     const std::shared_ptr<const RawImportLook>&   raw_import_look) {
+  using CandidateStatus      = OrdinaryImportSources::CandidateStatus;
   // TODO: Use sleeve service to interact with FS
   // The current implementation is a temporary solution
   auto       root_writer     = std::make_shared<ImportRootBatchWriter>();
   const auto report_progress = [&job, &progress_ptr] { ReportImportProgress(job, *progress_ptr); };
-  if (sources && options.skip_duplicates_) {
+  if (sources && options.skip_duplicates) {
     sources->LoadCandidates();
   }
 
@@ -404,8 +405,8 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     }
     const std::wstring file_name = image_path.filename().wstring();
 
-    auto*              candidates = sources ? sources->TrackPath(image_path) : nullptr;
-    if (candidates && !candidates->submitted.empty()) {
+    auto               lookup    = sources ? sources->LookupPath(image_path) : std::nullopt;
+    if (lookup && lookup->status == CandidateStatus::kSubmitted) {
       // Wait for the first occurrence's result. A failed or canceled occurrence cannot match.
       WriteImportRootBatch(root_writer->Drain(), *pipeline_service_, job, import_log, progress_ptr,
                            sources.get());
@@ -414,23 +415,23 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
         break;
       }
     }
-    if (candidates && (!candidates->stored.empty() || !candidates->submitted.empty())) {
+    if (lookup && lookup->status != CandidateStatus::kNone) {
       if (auto measured = OrdinaryImportSources::Measure(image_path)) {
         std::optional<OrdinaryImportSources::Match> match;
         try {
-          match = sources->FindMatch(*candidates, *measured);
+          match = sources->FindMatch(lookup->key, *measured);
         } catch (const std::exception& error) {
           ALCEDO_LOG_WARN(Library)
               << "Import duplicate check for " << image_path << ": " << error.what();
         }
         if (match) {
-          if (match->needs_measurement) {
+          if (match->needs_source_record) {
             measured->element_id = match->element_id;
             sources->RecordSource(std::move(*measured));
           }
-          progress_ptr->duplicates_.fetch_add(1);
+          progress_ptr->duplicates_skipped.fetch_add(1);
           if (raw_extension) {
-            progress_ptr->raw_duplicates_.fetch_add(1);
+            progress_ptr->raw_duplicates_skipped.fetch_add(1);
           }
           report_progress();
           continue;
@@ -488,8 +489,8 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     }
     root_writer->AddOutstandingEncode();
 
-    if (candidates) {
-      candidates->submitted.push_back(element_id);
+    if (lookup) {
+      sources->RecordSubmission(std::move(lookup->key), element_id);
     }
     const auto pipeline_service = pipeline_service_;
     const auto file_categories  = options.any_category_paths_.contains(image_path.native())
@@ -591,7 +592,7 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
   WriteImportRootBatch(root_writer->Drain(), *pipeline_service_, job, import_log, progress_ptr,
                        sources.get());
   if (sources) {
-    import_log->SetSourceRecords(sources->TakeSourceRecords());
+    import_log->PublishSourceRecords(sources->TakeSourceRecords());
   }
   TryFinishImportJob(job, progress_ptr);
 }
@@ -629,6 +630,8 @@ void ImportServiceImpl::SyncImports(const ImportLogSnapshot& log_snapshot,
   if (!files.success_) {
     throw std::runtime_error(files.message_);
   }
-  fs_service_->GetStorage()->GetSourceFileStore().UpsertSourceFiles(log_snapshot.source_records_);
+  if (log_snapshot.source_records) {
+    fs_service_->GetStorage()->GetSourceFileStore().UpsertSourceFiles(*log_snapshot.source_records);
+  }
 }
 };  // namespace alcedo

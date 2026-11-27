@@ -495,7 +495,7 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
   ImportOptions options;
   options.allowed_categories_ = allowedCategories;
   options.any_category_paths_ = std::move(anyCategoryPaths);
-  options.skip_duplicates_    = LibraryBehaviorPreferences::LoadSkipDuplicateImports();
+  options.skip_duplicates     = LibraryBehaviorPreferences::LoadSkipDuplicateImports();
   // #1016: no scan batch writes the project from here to CompleteImport. The job starts when the
   // running scan has completed its batch; a cancel before that start reads no file.
   import_scan_hold_           = mount_scans_ != nullptr ? mount_scans_->Hold() : MountScanHold{};
@@ -551,8 +551,8 @@ void ImportExportHandler::ApplyImportProgress() {
   const uint32_t        canceled    = progress.canceled_.load();
   const uint32_t        raw_failed  = progress.raw_failed_.load();
   const uint32_t        raw_done    = progress.raw_imported_.load();
-  const uint32_t        raw_duplicates = progress.raw_duplicates_.load();
-  const uint32_t        duplicates     = progress.duplicates_.load();
+  const uint32_t        raw_duplicates = progress.raw_duplicates_skipped.load();
+  const uint32_t        duplicates     = progress.duplicates_skipped.load();
   const uint32_t        failed      = progress.failed_.load();
   const uint32_t        imported    = progress.metadata_done_.load();
   const uint32_t        prepared    = progress.placeholders_created_.load();
@@ -921,8 +921,8 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   import_raw_total_     = static_cast<int>(result.raw_requested_);
   import_raw_completed_ = static_cast<int>(result.raw_imported_);
   import_raw_failed_    = static_cast<int>(result.raw_failed_);
-  import_duplicates_     = static_cast<int>(result.duplicates_);
-  import_raw_duplicates_ = static_cast<int>(result.raw_duplicates_);
+  import_duplicates_     = static_cast<int>(result.duplicates_skipped);
+  import_raw_duplicates_ = static_cast<int>(result.raw_duplicates_skipped);
   import_status_text_ = PL_TEXT("Saving %1 imported photo(s) to the library...", result.imported_);
   emit ImportStateChanged();
   emit importStateChanged();
@@ -999,12 +999,13 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
   auto           task_text   = PL_TEXT(
       "Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 "
       "failed",
-      result.imported_, result.duplicates_, result.excluded_type_, result.unsupported_, errors);
+      result.imported_, result.duplicates_skipped, result.excluded_type_, result.unsupported_,
+      errors);
   if (result.canceled_ > 0) {
     task_text = PL_TEXT(
         "Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 "
         "unsupported, %6 failed",
-        result.imported_, result.duplicates_, result.canceled_, result.excluded_type_,
+        result.imported_, result.duplicates_skipped, result.canceled_, result.excluded_type_,
         result.unsupported_, errors);
   }
   if (!outcome.state_saved_) {
@@ -1025,8 +1026,8 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
   import_raw_total_     = static_cast<int>(result.raw_requested_);
   import_raw_completed_ = static_cast<int>(result.raw_imported_);
   import_raw_failed_    = static_cast<int>(result.raw_failed_);
-  import_duplicates_     = static_cast<int>(result.duplicates_);
-  import_raw_duplicates_ = static_cast<int>(result.raw_duplicates_);
+  import_duplicates_     = static_cast<int>(result.duplicates_skipped);
+  import_raw_duplicates_ = static_cast<int>(result.raw_duplicates_skipped);
   import_status_text_ = task_text;
   emit ImportStateChanged();
   emit importStateChanged();

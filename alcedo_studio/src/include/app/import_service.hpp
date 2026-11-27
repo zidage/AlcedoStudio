@@ -53,7 +53,7 @@ struct ImportOptions {
   ImportPathSet      any_category_paths_{};
 
   /// Ordinary imports skip an existing entry for the same source by default.
-  bool               skip_duplicates_ = true;
+  bool               skip_duplicates = true;
 };
 
 struct ImportProgress {
@@ -90,8 +90,10 @@ struct ImportProgress {
   /// Subset of failed_: failed files with a RAW extension.
   std::atomic<uint32_t> raw_failed_           = 0;
 
-  std::atomic<uint32_t> duplicates_           = 0;
-  std::atomic<uint32_t> raw_duplicates_       = 0;
+  /// Files skipped because the source already has an import entry.
+  std::atomic<uint32_t> duplicates_skipped     = 0;
+  /// Subset of duplicates_skipped with a RAW extension.
+  std::atomic<uint32_t> raw_duplicates_skipped = 0;
 };
 
 struct ImportError {
@@ -116,8 +118,8 @@ struct ImportResult {
   uint32_t raw_imported_  = 0;
   /// Subset of failed_: files with a RAW extension.
   uint32_t raw_failed_    = 0;
-  uint32_t duplicates_     = 0;
-  uint32_t raw_duplicates_ = 0;
+  uint32_t duplicates_skipped     = 0;
+  uint32_t raw_duplicates_skipped = 0;
 };
 
 class ImportJob {

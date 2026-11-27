@@ -5,6 +5,7 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -33,16 +34,20 @@ struct ImportLogSnapshot {
   std::vector<image_id_t>     metadata_ok_{};
   std::vector<ImportLogEntry> metadata_failed_{};
   std::vector<ImportLogEntry> unsupported_nikon_he_{};
-  /// Source records measured by this import, awaiting the library write in SyncImports.
-  std::vector<SourceFileRecord> source_records_{};
+  /// Completed measurements shared with the save worker. Null if no source was measured.
+  std::shared_ptr<const std::vector<SourceFileRecord>> source_records;
 };
 
 class ImportLog {
  public:
-  /// Attach measurements once the metadata workers have finished. SyncImports persists them.
-  void SetSourceRecords(std::vector<SourceFileRecord> records) {
+  /// Publish immutable measurements once the workers finish. Snapshots keep them alive for save.
+  void PublishSourceRecords(std::vector<SourceFileRecord> records) {
+    if (records.empty()) {
+      return;
+    }
+    auto completed = std::make_shared<const std::vector<SourceFileRecord>>(std::move(records));
     std::lock_guard<std::mutex> lock(mtx_);
-    source_records_ = std::move(records);
+    source_records_ = std::move(completed);
   }
 
   void AddPlaceholder(const image_id_t image_id, const sl_element_id_t element_id,
@@ -86,7 +91,7 @@ class ImportLog {
     snapshot.metadata_ok_.reserve(metadata_ok_.size());
     snapshot.metadata_failed_.reserve(entries_.size());
     snapshot.unsupported_nikon_he_.reserve(entries_.size());
-    snapshot.source_records_ = source_records_;
+    snapshot.source_records = source_records_;
 
     for (const auto& [id, entry] : entries_) {
       snapshot.created_.push_back(entry);
@@ -105,7 +110,7 @@ class ImportLog {
   mutable std::mutex                             mtx_{};
   std::unordered_map<image_id_t, ImportLogEntry> entries_{};
   std::unordered_set<image_id_t>                 metadata_ok_{};
-  std::vector<SourceFileRecord>                  source_records_{};
+  std::shared_ptr<const std::vector<SourceFileRecord>> source_records_;
 };
 
 }  // namespace alcedo

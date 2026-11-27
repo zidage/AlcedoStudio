@@ -23,31 +23,44 @@ class OrdinaryImportSources {
  public:
   explicit OrdinaryImportSources(Storage& storage) : storage_(storage) {}
 
+  enum class CandidateStatus { kNone, kStored, kSubmitted };
+
+  struct PathLookup {
+    std::filesystem::path::string_type key;
+    CandidateStatus                    status;
+  };
+
+  struct Match {
+    sl_element_id_t element_id;
+    bool            needs_source_record;
+  };
+
+  /// Start duplicate checking. A failed catalog read logs the error and leaves checking disabled.
+  void LoadCandidates();
+  /// Return the normalized key and candidate status, or empty if the path cannot be checked.
+  /// A submitted candidate must finish before FindMatch reads its measurement.
+  auto        LookupPath(const image_path_t& path) const -> std::optional<PathLookup>;
+  /// Record a file submitted for a path returned by LookupPath. Runs on the submission thread.
+  void        RecordSubmission(std::filesystem::path::string_type key, sl_element_id_t element_id);
+  /// Find a match, or an older entry that needs a source record. Reads only.
+  /// Use a key with stored or submitted candidates from LookupPath.
+  auto        FindMatch(const std::filesystem::path::string_type& key,
+                        const SourceFileRecord&                   source) const -> std::optional<Match>;
+  /// An unavailable measurement is logged and leaves the photo eligible for import.
+  static auto Measure(const image_path_t& path, sl_element_id_t element_id = 0)
+      -> std::optional<SourceFileRecord>;
+
+  /// Retain a measurement for an existing or newly committed library entry.
+  void RecordSource(SourceFileRecord record);
+  /// Transfer the measurements for saving after all workers have finished.
+  auto TakeSourceRecords() -> std::vector<SourceFileRecord>;
+
+ private:
   struct Candidates {
     std::vector<sl_element_id_t> stored;
     std::vector<sl_element_id_t> submitted;
   };
 
-  struct Match {
-    sl_element_id_t element_id;
-    bool            needs_measurement;
-  };
-
-  /// Start duplicate checking. A failed catalog read logs the error and leaves checking disabled.
-  void LoadCandidates();
-  /// Empty when checking is disabled or this path cannot be normalized.
-  auto TrackPath(const image_path_t& path) -> Candidates*;
-  /// Find a match, or an older entry whose source has never been measured. Reads only.
-  auto FindMatch(const Candidates& candidates, const SourceFileRecord& source) const
-      -> std::optional<Match>;
-  /// An unavailable measurement is logged and leaves the photo eligible for import.
-  static auto Measure(const image_path_t& path, sl_element_id_t element_id = 0)
-      -> std::optional<SourceFileRecord>;
-
-  void RecordSource(SourceFileRecord record);
-  auto TakeSourceRecords() -> std::vector<SourceFileRecord>;
-
- private:
   auto CompareMeasurement(sl_element_id_t id, const SourceFileRecord& source) const
       -> std::optional<bool>;
 
