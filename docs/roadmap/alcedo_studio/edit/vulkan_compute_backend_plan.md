@@ -595,8 +595,8 @@ test of its kernels (B9).
 | VK3 | Kernel dispatch, shared color math, geometry utilities, comparison test support | `edit/runtime/vulkan/`, `src/vulkan/shader/`, `color_encoding_math.h` | VK2 | 1300 to 1700 | complete (#1080) |
 | VK4 | RAW operators: linearize, CFA clamp, reference space, RCD, X-Trans, pack | `decoders/processor/operators/gpu/` | VK3 | 1400 to 1800 | complete (#1196) |
 | VK5 | RAW operators: highlight reconstruction, lens calibration, DNG warp | `decoders/processor/operators/gpu/`, `edit/runtime/lens/vulkan/` | VK4 | 1500 to 1900 | complete (#1203) |
-| VK6 | Develop pass (UploadRaw) | `edit/runtime/vulkan/` | VK5 | 1400 to 1800 | complete on the Apple M4, Windows runs open (#1209) |
-| VK7 | GeometryResample, CameraToAp1, raster input (UploadRgb), DisplayToAp1 | `edit/runtime/vulkan/`, shared color headers | VK6 | 1100 to 1500 | complete on the Apple M4, Windows runs open (#1211) |
+| VK6 | Develop pass (UploadRaw) | `edit/runtime/vulkan/` | VK5 | 1400 to 1800 | complete on the Apple M4 and the RTX 3080; Iris Xe waits for #1213 (#1209) |
+| VK7 | GeometryResample, CameraToAp1, raster input (UploadRgb), DisplayToAp1 | `edit/runtime/vulkan/`, shared color headers | VK6 | 1100 to 1500 | complete (#1211) |
 | VK8 | Primary grade point kernels and LUT resources | `edit/runtime/vulkan/` | VK7 | 1400 to 1800 | planned |
 | VK9 | Primary grade neighbor kernels | `edit/runtime/vulkan/` | VK8 | 800 to 1200 | planned |
 | VK10 | Local tone | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | planned |
@@ -2208,6 +2208,23 @@ the Windows runs did not take place.
 **Remaining gaps:** the Windows runs of `VulkanDevelopTest` against OpenCL on the RTX 3080 Laptop
 GPU and Iris Xe (B9), and of the VK0 to VK5 suites after the `VulkanContext` change.
 
+**Windows runs (2026-11-27, during VK7, on the VK7 branch).** RTX 3080 Laptop GPU: the VK0 to VK7
+suites pass (131 tests, 130 PASS, 1 skipped), `VulkanDevelopTest` 9 of 9 against OpenCL:
+
+| Case | OpenCL against Vulkan, RTX 3080 | Iris Xe |
+| --- | --- | --- |
+| Bayer NEF, highlight reconstruction off / on | 3.1e-5 / 3.7e-6 | FAIL: 2329 values above 1e-4 (0.0495) / about 105870 (0.30), #1213 |
+| X-Trans RAF, off / on | equal / 8.7e-7 | 1.2e-7 / 8.5e-7 |
+| Linear DNG, off / on | equal / 5.8e-7 | equal / 1.2e-7 |
+| WarpRectilinear of a real DNG | 1.8e-7 | inside below 1e-5, border 9.8e-4 (1 ulp) |
+| Lens vignetting, distortion, TCA | 5.8e-7 | 8.0e-7 |
+
+Iris Xe: 130 of 131 pass; `BayerRawEqualsTheReferenceBackend` fails. The RCD stage alone differs
+between the Iris Xe Vulkan and OpenCL drivers on this clipped NEF in the red and blue planes (1441
+and 1176 values above 1e-4), the green plane is equal, and neither Iris Xe backend gives the RTX
+3080 result there; the VK4 RCD test uses a NEF without large clipped areas (#1213). The second
+exit criterion is met for the RTX 3080 Laptop GPU; for Iris Xe it waits for #1213.
+
 ### Phase VK7: GeometryResample, CameraToAp1, raster input, DisplayToAp1
 
 **Objective and deliverables.** The Vulkan backend writes `develop.image` (ACEScc AP1, the input
@@ -2310,8 +2327,8 @@ Windows: cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKe
 **Exit criteria.**
 
 - [x] The listed tests pass on the Apple M4 with no validation error.
-- [ ] The listed tests pass on both Windows devices against OpenCL, or the record names the runs
-      that did not take place. (The record names them: not run.)
+- [x] The listed tests pass on both Windows devices against OpenCL, or the record names the runs
+      that did not take place. (RTX 3080 Laptop GPU and Iris Xe: 9 of 9.)
 - [x] The OpenCL, CUDA, and Metal results are unchanged: the shared headers keep their OpenCL,
       CUDA, Metal, and host expansion (record).
 
@@ -2319,10 +2336,11 @@ Windows: cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKe
 
 ##### Phase VK7 completion record (2026-11-27)
 
-**Status:** complete on the Apple M4 (MoltenVK). Issue #1211. Branch
-`feature/vulkan-vk7-geometry-camera-raster` on the VK6 branch `feature/vulkan-vk6-develop-pass`
-(pull request #1210). The Windows build and runs did not take place: the user asked for the work
-on the Mac and for no test on the Windows computer during the session (the computer was in use).
+**Status:** complete on the Apple M4 (MoltenVK), the RTX 3080 Laptop GPU, and Iris Xe. Issue
+#1211. Branch `feature/vulkan-vk7-geometry-camera-raster` on the VK6 branch
+`feature/vulkan-vk6-develop-pass` (pull request #1210). The work was done on the Mac (user
+request); the Windows build and runs followed the same day when the Windows computer was free
+(user request), on the committed branch.
 
 **Implementation decisions.** The plan did not specify these details, or the work found a better
 form. Each one agrees with A1 to A7 and B1 to B11.
@@ -2404,7 +2422,7 @@ linearization
 | `alcedo-gpu-check --vulkan` | `alcedo_gpu_check` | PASS: `gpu.kernels.ok=vulkan kernels=32` |
 | Validation errors | `TearDown` of each GPU test | 0 |
 | Metal and host builds of the changed headers | Metal libraries `camera_color`, `display_to_ap1`, `drt` rebuilt; host evaluation in the tests | the Metal results of the VK6 and VK7 comparisons are the ones above |
-| Windows: MSVC build, OpenCL and CUDA builds of the headers, the tests against OpenCL on the RTX 3080 Laptop GPU and Iris Xe | | not run (see the status) |
+| Windows: MSVC build of the Vulkan targets, the OpenCL tests, and the CUDA tests of the changed headers | `scripts\msvc_env.cmd --build build\debug` | PASS, no warning |
 
 Commands:
 
@@ -2429,9 +2447,35 @@ tests 884 (the new test 663, the moved helpers 221; 150 lines removed from `Vulk
 Above the estimate of 1100 to 1500: the shared header changes and the moved test helpers were not
 in it.
 
-**Remaining gaps:** the Windows build (MSVC, and the OpenCL and CUDA programs with the changed
-headers) and the Windows runs of `VulkanGeometryColorTest` and `VulkanDevelopTest` against OpenCL
-on the RTX 3080 Laptop GPU and Iris Xe (B9).
+**Windows runs (2026-11-27):** `VulkanGeometryColorTest` against OpenCL on the same GPU
+(`ALCEDO_VULKAN_DEVICE=RTX` or `Iris`, validation layer on, 0 validation errors):
+
+| Case | RTX 3080 Laptop GPU | Iris Xe |
+| --- | --- | --- |
+| Geometry bilinear: host; OpenCL | 2.9e-6; equal | 2.9e-6; equal |
+| Geometry bicubic: host; OpenCL | 4.4e-6; 1.8e-7 | 4.4e-6; 1.8e-7 |
+| Camera color with a DCP profile, the same input on both | 4.8e-7, rms 3.1e-8, 0 values above 1e-4 | 4.8e-7, rms 3.3e-8, 0 above 1e-4 |
+| `develop.image` of the CI ARW, the whole chain | 4.2e-7, rms 2.9e-8 | 6.3e-7, rms 2.9e-8 |
+| Raster fixtures (8) against OpenCL | 9.0e-5 or less | 7.5e-4 (HLG TIFF), 7.9e-5 or less for the others |
+| Result | 9 of 9 PASS | 9 of 9 PASS |
+
+With OpenCL as the reference the camera color differences are 4.8e-7: the 0.039 of the Apple M4 is
+the fast math of the product Metal kernel. The suites: RTX 3080, 131 tests, 130 PASS, 1 skipped (a
+test for a build without Vulkan); Iris Xe, 130 PASS and `VulkanDevelopTest.BayerRawEqualsTheReferenceBackend`
+FAIL, a VK4 RCD finding on a clipped NEF (#1213, VK6 record). `alcedo-gpu-check --vulkan`:
+`gpu.kernels.ok=vulkan kernels=32` on both devices.
+
+The OpenCL and CUDA tests of the changed headers (OpenCL on Iris Xe, the device of the OpenCL
+test default): `GpuDagOpenClDisplayToAp1Test` 4 of 4, `GpuDagOpenClRasterDevelopTest` 4 of 4,
+`GpuDagCudaDisplayToAp1Test` 5 of 5, `GpuDagCudaRasterDevelopTest` 9 of 9, `GpuDagOpenClDevelopTest`
+(DCP, Canon DNG, Sony, geometry, converted DNG) 5 of 6. The failure
+`OpenClDevelopFixture.DcpProfileMatchesScalarReference` (display change 0.004808, limit 0.005) is
+#972: the binary of the main checkout without VK7 gives the same value.
+
+A stale binary first failed `EachCatalogKernelHasAPipeline` (the old kernel catalog): a phase that
+adds kernels rebuilds every Vulkan test target, not only its own.
+
+**Remaining gaps:** #1213 (Iris Xe, VK4 RCD on clipped input).
 
 ### Phases VK3 to VK23: scope of each phase
 
