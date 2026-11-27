@@ -1404,6 +1404,10 @@
         <translation>已暂停</translation>
     </message>
     <message>
+        <source>Waiting</source>
+        <translation>等待中</translation>
+    </message>
+    <message>
         <source>%1 file(s) are already in a mounted folder and will not be imported this time.</source>
         <translation>%1 个文件已在挂载的文件夹中，本次不会导入。</translation>
     </message>

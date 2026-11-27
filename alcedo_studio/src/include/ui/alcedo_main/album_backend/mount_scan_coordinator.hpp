@@ -23,11 +23,11 @@
 
 #include "app/mount_service.hpp"
 #include "type/type.hpp"
+#include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/mount_directory_watcher.hpp"
 
 namespace alcedo::ui {
 
-class BackgroundTaskController;
 class MountScanHold;
 
 /// What asked for a scan (Mounted Folder Plan, MF7).
@@ -113,6 +113,19 @@ class MountScanClock {
                                         std::function<void()> callback) = 0;
   virtual void               StopTimer(mount_id_t mount_id)             = 0;
   virtual void               StopAllTimers()                            = 0;
+  /// True while a timer runs: it was started and has not fired or stopped.
+  [[nodiscard]] virtual auto HasRunningTimer() const -> bool            = 0;
+};
+
+/// What a mount of the coordinator does now (MountScanCoordinator::ScanActivity).
+enum class MountScanActivity : std::uint8_t {
+  /// No scan of the mount runs or waits.
+  kIdle,
+  /// A scan of the mount waits for the worker or for the end of a hold.
+  kQueued,
+  kRunning,
+  /// A hold stopped the last scan of the mount; it waits to run again.
+  kPaused,
 };
 
 /// Called on the UI thread with the result of the scan that a RequestScan asked for. A request
@@ -177,7 +190,10 @@ struct MountScanCoordinatorDependencies {
  * for a mount that waits for its scan changes nothing.
  *
  * The background task of a scan (BackgroundTaskKind::MountScan) shows only when the scan changes
- * the library. A scan that RequestScan started with kSynchronize shows from its start. An
+ * the library. A scan that RequestScan started with kSynchronize shows from its start. A
+ * kSynchronize request that waits (for the worker, for a hold, or for the end of the running scan
+ * of the same mount) shows a Queued task at once, which the scan takes over when it starts
+ * (#1189); a cancel of that task drops the request, and the running scan continues. An
  * automatic scan shows when it starts to import new files, or at its end when it moved, changed,
  * returned, or lost photos. An automatic scan that finds the mount offline shows only when the
  * mount was not offline before.
@@ -303,6 +319,20 @@ class MountScanCoordinator final : public QObject {
   [[nodiscard]] auto HasPendingScans() const -> bool;
   /// True while the worker that BeginStop stopped has not ended. It can still write its batch.
   [[nodiscard]] auto HasStoppedWorker() const -> bool { return stopped_worker_.has_value(); }
+  /// True while a watcher delay or a volume arrival delay runs: a scan request follows without a
+  /// new event.
+  [[nodiscard]] auto HasPendingTimers() const -> bool { return clock_->HasRunningTimer(); }
+  /// What the mount @p mount_id does now; kIdle for a mount that the coordinator does not hold.
+  [[nodiscard]] auto ScanActivity(mount_id_t mount_id) const -> MountScanActivity;
+  /**
+   * @brief The task of the scan that a kSynchronize request of @p mount_id that returned just now
+   *        waits for (#1189).
+   *
+   * The task of the next scan of the mount when one waits (a Queued task, or the task of a scan
+   * that a hold stopped), else the task of the running scan of the mount. Empty when neither
+   * exists.
+   */
+  [[nodiscard]] auto SynchronizeTaskId(mount_id_t mount_id) const -> QString;
 
   /**
    * @brief True when the volume that VolumeWithoutMountArrived reported is still at its mount
@@ -346,8 +376,12 @@ class MountScanCoordinator final : public QObject {
     bool                            watched      = false;
     /// Callbacks of the requests for the next scan of the mount that starts.
     std::vector<MountScanEndedCallback> on_next_scan_ended;
-    /// The task of a scan that a hold stopped; the next scan of the mount takes it over.
-    QString                             paused_task_id;
+    /// The task of the next scan of the mount: the task of a scan that a hold stopped, or the
+    /// Queued task of a kSynchronize request that waits. The next scan of the mount takes it
+    /// over.
+    QString                             next_scan_task_id;
+    /// A hold stopped the last scan of the mount, and it waits to run again.
+    bool                                next_scan_paused = false;
   };
 
   struct HoldState {
@@ -414,12 +448,17 @@ class MountScanCoordinator final : public QObject {
                      MountReachability previous_reachability, bool save_failed);
   void UpdateWatch(mount_id_t mount_id, MountState& state, const MountScanResult& result);
   auto RegisterTask(mount_id_t mount_id, const MountState& state, const QString& detail,
-                    int progress_percent) -> QString;
-  void CancelByUser(quint64 generation, mount_id_t mount_id);
+                    int                 progress_percent,
+                    BackgroundTaskState task_state = BackgroundTaskState::Running) -> QString;
+  /// Give a kSynchronize request that waits a Queued task, unless the next scan has a task.
+  void RegisterWaitingSynchronizeTask(mount_id_t mount_id, MountState& state);
+  /// The user cancel of the task @p task_id: of the running scan, or of the next scan of the
+  /// mount.
+  void CancelByUser(quint64 generation, mount_id_t mount_id, const QString& task_id);
   /// The cancel of the running scan: requires `running_`.
   void CancelRunningScanByUser();
-  /// End the paused task of @p state as Canceled.
-  void CancelPausedTask(MountState& state);
+  /// End the task of the next scan of @p state as Canceled.
+  void CancelNextScanTask(MountState& state);
   void WhenHoldReady(quint64 hold_id, std::function<void()> on_ready);
   void ReleaseHold(quint64 hold_id);
   /// Run the waiting starts of the holds when no worker runs.

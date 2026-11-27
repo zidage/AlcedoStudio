@@ -23,6 +23,7 @@
 #include "automation_in_process_session.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
+#include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 
 namespace alcedo::automation {
 namespace {
@@ -747,6 +748,310 @@ TEST_F(AutomationLibraryCommandsTest, MountSyncAndUnmountReturnTheServiceResults
   EXPECT_EQ(ErrorCode(session.Call(QStringLiteral("library.unmount"),
                                    QJsonObject{{"mount_id", mount_id}})),
             AutomationErrorCode::Rejected);
+}
+
+/// The `data.error` of a -32002 (rejected) answer; empty for another answer.
+auto RejectedError(const std::optional<AutomationResponse>& response) -> QString {
+  if (ErrorCode(response) != AutomationErrorCode::Rejected) {
+    return {};
+  }
+  return response->error->data.toObject().value("error").toString();
+}
+
+/// The first mount of library.mounts with `with_ids` true.
+auto FirstMountWithIds(InProcessAutomationSession& session) -> QJsonObject {
+  return session.CallResult(QStringLiteral("library.mounts"), QJsonObject{{"with_ids", true}})
+      .value("mounts")
+      .toArray()
+      .at(0)
+      .toObject();
+}
+
+// #1189: library.mount and library.sync with 'wait' false answer with the task of the scan, and
+// library.mounts shows the scan state, the watch, and the element ids.
+TEST_F(AutomationLibraryCommandsTest, MountAndSyncWithoutWaitReturnTheTaskOfTheScan) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "mount_no_wait"}})
+                   .isEmpty());
+  const QString trip = QDir(Folder()).filePath(QStringLiteral("disk/Trip"));
+  WriteJpeg(trip + QStringLiteral("/a.jpg"), 1);
+  WriteJpeg(trip + QStringLiteral("/Day1/b.jpg"), 2);
+
+  const QJsonObject mounted  = session.CallResult(QStringLiteral("library.mount"),
+                                                  QJsonObject{{"path", trip}, {"wait", false}});
+  const int         mount_id = mounted.value("mount_id").toInt();
+  ASSERT_GT(mount_id, 0);
+  EXPECT_GT(mounted.value("folder_id").toInt(), 0);
+  EXPECT_FALSE(mounted.contains("scan"));
+  const QString task_id = mounted.value("task_id").toString();
+  ASSERT_FALSE(task_id.isEmpty());
+  const QJsonObject first_scan = session.CallResult(
+      QStringLiteral("tasks.wait"), QJsonObject{{"task_id", task_id}, {"timeout_ms", 600000}});
+  EXPECT_EQ(first_scan.value("kind").toString(), QStringLiteral("mountScan"));
+  EXPECT_EQ(first_scan.value("state").toString(), QStringLiteral("succeeded"));
+  EXPECT_EQ(session
+                .CallResult(QStringLiteral("library.mounts.wait_idle"),
+                            QJsonObject{{"timeout_ms", 60000}})
+                .value("idle"),
+            QJsonValue(true));
+
+  const QJsonObject listed = FirstMountWithIds(session);
+  EXPECT_EQ(listed.value("scan").toString(), QStringLiteral("idle"));
+  EXPECT_TRUE(listed.value("watched").isBool());
+  EXPECT_EQ(listed.value("present_element_ids").toArray().size(), 2);
+  EXPECT_TRUE(listed.value("missing_element_ids").toArray().isEmpty());
+  const QJsonObject without_ids = session.CallResult(QStringLiteral("library.mounts"))
+                                      .value("mounts")
+                                      .toArray()
+                                      .at(0)
+                                      .toObject();
+  EXPECT_FALSE(without_ids.contains("present_element_ids"));
+  EXPECT_EQ(without_ids.value("scan").toString(), QStringLiteral("idle"));
+
+  const QJsonArray tasks = session
+                               .CallResult(QStringLiteral("library.sync"),
+                                           QJsonObject{{"mount_id", mount_id}, {"wait", false}})
+                               .value("tasks")
+                               .toArray();
+  ASSERT_EQ(tasks.size(), 1);
+  EXPECT_EQ(tasks.at(0).toObject().value("mount_id").toInt(), mount_id);
+  const QString sync_task = tasks.at(0).toObject().value("task_id").toString();
+  ASSERT_FALSE(sync_task.isEmpty());
+  EXPECT_NE(sync_task, task_id);
+  EXPECT_EQ(session
+                .CallResult(QStringLiteral("tasks.wait"),
+                            QJsonObject{{"task_id", sync_task}, {"timeout_ms", 600000}})
+                .value("state")
+                .toString(),
+            QStringLiteral("succeeded"));
+
+  EXPECT_EQ(RejectedError(session.Call(QStringLiteral("library.sync"),
+                                       QJsonObject{{"mount_id", 99}, {"wait", false}})),
+            QStringLiteral("unknown_mount"));
+  EXPECT_EQ(RejectedError(session.Call(
+                QStringLiteral("library.mount"),
+                QJsonObject{{"path", trip + QStringLiteral("/missing")}, {"wait", false}})),
+            QStringLiteral("directory_unreachable"));
+}
+
+// #1189: Locate Folder, Locate, and Remove Missing Photos answer with the results of the service
+// operations and with the named refusals of MountService.
+TEST_F(AutomationLibraryCommandsTest, LocateAndRemoveMissingReturnTheServiceResults) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "mount_locate"}})
+                   .isEmpty());
+  const QString disk = QDir(Folder()).filePath(QStringLiteral("disk"));
+  const QString trip = disk + QStringLiteral("/Trip");
+  WriteJpeg(trip + QStringLiteral("/a.jpg"), 1);
+  WriteJpeg(trip + QStringLiteral("/Day1/b.jpg"), 2);
+  WriteJpeg(disk + QStringLiteral("/Other/c.jpg"), 3);
+  const int mount_id =
+      session.CallResult(QStringLiteral("library.mount"), QJsonObject{{"path", trip}})
+          .value("mount_id")
+          .toInt();
+  ASSERT_GT(mount_id, 0);
+  ASSERT_GT(session
+                .CallResult(QStringLiteral("library.mount"),
+                            QJsonObject{{"path", disk + QStringLiteral("/Other")}})
+                .value("mount_id")
+                .toInt(),
+            0);
+
+  // Locate Folder: a copy of the directory at a new location (the watcher keeps handles on the
+  // old one); each photo keeps its element there.
+  const QString moved = disk + QStringLiteral("/TripMoved");
+  WriteJpeg(moved + QStringLiteral("/a.jpg"), 1);
+  WriteJpeg(moved + QStringLiteral("/Day1/b.jpg"), 2);
+  const QJsonObject located = session.CallResult(
+      QStringLiteral("library.mount.locate"), QJsonObject{{"mount_id", mount_id}, {"path", moved}});
+  EXPECT_EQ(located.value("mount_id").toInt(), mount_id);
+  const QJsonObject scan = located.value("scan").toObject();
+  EXPECT_EQ(scan.value("status").toString(), QStringLiteral("complete"));
+  EXPECT_EQ(scan.value("new").toInt(), 0);
+  EXPECT_EQ(scan.value("missing").toInt(), 0);
+  EXPECT_EQ(QFileInfo(FirstMountWithIds(session).value("path").toString()).canonicalFilePath(),
+            QFileInfo(moved).canonicalFilePath());
+  EXPECT_EQ(RejectedError(session.Call(QStringLiteral("library.mount.locate"),
+                                       QJsonObject{{"mount_id", 99}, {"path", moved}})),
+            QStringLiteral("unknown_mount"));
+  EXPECT_EQ(RejectedError(session.Call(
+                QStringLiteral("library.mount.locate"),
+                QJsonObject{{"mount_id", mount_id}, {"path", disk + QStringLiteral("/Gone")}})),
+            QStringLiteral("directory_unreachable"));
+  EXPECT_EQ(RejectedError(session.Call(
+                QStringLiteral("library.mount.locate"),
+                QJsonObject{{"mount_id", mount_id}, {"path", disk + QStringLiteral("/Other")}})),
+            QStringLiteral("nested_mount"));
+
+  // b.jpg moves out of the view of the scan: its photo is missing.
+  const QJsonArray present = FirstMountWithIds(session).value("present_element_ids").toArray();
+  ASSERT_EQ(present.size(), 2);
+  ASSERT_TRUE(QFile::rename(moved + QStringLiteral("/Day1/b.jpg"),
+                            Folder() + QStringLiteral("/b_outside.jpg")));
+  ASSERT_EQ(session.CallResult(QStringLiteral("library.sync"), QJsonObject{{"mount_id", mount_id}})
+                .value("scans")
+                .toArray()
+                .at(0)
+                .toObject()
+                .value("missing")
+                .toInt(),
+            1);
+  const QJsonArray missing = FirstMountWithIds(session).value("missing_element_ids").toArray();
+  ASSERT_EQ(missing.size(), 1);
+  const int  b_id = missing.at(0).toInt();
+  const int  a_id = present.at(0).toInt() == b_id ? present.at(1).toInt() : present.at(0).toInt();
+
+  // The refusals of Locate.
+  const auto locate_photo = [&session](int element_id, const QString& path) {
+    return session.Call(QStringLiteral("library.mount.locate_photo"),
+                        QJsonObject{{"element_id", element_id}, {"path", path}});
+  };
+  EXPECT_EQ(RejectedError(locate_photo(a_id, moved + QStringLiteral("/a.jpg"))),
+            QStringLiteral("photo_is_not_missing"));
+  EXPECT_EQ(RejectedError(locate_photo(b_id, Folder() + QStringLiteral("/b_outside.jpg"))),
+            QStringLiteral("file_outside_mount"));
+  QFile notes(moved + QStringLiteral("/notes.txt"));
+  ASSERT_TRUE(notes.open(QIODevice::WriteOnly));
+  notes.write("not an image");
+  notes.close();
+  EXPECT_EQ(RejectedError(locate_photo(b_id, notes.fileName())),
+            QStringLiteral("file_is_not_listed"));
+  EXPECT_EQ(RejectedError(locate_photo(b_id, moved + QStringLiteral("/a.jpg"))),
+            QStringLiteral("file_has_photo"));
+  EXPECT_EQ(RejectedError(locate_photo(b_id, moved + QStringLiteral("/Day2/none.jpg"))),
+            QStringLiteral("file_unreadable"));
+
+  // Locate takes a file in a directory that the last scan did not see.
+  ASSERT_TRUE(QDir().mkpath(moved + QStringLiteral("/Day2")));
+  ASSERT_TRUE(QFile::rename(Folder() + QStringLiteral("/b_outside.jpg"),
+                            moved + QStringLiteral("/Day2/b.jpg")));
+  const QJsonObject photo = session.CallResult(
+      QStringLiteral("library.mount.locate_photo"),
+      QJsonObject{{"element_id", b_id}, {"path", moved + QStringLiteral("/Day2/b.jpg")}});
+  EXPECT_EQ(photo.value("element_id").toInt(), b_id);
+  EXPECT_TRUE(photo.value("located").toBool());
+  EXPECT_EQ(FirstMountWithIds(session).value("missing_count").toInt(), 0);
+
+  // Remove Missing Photos removes only the missing photo.
+  ASSERT_TRUE(QFile::remove(moved + QStringLiteral("/a.jpg")));
+  session.CallResult(QStringLiteral("library.sync"), QJsonObject{{"mount_id", mount_id}});
+  const QJsonObject removed = session.CallResult(QStringLiteral("library.mount.remove_missing"),
+                                                 QJsonObject{{"mount_id", mount_id}});
+  EXPECT_EQ(removed.value("mount_id").toInt(), mount_id);
+  ASSERT_EQ(removed.value("removed_element_ids").toArray().size(), 1);
+  EXPECT_EQ(removed.value("removed_element_ids").toArray().at(0).toInt(), a_id);
+  EXPECT_EQ(removed.value("removed_image_ids").toArray().size(), 1);
+  const QJsonObject after = FirstMountWithIds(session);
+  ASSERT_EQ(after.value("present_element_ids").toArray().size(), 1);
+  EXPECT_EQ(after.value("present_element_ids").toArray().at(0).toInt(), b_id);
+  EXPECT_TRUE(after.value("missing_element_ids").toArray().isEmpty());
+  EXPECT_EQ(RejectedError(session.Call(QStringLiteral("library.mount.remove_missing"),
+                                       QJsonObject{{"mount_id", 99}})),
+            QStringLiteral("unknown_mount"));
+}
+
+// #1189: tasks.cancel cancels a queued scan, and library.mounts.wait_idle waits for the scans that
+// a hold keeps queued.
+TEST_F(AutomationLibraryCommandsTest, CancelOfAQueuedScanAndWaitIdleDuringAHold) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "mount_cancel"}})
+                   .isEmpty());
+  const QString trip = QDir(Folder()).filePath(QStringLiteral("disk/Trip"));
+  WriteJpeg(trip + QStringLiteral("/a.jpg"), 1);
+  const QJsonObject mounted =
+      session.CallResult(QStringLiteral("library.mount"), QJsonObject{{"path", trip}});
+  const int mount_id = mounted.value("mount_id").toInt();
+  ASSERT_GT(mount_id, 0);
+  ASSERT_EQ(session
+                .CallResult(QStringLiteral("library.mounts.wait_idle"),
+                            QJsonObject{{"timeout_ms", 60000}})
+                .value("idle"),
+            QJsonValue(true));
+
+  // An import or a delete holds the scans; a Synchronize request waits in a queued task.
+  auto              hold = session.host().mount_scans()->Hold();
+  const QJsonObject requested =
+      session
+          .CallResult(QStringLiteral("library.sync"),
+                      QJsonObject{{"mount_id", mount_id}, {"wait", false}})
+          .value("tasks")
+          .toArray()
+          .at(0)
+          .toObject();
+  const QString task_id = requested.value("task_id").toString();
+  ASSERT_FALSE(task_id.isEmpty());
+  EXPECT_EQ(FirstMountWithIds(session).value("scan").toString(), QStringLiteral("queued"));
+  EXPECT_EQ(ErrorCode(session.Call(QStringLiteral("library.mounts.wait_idle"),
+                                   QJsonObject{{"timeout_ms", 300}})),
+            AutomationErrorCode::Timeout);
+
+  const QJsonObject canceled =
+      session.CallResult(QStringLiteral("tasks.cancel"), QJsonObject{{"task_id", task_id}});
+  EXPECT_EQ(canceled.value("task_id").toString(), task_id);
+  EXPECT_EQ(canceled.value("state").toString(), QStringLiteral("canceled"));
+  EXPECT_EQ(FirstMountWithIds(session).value("scan").toString(), QStringLiteral("idle"));
+  // A finished task is returned unchanged.
+  EXPECT_EQ(session.CallResult(QStringLiteral("tasks.cancel"), QJsonObject{{"task_id", task_id}})
+                .value("state")
+                .toString(),
+            QStringLiteral("canceled"));
+  hold.Release();
+  EXPECT_EQ(session
+                .CallResult(QStringLiteral("library.mounts.wait_idle"),
+                            QJsonObject{{"timeout_ms", 60000}})
+                .value("idle"),
+            QJsonValue(true));
+
+  // A task without a cancel, and an unknown id.
+  ui::BackgroundTaskSnapshot fixed;
+  fixed.kind_            = ui::BackgroundTaskKind::MountScan;
+  fixed.state_           = ui::BackgroundTaskState::Running;
+  fixed.cancelable_      = false;
+  const QString fixed_id = session.host().background_tasks()->RegisterTask(fixed);
+  EXPECT_EQ(RejectedError(
+                session.Call(QStringLiteral("tasks.cancel"), QJsonObject{{"task_id", fixed_id}})),
+            QStringLiteral("not_cancelable"));
+  session.host().background_tasks()->FinishTask(fixed_id, ui::BackgroundTaskState::Succeeded);
+  const auto unknown =
+      session.Call(QStringLiteral("tasks.cancel"), QJsonObject{{"task_id", "bgtask-999"}});
+  ASSERT_EQ(ErrorCode(unknown), AutomationErrorCode::InvalidParams);
+  EXPECT_EQ(unknown->error->data.toObject().value("pointer").toString(),
+            QStringLiteral("/task_id"));
+}
+
+// #1189: library.volumes.arrived returns the card of the Disk section.
+TEST_F(AutomationLibraryCommandsTest, VolumesArrivedReturnsTheCardOfTheDiskSection) {
+  InProcessAutomationSession session;
+  EXPECT_EQ(ErrorCode(session.Call(QStringLiteral("library.volumes.arrived"))),
+            AutomationErrorCode::NotReady);
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "volume_card"}})
+                   .isEmpty());
+  EXPECT_TRUE(
+      session.CallResult(QStringLiteral("library.volumes.arrived")).value("volume").isNull());
+
+  const QString card_root = QDir(Folder()).filePath(QStringLiteral("CARD"));
+  ASSERT_TRUE(QDir().mkpath(card_root + QStringLiteral("/DCIM")));
+  session.host().folders()->SetArrivedVolume(QStringLiteral("CARD"), card_root, true,
+                                             QStringLiteral("serial-1"));
+  const QJsonObject volume =
+      session.CallResult(QStringLiteral("library.volumes.arrived")).value("volume").toObject();
+  EXPECT_EQ(volume.value("name").toString(), QStringLiteral("CARD"));
+  EXPECT_EQ(QFileInfo(volume.value("mount_point").toString()).canonicalFilePath(),
+            QFileInfo(card_root).canonicalFilePath());
+  EXPECT_TRUE(volume.value("dcim").toBool());
+  EXPECT_EQ(volume.value("identity").toString(), QStringLiteral("serial-1"));
+
+  session.host().folders()->DismissArrivedVolume();
+  EXPECT_TRUE(
+      session.CallResult(QStringLiteral("library.volumes.arrived")).value("volume").isNull());
 }
 
 // Sleeve Node Cache Plan SN3: library.folders lists the whole tree from one tree read, each
