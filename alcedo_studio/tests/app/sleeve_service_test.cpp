@@ -363,6 +363,27 @@ TEST_F(SleeveServiceTests, CreateAndDeleteFolderByPathApi) {
   EXPECT_THROW(service->ResolveFolder(L"/ToDelete"), std::runtime_error);
 }
 
+// #1179: the sync removes a deleted folder from the node cache and the store, and a path cache
+// record of it does not hide a new folder at the same path.
+TEST_F(SleeveServiceTests, PathOfASyncedDeletedFolderResolvesToTheNewFolder) {
+  ProjectService project(db_path_, meta_path_);
+  auto           service = project.GetSleeveService();
+
+  ASSERT_TRUE(service->CreateFolder(L"/", L"A").second.success_);
+  const auto old_b = service->CreateFolder(L"/A", L"B");
+  ASSERT_TRUE(old_b.second.success_);
+  ASSERT_EQ(service->ResolveFolder(L"/A/B")->element_id_, old_b.first->element_id_);
+
+  ASSERT_TRUE(service->DeletePath(L"/A").success_);
+  EXPECT_THROW(service->ResolveFolder(L"/A/B"), std::runtime_error);
+
+  ASSERT_TRUE(service->CreateFolder(L"/", L"A").second.success_);
+  const auto new_b = service->CreateFolder(L"/A", L"B");
+  ASSERT_TRUE(new_b.second.success_);
+  EXPECT_EQ(service->ResolveFolder(L"/A/B")->element_id_, new_b.first->element_id_);
+  EXPECT_EQ(service->ResolveFolder(L"/A/B")->element_id_, new_b.first->element_id_);
+}
+
 TEST_F(SleeveServiceTests, ReloadedFolderWriteDoesNotCloneSingleParentFolder) {
   {
     ProjectService project(db_path_, meta_path_);
