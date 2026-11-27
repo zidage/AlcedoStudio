@@ -26,14 +26,19 @@ function(alcedo_assign_test_category category option_name category_target)
   endforeach()
 endfunction()
 
+# The test executables of one directory share one duckdb_extensions directory, and Ninja links
+# them in parallel. Two copies to the same file race: one copy replaces the file while the other
+# still sets its attributes, and the second fails with "No such file or directory". So each target
+# copies to its own file and renames it to the shared name; a rename replaces the file in one step.
 function(alcedo_copy_duckdb_extension target_name extension_path extension_file_name)
   if(TARGET ${target_name} AND NOT "${extension_path}" STREQUAL "" AND EXISTS "${extension_path}")
+    set(_extension_dir "$<TARGET_FILE_DIR:${target_name}>/duckdb_extensions")
+    set(_staged_file "${_extension_dir}/${extension_file_name}.${target_name}.tmp")
     add_custom_command(TARGET ${target_name} POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E make_directory
-              "$<TARGET_FILE_DIR:${target_name}>/duckdb_extensions"
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${extension_path}"
-              "$<TARGET_FILE_DIR:${target_name}>/duckdb_extensions/${extension_file_name}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${_extension_dir}"
+      COMMAND ${CMAKE_COMMAND} -E copy "${extension_path}" "${_staged_file}"
+      COMMAND ${CMAKE_COMMAND} -E rename "${_staged_file}"
+              "${_extension_dir}/${extension_file_name}"
       VERBATIM)
   endif()
 endfunction()

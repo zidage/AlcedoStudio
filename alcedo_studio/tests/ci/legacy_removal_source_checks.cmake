@@ -44,7 +44,7 @@
 #
 # CHECK=NoPipelineStageTypeRemainsInFirstPartySource
 #   Fails when a source file under ALCEDO_SOURCE_ROOT, or under ALCEDO_TEST_SOURCE_ROOT when it is
-#   given, names PipelineStage or PipelineStageName.
+#   given, names PipelineStage or PipelineStageName as a whole identifier.
 #
 # CHECK=NoOperatorParamsAggregateRemainsInFirstPartySource
 #   Fails when a source file names the OperatorParams or GPUOperatorParams aggregate. Longer
@@ -412,7 +412,8 @@ elseif(CHECK STREQUAL "NoProductCodeUsesStageJsonOutsideLegacyOwners")
 elseif(CHECK STREQUAL "DeprecatedLegacyArchiveIsOutsideCompileGraph")
   _alcedo_scan_archive_references()
 elseif(CHECK STREQUAL "NoPipelineStageTypeRemainsInFirstPartySource")
-  _alcedo_scan("PipelineStage" _no_owners
+  # Whole identifiers only: VkPipelineStageFlags2 of the Vulkan API is not the archived type.
+  _alcedo_scan("(^|[^A-Za-z0-9_])PipelineStage(Name)?([^A-Za-z0-9_]|$)" _no_owners
     "Source names the archived pipeline stage type"
     "no PipelineStage or PipelineStageName")
 elseif(CHECK STREQUAL "NoOperatorParamsAggregateRemainsInFirstPartySource")
