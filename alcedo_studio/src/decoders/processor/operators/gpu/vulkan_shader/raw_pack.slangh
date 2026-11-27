@@ -1,0 +1,41 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+// The pack parameters and the orientation rule of opencl_shader/cvt_ref_space.cl, shared by the
+// pack kernels of raw_pack.slang (phase VK4) and the planar highlight kernel of
+// highlight_reconstruct.slang (phase VK5). The host struct is raw_pack_kernels::PackOrientParams
+// of include/vulkan/vulkan_raw_pack_kernels.hpp.
+
+#pragma once
+
+// PackOrientParams: 48 bytes, the struct of cvt_ref_space.cl.
+struct PackOrientParams {
+  uint  src_x;
+  uint  src_y;
+  uint  src_width;
+  uint  src_height;
+  uint  dst_width;
+  uint  dst_height;
+  uint  flip;
+  float scale_r;
+  float scale_g;
+  float scale_b;
+  uint  plane_stride;
+  uint  src_stride;
+};
+
+// The destination texel of crop texel (x, y): flip 3 turns 180 degrees, flip 5 and 6 turn 90
+// degrees, every other value keeps the orientation.
+static uint2 OrientedCoord(uint x, uint y, PackOrientParams params) {
+  if (params.flip == 3u) {
+    return uint2(params.src_width - 1u - x, params.src_height - 1u - y);
+  }
+  if (params.flip == 5u) {
+    return uint2(y, params.src_width - 1u - x);
+  }
+  if (params.flip == 6u) {
+    return uint2(params.src_height - 1u - y, x);
+  }
+  return uint2(x, y);
+}

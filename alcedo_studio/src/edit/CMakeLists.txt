@@ -399,11 +399,18 @@ if(ALCEDO_VULKAN_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_backend.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_buffer_view.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_command_context.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_dng_warp.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_geometry.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_kernel_dispatch.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_staging_buffers.cpp
         PUBLIC_DEPS EditRuntime VulkanContext
         PRIVATE_DEPS AlcedoLog
+    )
+    # The lens calibration of the Develop pass on Vulkan (#1036, phase VK5); its kernel group is
+    # in src/vulkan/CMakeLists.txt.
+    def_library(EditRuntimeLensVulkan
+        SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/lens/vulkan/vulkan_lens_calib.cpp
+        PUBLIC_DEPS EditRuntimeVulkan EditRuntimeLens
     )
 endif()
 

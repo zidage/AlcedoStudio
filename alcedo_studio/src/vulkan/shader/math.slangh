@@ -151,6 +151,180 @@ static float AlcedoPow(float x, float y) {
   return AlcedoExp(y * AlcedoLog(x));
 }
 
+// ---- Trigonometric functions (phase VK5) ----------------------------------------------------
+//
+// GLSL.std.450 sin and cos have only an absolute error of 2^-11 in [-pi, pi], and tan, asin,
+// atan, and atan2 are "inherited" from them. The lens projections of the Develop pass
+// (lens_calib.slang) amplify these errors at the image border to a few hundredths of the value
+// (VK5 record). The functions below are the single-precision Cephes forms: an exact reduction
+// by pi / 4 with a three-part constant, then a polynomial of plain arithmetic, about 1 ulp for
+// |x| < 8192. A larger argument keeps the GLSL.std.450 result (no lens or curve has one).
+
+static const float kAlcedoFourOverPi = 1.27323954473516f;
+static const float kAlcedoPiOver4A   = 0.78515625f;  // pi / 4 in three parts
+static const float kAlcedoPiOver4B   = 2.4187564849853515625e-4f;
+static const float kAlcedoPiOver4C   = 3.77489497744594108e-8f;
+static const float kAlcedoPi         = 3.14159265358979f;
+static const float kAlcedoHalfPi     = 1.57079632679490f;
+static const float kAlcedoQuarterPi  = 0.785398163397448f;
+static const float kAlcedoTrigLimit  = 8192.0f;
+
+// The octant j of |x| (rounded up to an even octant) and the reduced argument in [-pi/4, pi/4].
+static float AlcedoReduceOctant(float a, out int j) {
+  j       = int(a * kAlcedoFourOverPi);
+  float y = float(j);
+  if ((j & 1) != 0) {
+    j = j + 1;
+    y = y + 1.0f;
+  }
+  j = j & 7;
+  return ((a - y * kAlcedoPiOver4A) - y * kAlcedoPiOver4B) - y * kAlcedoPiOver4C;
+}
+
+static float AlcedoSinPoly(float z, float zz) {
+  return ((-1.9515295891e-4f * zz + 8.3321608736e-3f) * zz - 1.6666654611e-1f) * zz * z + z;
+}
+
+static float AlcedoCosPoly(float zz) {
+  return ((2.443315711809948e-5f * zz - 1.388731625493765e-3f) * zz + 4.166664568298827e-2f) *
+             zz * zz -
+         0.5f * zz + 1.0f;
+}
+
+static float AlcedoSin(float x) {
+  const float a = abs(x);
+  if (!(a < kAlcedoTrigLimit)) {
+    return sin(x);
+  }
+  int         j;
+  const float z    = AlcedoReduceOctant(a, j);
+  bool        sign = x < 0.0f;
+  if (j > 3) {
+    sign = !sign;
+    j    = j - 4;
+  }
+  const float zz = z * z;
+  const float s  = (j == 1 || j == 2) ? AlcedoCosPoly(zz) : AlcedoSinPoly(z, zz);
+  return sign ? -s : s;
+}
+
+static float AlcedoCos(float x) {
+  const float a = abs(x);
+  if (!(a < kAlcedoTrigLimit)) {
+    return cos(x);
+  }
+  int         j;
+  const float z    = AlcedoReduceOctant(a, j);
+  bool        sign = false;
+  if (j > 3) {
+    sign = !sign;
+    j    = j - 4;
+  }
+  if (j > 1) {
+    sign = !sign;
+  }
+  const float zz = z * z;
+  const float c  = (j == 1 || j == 2) ? AlcedoSinPoly(z, zz) : AlcedoCosPoly(zz);
+  return sign ? -c : c;
+}
+
+static float AlcedoTan(float x) {
+  const float a = abs(x);
+  if (!(a < kAlcedoTrigLimit)) {
+    return tan(x);
+  }
+  int         j;
+  const float z  = AlcedoReduceOctant(a, j);
+  const float zz = z * z;
+  float       t  = z;
+  if (zz > 1.0e-4f) {
+    t = (((((9.38540185543e-3f * zz + 3.11992232697e-3f) * zz + 2.44301354525e-2f) * zz +
+           5.34112807005e-2f) *
+              zz +
+          1.33387994085e-1f) *
+             zz +
+         3.33331568548e-1f) *
+            zz * z +
+        z;
+  }
+  if ((j & 2) != 0) {
+    t = -1.0f / t;
+  }
+  return x < 0.0f ? -t : t;
+}
+
+static float AlcedoAtan(float x) {
+  const float a      = abs(x);
+  float       offset = 0.0f;
+  float       v      = a;
+  if (a > 2.414213562373095f) {  // tan(3 pi / 8)
+    offset = kAlcedoHalfPi;
+    v      = -1.0f / a;
+  } else if (a > 0.4142135623730950f) {  // tan(pi / 8)
+    offset = kAlcedoQuarterPi;
+    v      = (a - 1.0f) / (a + 1.0f);
+  }
+  const float z = v * v;
+  const float r = offset + ((((8.05374449538e-2f * z - 1.38776856032e-1f) * z +
+                              1.99777106478e-1f) *
+                                 z -
+                             3.33329491539e-1f) *
+                                z * v +
+                            v);
+  return x < 0.0f ? -r : r;
+}
+
+// The angle of (x, y) in [-pi, pi], the quadrants of the C atan2.
+static float AlcedoAtan2(float y, float x) {
+  if (x == 0.0f) {
+    if (y > 0.0f) {
+      return kAlcedoHalfPi;
+    }
+    if (y < 0.0f) {
+      return -kAlcedoHalfPi;
+    }
+    return 0.0f;
+  }
+  if (y == 0.0f) {
+    return x > 0.0f ? 0.0f : kAlcedoPi;
+  }
+  if (isinf(x) || isinf(y)) {
+    return atan2(y, x);
+  }
+  const float r = AlcedoAtan(y / x);
+  if (x > 0.0f) {
+    return r;
+  }
+  return y > 0.0f ? r + kAlcedoPi : r - kAlcedoPi;
+}
+
+static float AlcedoAsin(float x) {
+  const float a = abs(x);
+  if (!(a <= 1.0f)) {
+    return asin(x);  // NaN
+  }
+  if (a < 1.0e-4f) {
+    return x;
+  }
+  float       v    = a;
+  float       z    = a * a;
+  const bool  wide = a > 0.5f;
+  if (wide) {
+    z = 0.5f * (1.0f - a);
+    v = sqrt(z);
+  }
+  float r = ((((4.2163199048e-2f * z + 2.4181311049e-2f) * z + 4.5470025998e-2f) * z +
+              7.4953002686e-2f) *
+                 z +
+             1.6666752422e-1f) *
+                z * v +
+            v;
+  if (wide) {
+    r = kAlcedoHalfPi - (r + r);
+  }
+  return x < 0.0f ? -r : r;
+}
+
 // x * y as one rounded multiply that the driver does not fuse with an add or a subtract into an
 // FMA: the OpFMul has the SPIR-V NoContraction decoration. This is the Slang form of the OpenCL
 // `#pragma OPENCL FP_CONTRACT OFF` (phase VK4). slangc 2025.17.2 writes no NoContraction for

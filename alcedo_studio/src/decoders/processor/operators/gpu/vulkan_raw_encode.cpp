@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iterator>
 #include <stdexcept>
 #include <string>
@@ -32,9 +33,10 @@ auto                  Texels(std::uint32_t width, std::uint32_t height) -> std::
 }
 
 auto Groups(std::uint32_t width, std::uint32_t height) -> VulkanWorkgroupCount {
-  // Every kernel of the four RAW groups has 16 x 16 workgroups.
+  // Every kernel of the RAW groups has 16 x 16 workgroups.
   static_assert(raw_core_kernels::kGroupSize == 16 && debayer_rcd_kernels::kGroupSize == 16 &&
-                xtrans_kernels::kGroupSize == 16 && raw_pack_kernels::kGroupSize == 16);
+                xtrans_kernels::kGroupSize == 16 && raw_pack_kernels::kGroupSize == 16 &&
+                highlight_kernels::kGroupSize == 16);
   return WorkgroupsCovering(width, height, 16, 16);
 }
 
@@ -135,6 +137,59 @@ auto MakeToLinearRefParameters(const RawLinearizationParams& linearization,
               std::begin(cfa.raw_fc));
   }
   return record;
+}
+
+constexpr float kHilightMagic = 0.987F;
+constexpr float kChromaRingLo = 0.2F;
+
+auto            ChannelRatio(float value, float green) -> float {
+  if (!std::isfinite(value) || value <= 0.0F) {
+    return 1.0F;
+  }
+  return std::clamp(value / green, 0.25F, 4.0F);
+}
+
+/// The OpenCL `MakeHighlightParams` of opencl_encode.cpp, for a region of @p width x @p height
+/// in a source of @p stride texels in a row.
+auto MakeHighlightLimits(std::span<const float, 4> cam_mul, std::uint32_t width,
+                         std::uint32_t height, std::uint32_t stride)
+    -> highlight_kernels::HighlightLimits {
+  const float green = std::isfinite(cam_mul[1]) && cam_mul[1] > 0.0F ? cam_mul[1] : 1.0F;
+  highlight_kernels::HighlightLimits limits;
+  limits.clip_r     = kHilightMagic * ChannelRatio(cam_mul[0], green);
+  limits.clip_g     = kHilightMagic;
+  limits.clip_b     = kHilightMagic * ChannelRatio(cam_mul[2], green);
+  limits.clipdark_r = kChromaRingLo * limits.clip_r;
+  limits.clipdark_g = kChromaRingLo * limits.clip_g;
+  limits.clipdark_b = kChromaRingLo * limits.clip_b;
+  limits.width      = width;
+  limits.height     = height;
+  limits.stride     = stride;
+  return limits;
+}
+
+/// The device addresses of the three scratch views for a region of @p width x @p height.
+struct HighlightScratchAddresses {
+  VkDeviceAddress mask       = 0;
+  VkDeviceAddress dilated    = 0;
+  VkDeviceAddress statistics = 0;
+};
+
+auto RequireHighlightScratch(const HighlightScratch& scratch, std::uint32_t width,
+                             std::uint32_t height, const char* operation)
+    -> HighlightScratchAddresses {
+  constexpr std::size_t kWordBytes = sizeof(std::uint32_t);
+  const std::size_t     mask_bytes = HighlightMaskBytes(width, height);
+  return {RequireBufferRange(scratch.mask, mask_bytes, kWordBytes, operation, "mask"),
+          RequireBufferRange(scratch.dilated, mask_bytes, kWordBytes, operation, "dilated mask"),
+          RequireBufferRange(scratch.statistics, kHighlightStatisticsBytes, kWordBytes, operation,
+                             "statistics")};
+}
+
+void ClearHighlightStatistics(VulkanBackend& backend, VulkanCommandContext& command_context,
+                              const HighlightScratch& scratch) {
+  backend.FillBufferRange(*scratch.statistics.buffer, scratch.statistics.offset_bytes,
+                          kHighlightStatisticsBytes, 0, command_context);
 }
 
 }  // namespace
@@ -290,6 +345,86 @@ void EncodeCopyRgbaCropInverseOrient(VulkanBackend& backend, VulkanCommandContex
   RecordKernelDispatch(backend, command_context, raw_pack_kernels::CopyRgbaDescriptor(), images,
                        PushConstantBytes(push),
                        Groups(push.params.src_width, push.params.src_height));
+}
+
+void EncodeHighlightReconstruct(VulkanBackend& backend, VulkanCommandContext& command_context,
+                                VulkanBufferView source, VulkanBufferView destination,
+                                const HighlightScratch& scratch, std::span<const float, 4> cam_mul,
+                                std::uint32_t width, std::uint32_t height) {
+  constexpr const char* kOperation = "vulkan::raw::EncodeHighlightReconstruct";
+  const std::size_t     rgba_bytes = Texels(width, height) * kRgbaBytes;
+  const auto            addresses  = RequireHighlightScratch(scratch, width, height, kOperation);
+  highlight_kernels::HighlightRgbaPushConstants push;
+  push.source = RequireBufferRange(source, rgba_bytes, kRgbaBytes, kOperation, "RGBA source");
+  push.destination =
+      RequireBufferRange(destination, rgba_bytes, kRgbaBytes, kOperation, "RGBA destination");
+  push.mask       = addresses.mask;
+  push.dilated    = addresses.dilated;
+  push.statistics = addresses.statistics;
+  push.limits     = MakeHighlightLimits(cam_mul, width, height, width);
+  if (rgba_bytes == 0) {
+    return;
+  }
+  ClearHighlightStatistics(backend, command_context, scratch);
+  // The OpenCL order; each kernel reads what the kernels before it wrote.
+  for (const auto kernel : highlight_kernels::kRgbaKernels) {
+    RecordKernelDispatch(backend, command_context, highlight_kernels::RgbaDescriptor(kernel), {},
+                         PushConstantBytes(push), Groups(width, height));
+  }
+}
+
+void EncodeHighlightReconstructPlanarAndPack(
+    VulkanBackend& backend, VulkanCommandContext& command_context, VulkanBufferView r,
+    VulkanBufferView g, VulkanBufferView b, VulkanBackend::Texture2D& destination,
+    const HighlightScratch& scratch, std::span<const float, 4> cam_mul, RectI crop,
+    std::uint32_t plane_width, std::uint32_t plane_height, int flip) {
+  constexpr const char* kOperation  = "vulkan::raw::EncodeHighlightReconstructPlanarAndPack";
+  const std::size_t     plane_bytes = Texels(plane_width, plane_height) * kFloatBytes;
+  highlight_kernels::HighlightPlanarPackPushConstants pack;
+  pack.r    = RequireBufferRange(r, plane_bytes, kFloatBytes, kOperation, "R");
+  pack.g    = RequireBufferRange(g, plane_bytes, kFloatBytes, kOperation, "G");
+  pack.b    = RequireBufferRange(b, plane_bytes, kFloatBytes, kOperation, "B");
+  pack.pack = PackParams(kOperation, destination, crop, plane_width, plane_height, cam_mul, flip);
+  const std::uint32_t crop_width  = pack.pack.src_width;
+  const std::uint32_t crop_height = pack.pack.src_height;
+  const auto addresses = RequireHighlightScratch(scratch, crop_width, crop_height, kOperation);
+  pack.statistics      = addresses.statistics;
+  pack.limits          = MakeHighlightLimits(cam_mul, crop_width, crop_height, plane_width);
+
+  highlight_kernels::HighlightPlanarPushConstants planar;
+  planar.r          = pack.r;
+  planar.g          = pack.g;
+  planar.b          = pack.b;
+  planar.mask       = addresses.mask;
+  planar.dilated    = addresses.dilated;
+  planar.statistics = addresses.statistics;
+  planar.limits     = pack.limits;
+  planar.crop_x     = pack.pack.src_x;
+  planar.crop_y     = pack.pack.src_y;
+
+  // The dilation reads only the masks of the crop (a region of crop_width texels in a row).
+  highlight_kernels::HighlightRgbaPushConstants dilate;
+  dilate.mask       = addresses.mask;
+  dilate.dilated    = addresses.dilated;
+  dilate.statistics = addresses.statistics;
+  dilate.limits     = pack.limits;
+
+  const auto groups = Groups(crop_width, crop_height);
+  ClearHighlightStatistics(backend, command_context, scratch);
+  RecordKernelDispatch(backend, command_context,
+                       highlight_kernels::PlanarDescriptor(highlight_kernels::kBuildMaskPlanar), {},
+                       PushConstantBytes(planar), groups);
+  RecordKernelDispatch(backend, command_context,
+                       highlight_kernels::RgbaDescriptor(highlight_kernels::kDilateMask), {},
+                       PushConstantBytes(dilate), groups);
+  RecordKernelDispatch(
+      backend, command_context,
+      highlight_kernels::PlanarDescriptor(highlight_kernels::kChrominanceContribPlanar), {},
+      PushConstantBytes(planar), groups);
+  const VulkanImageBinding images[] = {{highlight_kernels::kDestinationBinding, &destination}};
+  RecordKernelDispatch(backend, command_context,
+                       highlight_kernels::ReconstructPlanarPackDescriptor(), images,
+                       PushConstantBytes(pack), groups);
 }
 
 }  // namespace alcedo::vulkan::raw
