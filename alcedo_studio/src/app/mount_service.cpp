@@ -659,7 +659,7 @@ void MountService::LocateMissingFile(sl_element_id_t              element_id,
   } catch (const std::exception&) {
   }
   const auto source = mounts.ReadSourceFile(element_id);
-  if (!element || element->type_ != ElementType::FILE || element->sync_flag_ == SyncFlag::DELETED ||
+  if (!element || element->type_ != ElementType::FILE || !element->IsLive() ||
       !element->mount_id_.has_value() || !source.has_value() ||
       source->state != SourceFileState::kMissing) {
     throw MountOperationError(

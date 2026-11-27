@@ -82,9 +82,7 @@ void SleeveFolder::AddElementToMap(const std::shared_ptr<SleeveElement> element,
   }
   RecordContentAdded(element->element_id_);
   // Mark this folder as modified so the content change is persisted on next sync.
-  if (sync_flag_ == SyncFlag::SYNCED) {
-    sync_flag_ = SyncFlag::MODIFIED;
-  }
+  MarkModified();
 }
 
 void SleeveFolder::RecordContentAdded(sl_element_id_t element_id) {
@@ -126,9 +124,7 @@ void SleeveFolder::UpdateElementMap(const file_name_t& name, const sl_element_id
   RecordContentRemoved(old_id);
   RecordContentAdded(new_id);
   // Mark this folder as modified so the updated content list is persisted on next sync.
-  if (sync_flag_ == SyncFlag::SYNCED) {
-    sync_flag_ = SyncFlag::MODIFIED;
-  }
+  MarkModified();
 }
 
 /**
@@ -199,9 +195,7 @@ void SleeveFolder::RemoveNameFromMap(const file_name_t& name) {
   contents_.erase(name);
   RecordContentRemoved(removed_id);
   // Mark this folder as modified so the updated content list is persisted on next sync.
-  if (sync_flag_ == SyncFlag::SYNCED) {
-    sync_flag_ = SyncFlag::MODIFIED;
-  }
+  MarkModified();
 }
 
 auto SleeveFolder::RemoveElementById(sl_element_id_t element_id) -> bool {
@@ -224,8 +218,8 @@ auto SleeveFolder::RemoveElementById(sl_element_id_t element_id) -> bool {
   if (removed) {
     RecordContentRemoved(element_id);
   }
-  if (removed && sync_flag_ == SyncFlag::SYNCED) {
-    sync_flag_ = SyncFlag::MODIFIED;
+  if (removed) {
+    MarkModified();
   }
   return removed;
 }
@@ -259,8 +253,8 @@ auto SleeveFolder::RemoveElementsById(const std::unordered_set<sl_element_id_t>&
   for (const auto element_id : removed_ids) {
     RecordContentRemoved(element_id);
   }
-  if (!removed_ids.empty() && sync_flag_ == SyncFlag::SYNCED) {
-    sync_flag_ = SyncFlag::MODIFIED;
+  if (!removed_ids.empty()) {
+    MarkModified();
   }
   return removed_ids.size();
 }

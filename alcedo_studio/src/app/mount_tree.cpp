@@ -21,13 +21,7 @@ namespace alcedo {
 namespace {
 
 auto IsLive(const std::shared_ptr<SleeveElement>& element) -> bool {
-  return element && element->sync_flag_ != SyncFlag::DELETED;
-}
-
-void MarkModified(SleeveElement& element) {
-  if (element.sync_flag_ == SyncFlag::SYNCED) {
-    element.SetSyncFlag(SyncFlag::MODIFIED);
-  }
+  return element && element->IsLive();
 }
 
 /// The parent directory and the last name of a relative path.
@@ -106,7 +100,7 @@ void PlaceFile(FileSystem& fs, const MountTree& tree, const MountFolderIndex& fo
   auto       file   = LiveFileOfMount(fs, placement.file_id);
   if (file->mount_id_ != mount_id) {
     file->mount_id_ = mount_id;
-    MarkModified(*file);
+    file->MarkModified();
   }
   if (const auto it = tree.home_folders.find(placement.file_id); it != tree.home_folders.end()) {
     for (const auto folder_id : it->second) {
@@ -220,7 +214,7 @@ void RemoveMountTree(FileSystem& fs, sl_element_id_t root_folder_id, mount_id_t 
     auto file = fs.Get(file_id);
     if (IsLive(file) && file->type_ == ElementType::FILE && file->mount_id_ == mount_id) {
       file->mount_id_.reset();
-      MarkModified(*file);
+      file->MarkModified();
     }
   };
   for (const auto file_id : file_ids) {
