@@ -169,8 +169,8 @@ class LibraryConcurrentAccessTest : public ::testing::Test {
     ASSERT_EQ(image_ids_.size(), initial_ids_.size());
     for (int i = 0; i < kAlbumCount; ++i) {
       const auto folder = Browse().CreateFolder(L"/", std::format(L"Album {}", i));
-      ASSERT_TRUE(folder.has_value());
-      albums_.emplace(folder->folder_id_, std::set<sl_element_id_t>{});
+      ASSERT_EQ(folder.status_, AlbumFolderEditStatus::Done);
+      albums_.emplace(folder.folder_.folder_id_, std::set<sl_element_id_t>{});
     }
     for (const auto id : initial_ids_) {
       initial_version_counts_[id] =

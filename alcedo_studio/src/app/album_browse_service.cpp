@@ -19,16 +19,6 @@
 namespace alcedo {
 namespace {
 
-auto BuildFolderView(const std::filesystem::path&         parent_path,
-                     const std::shared_ptr<SleeveFolder>& folder) -> AlbumFolderView {
-  AlbumFolderView out;
-  out.folder_id_   = folder ? folder->element_id_ : 0;
-  out.folder_name_ = folder ? folder->element_name_ : file_name_t{};
-  out.folder_path_ = parent_path / out.folder_name_;
-  out.mount_id_    = folder ? folder->mount_id_ : std::nullopt;
-  return out;
-}
-
 auto BuildFolderView(const FolderTreeEntry& entry) -> AlbumFolderView {
   AlbumFolderView out;
   out.folder_id_   = entry.folder_id_;
@@ -280,37 +270,79 @@ auto AlbumBrowseService::ReadLastEditedFile() const -> std::optional<LastEditedF
   return ElementStoreForRead("ReadLastEditedFile").ReadLastEditedFile();
 }
 
-auto AlbumBrowseService::CreateFolder(const std::filesystem::path& parent_folder_path,
-                                      const file_name_t& name) -> std::optional<AlbumFolderView> {
-  if (!sleeve_service_) {
-    return std::nullopt;
+auto AlbumBrowseService::IsValidFolderName(const file_name_t& name) -> bool {
+  if (name.empty() || name == L"." || name == L"..") {
+    return false;
   }
-
-  try {
-    const auto result = sleeve_service_->CreateFolder(parent_folder_path, name);
-    if (!result.second.success_ || !result.first) {
-      return std::nullopt;
-    }
-    return BuildFolderView(parent_folder_path, result.first);
-  } catch (const SleeveOperationError&) {
-    throw;
-  } catch (...) {
-    return std::nullopt;
-  }
+  return std::none_of(name.begin(), name.end(), [](const wchar_t ch) {
+    return ch == L'/' || ch == L'\\' || ch < 0x20 || ch == 0x7F;
+  });
 }
 
-bool AlbumBrowseService::DeleteFolder(const std::filesystem::path& folder_path) {
-  if (!sleeve_service_ || folder_path.empty() || folder_path == std::filesystem::path(L"/")) {
-    return false;
+auto AlbumBrowseService::CreateFolder(const std::filesystem::path& parent_folder_path,
+                                      const file_name_t&           name) -> AlbumFolderEditResult {
+  AlbumFolderEditResult out;
+  if (!sleeve_service_) {
+    return out;
   }
-
+  if (!IsValidFolderName(name)) {
+    out.status_ = AlbumFolderEditStatus::InvalidName;
+    return out;
+  }
   try {
-    return sleeve_service_->DeletePath(folder_path).success_;
+    try {
+      (void)sleeve_service_->ResolveFolder(parent_folder_path);
+    } catch (...) {
+      out.status_ = AlbumFolderEditStatus::UnknownFolder;
+      return out;
+    }
+    const auto [created, sync] = sleeve_service_->CreateFolderEntry(parent_folder_path, name);
+    if (!created.has_value()) {
+      out.status_ = AlbumFolderEditStatus::NameTaken;
+      return out;
+    }
+    if (!sync.success_) {
+      return out;
+    }
+    out.folder_ = BuildFolderView(*created);
   } catch (const SleeveOperationError&) {
-    throw;
+    out.status_ = AlbumFolderEditStatus::StructureIsReadOnly;
+    return out;
   } catch (...) {
-    return false;
+    return out;
   }
+  out.status_ = AlbumFolderEditStatus::Done;
+  return out;
+}
+
+auto AlbumBrowseService::DeleteFolder(const std::filesystem::path& folder_path)
+    -> AlbumFolderEditResult {
+  AlbumFolderEditResult out;
+  if (!sleeve_service_) {
+    return out;
+  }
+  if (IsRootFolderPath(folder_path)) {
+    out.status_ = AlbumFolderEditStatus::RootFolder;
+    return out;
+  }
+  try {
+    try {
+      (void)sleeve_service_->ResolveFolder(folder_path);
+    } catch (...) {
+      out.status_ = AlbumFolderEditStatus::UnknownFolder;
+      return out;
+    }
+    if (!sleeve_service_->DeletePath(folder_path).success_) {
+      return out;
+    }
+  } catch (const SleeveOperationError&) {
+    out.status_ = AlbumFolderEditStatus::StructureIsReadOnly;
+    return out;
+  } catch (...) {
+    return out;
+  }
+  out.status_ = AlbumFolderEditStatus::Done;
+  return out;
 }
 
 auto AlbumBrowseService::RenameFolder(const std::filesystem::path& folder_path,
@@ -319,12 +351,17 @@ auto AlbumBrowseService::RenameFolder(const std::filesystem::path& folder_path,
   if (!sleeve_service_) {
     return out;
   }
-  if (IsRootFolderPath(folder_path) || new_name.empty()) {
-    out.status_ = AlbumFolderEditStatus::InvalidTarget;
+  if (IsRootFolderPath(folder_path)) {
+    out.status_ = AlbumFolderEditStatus::RootFolder;
+    return out;
+  }
+  if (!IsValidFolderName(new_name)) {
+    out.status_ = AlbumFolderEditStatus::InvalidName;
     return out;
   }
 
-  const auto parent_path = folder_path.lexically_normal().parent_path();
+  const auto      parent_path = folder_path.lexically_normal().parent_path();
+  sl_element_id_t folder_id   = 0;
   try {
     std::shared_ptr<SleeveFolder> parent;
     std::shared_ptr<SleeveFolder> folder;
@@ -332,11 +369,12 @@ auto AlbumBrowseService::RenameFolder(const std::filesystem::path& folder_path,
       parent = sleeve_service_->ResolveFolder(parent_path);
       folder = sleeve_service_->ResolveFolder(folder_path);
     } catch (...) {
-      out.status_ = AlbumFolderEditStatus::InvalidTarget;
+      out.status_ = AlbumFolderEditStatus::UnknownFolder;
       return out;
     }
+    folder_id = folder->element_id_;
     if (const auto existing = parent->GetElementIdByName(new_name);
-        existing.has_value() && existing.value() != folder->element_id_) {
+        existing.has_value() && existing.value() != folder_id) {
       out.status_ = AlbumFolderEditStatus::NameTaken;
       return out;
     }
@@ -350,8 +388,12 @@ auto AlbumBrowseService::RenameFolder(const std::filesystem::path& folder_path,
     return out;
   }
 
-  out.status_      = AlbumFolderEditStatus::Done;
-  out.folder_path_ = parent_path / new_name;
+  // The rename passed the structure check, so the folder is not mounted.
+  out.status_ = AlbumFolderEditStatus::Done;
+  out.folder_ = AlbumFolderView{.folder_id_   = folder_id,
+                                .folder_name_ = new_name,
+                                .folder_path_ = parent_path / new_name,
+                                .mount_id_    = std::nullopt};
   return out;
 }
 
@@ -366,13 +408,13 @@ auto AlbumBrowseService::MoveFolder(const std::filesystem::path& folder_path,
   const auto destination = IsRootFolderPath(new_parent_path)
                                ? std::filesystem::path{L"/"}.lexically_normal()
                                : new_parent_path.lexically_normal();
-  const auto source_end =
-      std::mismatch(source.begin(), source.end(), destination.begin(), destination.end()).first;
-  if (IsRootFolderPath(folder_path) || source_end == source.end()) {
-    out.status_ = AlbumFolderEditStatus::InvalidTarget;
+  if (IsRootFolderPath(folder_path)) {
+    out.status_ = AlbumFolderEditStatus::RootFolder;
     return out;
   }
 
+  const file_name_t name      = source.filename().wstring();
+  sl_element_id_t   folder_id = 0;
   try {
     std::shared_ptr<SleeveFolder> folder;
     std::shared_ptr<SleeveFolder> dest;
@@ -380,11 +422,21 @@ auto AlbumBrowseService::MoveFolder(const std::filesystem::path& folder_path,
       folder = sleeve_service_->ResolveFolder(source);
       dest   = sleeve_service_->ResolveFolder(destination);
     } catch (...) {
-      out.status_ = AlbumFolderEditStatus::InvalidTarget;
+      out.status_ = AlbumFolderEditStatus::UnknownFolder;
       return out;
     }
-    if (source.parent_path() != destination) {
-      if (dest->Contains(folder->element_name_)) {
+    folder_id = folder->element_id_;
+    const auto source_end =
+        std::mismatch(source.begin(), source.end(), destination.begin(), destination.end()).first;
+    if (source_end == source.end()) {
+      out.status_ = AlbumFolderEditStatus::MoveIntoOwnSubtree;
+      return out;
+    }
+    if (source.parent_path() == destination) {
+      // A move to the current parent changes nothing; a mounted folder still refuses it.
+      sleeve_service_->CheckFolderStructureEditable(source);
+    } else {
+      if (dest->Contains(name)) {
         out.status_ = AlbumFolderEditStatus::NameTaken;
         return out;
       }
@@ -392,7 +444,6 @@ auto AlbumBrowseService::MoveFolder(const std::filesystem::path& folder_path,
         return out;
       }
     }
-    out.folder_path_ = destination / folder->element_name_;
   } catch (const SleeveOperationError&) {
     out.status_ = AlbumFolderEditStatus::StructureIsReadOnly;
     return out;
@@ -400,7 +451,12 @@ auto AlbumBrowseService::MoveFolder(const std::filesystem::path& folder_path,
     return out;
   }
 
+  // The move passed the structure check, so the folder is not mounted.
   out.status_ = AlbumFolderEditStatus::Done;
+  out.folder_ = AlbumFolderView{.folder_id_   = folder_id,
+                                .folder_name_ = name,
+                                .folder_path_ = destination / name,
+                                .mount_id_    = std::nullopt};
   return out;
 }
 
@@ -485,11 +541,39 @@ auto AlbumBrowseService::LinkFilesToFolder(const std::vector<sl_element_id_t>& e
     return out;
   }
 
+  // The photos that the target already holds (#1190). A mounted or missing target has none
+  // here: the link of each photo below then reports the refusal or the failure.
+  std::unordered_set<sl_element_id_t> members;
+  try {
+    members = sleeve_service_->Read<std::unordered_set<sl_element_id_t>>(
+        [target_folder_id](FileSystem& fs) -> std::unordered_set<sl_element_id_t> {
+          const auto folder = fs.Get(target_folder_id);
+          if (!folder || folder->type_ != ElementType::FOLDER || !folder->IsLive() ||
+              !SleeveServiceImpl::CanEditFolderStructure(*folder)) {
+            return {};
+          }
+          const auto ids = fs.ListFileIds(target_folder_id);
+          return {ids.begin(), ids.end()};
+        });
+  } catch (...) {
+    // The membership read failed: no photo is linked.
+    for (const auto element_id : element_ids) {
+      if (element_id != 0) {
+        out.failed_element_ids_.push_back(element_id);
+      }
+    }
+    return out;
+  }
+
   std::unordered_set<sl_element_id_t> seen;
   seen.reserve(element_ids.size() * 2 + 1);
 
   for (const auto element_id : element_ids) {
     if (element_id == 0 || !seen.insert(element_id).second) {
+      continue;
+    }
+    if (members.contains(element_id)) {
+      out.already_linked_element_ids_.push_back(element_id);
       continue;
     }
 

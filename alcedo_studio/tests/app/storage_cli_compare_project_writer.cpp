@@ -326,9 +326,10 @@ class StorageCliCompareProjectWriter : public ::testing::Test {
   void WriteAlbums() {
     const auto first  = Browse().CreateFolder(L"/", L"Album 1");
     const auto second = Browse().CreateFolder(L"/", L"相册 \"二\"");
-    ASSERT_TRUE(first.has_value() && second.has_value());
+    ASSERT_EQ(first.status_, AlbumFolderEditStatus::Done);
+    ASSERT_EQ(second.status_, AlbumFolderEditStatus::Done);
     const auto nested = Browse().CreateFolder(L"/Album 1", L"Sub_%");
-    ASSERT_TRUE(nested.has_value());
+    ASSERT_EQ(nested.status_, AlbumFolderEditStatus::Done);
     std::vector<sl_element_id_t> first_ids;
     std::vector<sl_element_id_t> second_ids;
     std::vector<sl_element_id_t> nested_ids;
@@ -343,9 +344,9 @@ class StorageCliCompareProjectWriter : public ::testing::Test {
         nested_ids.push_back(id);
       }
     }
-    for (const auto& [folder, ids] :
-         {std::pair{first->folder_id_, first_ids}, std::pair{second->folder_id_, second_ids},
-          std::pair{nested->folder_id_, nested_ids}}) {
+    for (const auto& [folder, ids] : {std::pair{first.folder_.folder_id_, first_ids},
+                                      std::pair{second.folder_.folder_id_, second_ids},
+                                      std::pair{nested.folder_.folder_id_, nested_ids}}) {
       const auto result = Browse().LinkFilesToFolder(ids, folder);
       ASSERT_TRUE(result.failed_element_ids_.empty());
     }

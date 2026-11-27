@@ -10,12 +10,14 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <type_traits>
 #include <vector>
 
 #include "app/mount_tree.hpp"
 #include "app/sleeve_error.hpp"
+#include "sleeve/node_storage_handler.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "sleeve/sleeve_filesystem.hpp"
@@ -167,6 +169,17 @@ class SleeveServiceImpl final : public SleeveService {
   ///@{
   auto CreateFolder(const std::filesystem::path& parent_path, const file_name_t& name)
       -> std::pair<std::shared_ptr<SleeveFolder>, SyncResult>;
+  /**
+   * @brief The folder create of the user (#1185, #1190): a new folder named @p name in the
+   *        folder at @p parent_path.
+   * @return The new folder as a value that the write copies under `fs_lock_` (path, id, name,
+   *         no mount), or nothing when a child folder of the parent holds @p name. Nothing
+   *         changes then. CreateFolder gives such a name a suffix instead.
+   * @throws SleeveOperationError when the parent is mounted, and std::runtime_error when
+   *         @p parent_path names no live folder. Nothing changes.
+   */
+  auto CreateFolderEntry(const std::filesystem::path& parent_path, const file_name_t& name)
+      -> std::pair<std::optional<FolderTreeEntry>, SyncResult>;
   auto CreateFileInLibrary(const file_name_t& name)
       -> std::pair<std::shared_ptr<SleeveFile>, SyncResult>;
   auto LinkFileToFolder(sl_element_id_t file_id, sl_element_id_t folder_id) -> SyncResult;

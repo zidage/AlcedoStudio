@@ -130,8 +130,9 @@ TEST_F(AlbumBrowseServiceMountTest, LinkAndFolderEditsOfAMountedFolderReturnTheN
             AlbumFolderEditStatus::StructureIsReadOnly);
   EXPECT_EQ(Browse().MoveFolder(L"/Album", L"/Trip").status_,
             AlbumFolderEditStatus::StructureIsReadOnly);
-  EXPECT_THROW((void)Browse().CreateFolder(L"/Trip", L"New"), SleeveOperationError);
-  EXPECT_THROW((void)Browse().DeleteFolder(L"/Trip"), SleeveOperationError);
+  EXPECT_EQ(Browse().CreateFolder(L"/Trip", L"New").status_,
+            AlbumFolderEditStatus::StructureIsReadOnly);
+  EXPECT_EQ(Browse().DeleteFolder(L"/Trip").status_, AlbumFolderEditStatus::StructureIsReadOnly);
 
   // The mounted photo links into an ordinary album (D8).
   const auto into_album = Browse().LinkFilesToFolder({mounted_file_id_}, album_id_);

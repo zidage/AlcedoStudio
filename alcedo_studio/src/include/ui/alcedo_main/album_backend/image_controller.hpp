@@ -95,10 +95,21 @@ class ImageController final : public QObject {
    * project or of a target; it can start once that task is complete.
    */
   Q_INVOKABLE QVariantMap StartDeleteImages(const QVariantList& targetEntries);
+  /// StartDeleteImages with the folder @p folder_id as the scope instead of the current folder
+  /// (#1190): kLibraryRootFolderId deletes the photos from the project, another folder removes
+  /// them from that album. Nothing uses the current folder of the Collections panel.
+  auto StartDeleteImagesInFolder(const QVariantList& targetEntries, sl_element_id_t folder_id)
+      -> QVariantMap;
   /// True while a delete started by StartDeleteImages runs.
   [[nodiscard]] auto      delete_running() const -> bool { return delete_running_; }
   /// User action: refused with the reason in `message` while an automation agent holds control.
   Q_INVOKABLE QVariantMap AddImagesToFolder(const QVariantList& targetEntries, uint targetFolderId);
+  /// The link of AddImagesToFolder into the folder @p folder_id (an element id), without the
+  /// refusal of a user action (#1190). Returns `{success, addedCount, failedCount,
+  /// addedElementIds, failedElementIds, alreadyLinkedElementIds, refusal, message}`; `refusal` is
+  /// the SleeveErrorName of a refused link, else empty.
+  auto LinkImagesToFolder(const QVariantList& targetEntries, sl_element_id_t folder_id)
+      -> QVariantMap;
   Q_INVOKABLE QVariantMap GetImageDetails(uint elementId, uint imageId);
   Q_INVOKABLE QVariantMap GetFocusedImageInspection(uint elementId, uint imageId);
   Q_INVOKABLE QVariantMap GetImageRating(uint elementId, uint imageId);
@@ -276,8 +287,13 @@ class ImageController final : public QObject {
       -> std::vector<DeleteTarget>;
   // Checks the project state and resolves @p targets on the UI thread. Without a batch,
   // @p refusal holds the message.
-  [[nodiscard]] auto PrepareDeleteBatch(const std::vector<DeleteTarget>& targets, QString* refusal)
+  // @p folder_id is the scope of the delete; without it the current folder is the scope.
+  [[nodiscard]] auto PrepareDeleteBatch(const std::vector<DeleteTarget>& targets,
+                                        std::optional<sl_element_id_t> folder_id, QString* refusal)
       -> std::optional<DeleteBatch>;
+  // StartDeleteImages and StartDeleteImagesInFolder: @p folder_id as in PrepareDeleteBatch.
+  auto StartDeleteBatch(const QVariantList& targetEntries, std::optional<sl_element_id_t> folder_id)
+      -> QVariantMap;
   // The job that writes @p batch: database delete, cleanup, save and package. It takes the
   // services of the open project now and may run on any thread.
   [[nodiscard]] auto MakeDeleteJob(DeleteBatch batch) const -> std::function<DeleteBatchOutcome()>;

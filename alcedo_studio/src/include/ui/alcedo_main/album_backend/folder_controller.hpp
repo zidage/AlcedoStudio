@@ -42,6 +42,32 @@ using MountCommandDone = std::function<void(std::exception_ptr error)>;
 /// The text of a mount command error for the status line and the automation answer.
 auto                   MountCommandErrorText(std::exception_ptr error) -> QString;
 
+/// Why a folder edit of FolderController changed nothing (#1190). kNone: the edit is applied.
+enum class FolderEditRefusal : std::uint8_t {
+  kNone,
+  kProjectUnavailable,  ///< No project is open, or it is loading.
+  kTaskRunning,         ///< An import or an export runs.
+  kInvalidName,         ///< Empty after the trim, or not AlbumBrowseService::IsValidFolderName.
+  kNameTaken,           ///< The parent or the destination holds a child folder with the name.
+  kUnknownFolder,       ///< The folder, the parent, or the destination is not a live folder.
+  kRootFolder,          ///< A rename, move, or delete of the library root.
+  kMoveIntoOwnSubtree,  ///< The destination of a move is the folder itself or lies inside it.
+  kMountedFolder,       ///< SleeveError::kMountedFolderStructureIsReadOnly.
+  kFailed,              ///< The storage write or the sync failed.
+};
+
+/// The result of a folder edit of FolderController (#1190).
+struct FolderEditOutcome {
+  FolderEditRefusal  refusal_ = FolderEditRefusal::kFailed;
+  /// The text that the edit reported through the status sink.
+  QString            message_;
+  /// The folder after a create, rename, or move (AlbumFolderEditResult::folder_); set only for
+  /// kNone.
+  AlbumFolderView    folder_{};
+
+  [[nodiscard]] auto Done() const -> bool { return refusal_ == FolderEditRefusal::kNone; }
+};
+
 /// Owns lazy folder-tree state and handles folder CRUD operations.
 ///
 /// The sidebar tree (Sleeve Node Cache Plan, SN8): ReloadTree reads the tree with
@@ -142,6 +168,23 @@ class FolderController final : public QObject {
   /// Closes the card when its mount point is @p mountPoint
   /// (MountScanCoordinator::MountPointRemoved).
   void             HandleMountPointRemoved(const QString& mountPoint);
+  /** @name Folder edits of automation and of the Q_INVOKABLE entries below
+   * Each one checks the state of the project, trims the name, calls AlbumBrowseService, and then
+   * saves the project and reloads the tree as the Collections panel does. It reports the result
+   * through the status sink and returns it (#1190). A path is a library path of the tree.
+   */
+  ///@{
+  auto             CreateFolderAt(const std::filesystem::path& parent_path, const QString& name)
+      -> FolderEditOutcome;
+  auto RenameFolderAt(const std::filesystem::path& folder_path, const QString& new_name)
+      -> FolderEditOutcome;
+  /// The root path as @p new_parent_path moves the folder to the top level.
+  auto             MoveFolderAt(const std::filesystem::path& folder_path,
+                                const std::filesystem::path& new_parent_path) -> FolderEditOutcome;
+  /// A delete of the folder that holds the current folder selects its parent.
+  auto             DeleteFolderAt(const std::filesystem::path& folder_path) -> FolderEditOutcome;
+  ///@}
+
   /// Creates a folder inside the current folder.
   Q_INVOKABLE void CreateFolder(const QString& folderName);
   /// Creates a folder inside @p parentFolderUiId (0 = top level). Returns the element id of
@@ -268,11 +311,22 @@ class FolderController final : public QObject {
   enum class FolderEdit { Create, Rename, Move, Delete };
 
   [[nodiscard]] auto PathKey(const std::filesystem::path& path) const -> std::wstring;
-  /// Reports the reason through the status sink and returns false while a project loads, no
-  /// project is open, or an import or export runs.
-  [[nodiscard]] bool CheckFolderEditAllowed(FolderEdit edit) const;
-  /// Trimmed @p name, or nothing (with a status message) when it is empty or holds a separator.
-  [[nodiscard]] auto ValidatedFolderName(const QString& name) const -> std::optional<QString>;
+  /// Reports @p message through the status sink and returns the refusal @p refusal with it.
+  [[nodiscard]] auto RefuseFolderEdit(FolderEditRefusal          refusal,
+                                      const i18n::LocalizedText& message) const
+      -> FolderEditOutcome;
+  /// The refusal (reported through the status sink) while a project loads, no project is open,
+  /// or an import or export runs; else nothing.
+  [[nodiscard]] auto FolderEditRefusalOfState(FolderEdit edit) const
+      -> std::optional<FolderEditOutcome>;
+  /// Trimmed @p name, or the refusal (reported through the status sink) when the trimmed name
+  /// is empty, holds a separator, or fails AlbumBrowseService::IsValidFolderName.
+  [[nodiscard]] auto ValidatedFolderName(const QString& name, FolderEditOutcome* refusal) const
+      -> std::optional<QString>;
+  /// The refusal of AlbumBrowseService @p status for @p edit, reported through the status sink.
+  /// @p name is the requested name of a create or rename.
+  [[nodiscard]] auto RefuseFolderEditStatus(FolderEdit edit, AlbumFolderEditStatus status,
+                                            const QString& name) const -> FolderEditOutcome;
   /// Saves and packages the project; false when either step fails.
   [[nodiscard]] bool SaveProjectState() const;
   void               ReportFolderEditDone(const i18n::LocalizedText& message, bool save_ok) const;
