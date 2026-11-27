@@ -256,8 +256,8 @@ auto SleeveServiceImpl::ListFolderEntries(const std::filesystem::path& folder_pa
 }
 
 auto SleeveServiceImpl::ListChildFolders(const std::filesystem::path& folder_path)
-    -> std::vector<std::shared_ptr<SleeveFolder>> {
-  return Read<std::vector<std::shared_ptr<SleeveFolder>>>(
+    -> std::vector<FolderTreeEntry> {
+  return Read<std::vector<FolderTreeEntry>>(
       [&folder_path](FileSystem& fs) { return fs.ListChildFolders(folder_path); });
 }
 

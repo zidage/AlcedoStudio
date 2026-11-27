@@ -19,6 +19,14 @@
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
+namespace {
+/// The entry of @p folder at @p path: copies of its fields (#1178).
+auto MakeFolderTreeEntry(std::filesystem::path path, const SleeveFolder& folder)
+    -> FolderTreeEntry {
+  return {std::move(path), folder.element_id_, folder.element_name_, folder.mount_id_};
+}
+}  // namespace
+
 NodeStorageHandler::NodeStorageHandler(ElementStore&     element_store,
                                        FolderEntryStore& folder_entry_store, NodeCache& nodes)
     : element_store_(element_store), folder_entry_store_(folder_entry_store), nodes_(nodes) {}
@@ -263,6 +271,18 @@ auto NodeStorageHandler::ChildFolders(const SleeveFolder& folder) const
   return folders;
 }
 
+auto NodeStorageHandler::ChildFolderEntries(const SleeveFolder&          folder,
+                                            const std::filesystem::path& folder_path) const
+    -> std::vector<FolderTreeEntry> {
+  const auto                   children = ChildFolders(folder);
+  std::vector<FolderTreeEntry> entries;
+  entries.reserve(children.size());
+  for (const auto& child : children) {
+    entries.push_back(MakeFolderTreeEntry(folder_path / child->element_name_, *child));
+  }
+  return entries;
+}
+
 auto NodeStorageHandler::FolderTree(const SleeveFolder& root) const
     -> std::vector<FolderTreeEntry> {
   struct Frame {
@@ -291,7 +311,7 @@ auto NodeStorageHandler::FolderTree(const SleeveFolder& root) const
       continue;
     }
     auto path = top.path / child->element_name_;
-    entries.push_back({path, child});
+    entries.push_back(MakeFolderTreeEntry(path, *child));
     on_path.insert(child->element_id_);
     auto       grandchildren = ChildFolders(*child);
     const auto id            = child->element_id_;

@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <unordered_set>
 #include <vector>
@@ -19,12 +20,18 @@
 
 namespace alcedo {
 
-/// One folder of the folder tree at one path (Sleeve Node Cache Plan, SN3).
+/// One folder of the folder tree at one path (Sleeve Node Cache Plan, SN3). The fields are
+/// copies of the folder fields that the read makes under the file system lock, so the entry
+/// stays valid after the lock ends and holds no node of the cache (#1178).
 struct FolderTreeEntry {
   /// The path of the folder from the library root, for example `/Trip/Day 1`.
-  std::filesystem::path         path_;
-  /// The live folder that the node cache holds.
-  std::shared_ptr<SleeveFolder> folder_;
+  std::filesystem::path     path_;
+  /// The element id of the folder.
+  sl_element_id_t           folder_id_ = 0;
+  /// The name of the folder: the last part of path_.
+  file_name_t               name_;
+  /// The mount of the folder; empty for a library folder.
+  std::optional<mount_id_t> mount_id_;
 };
 
 /// One link of a file into a folder (Sleeve Node Cache Plan, SN5).
@@ -123,6 +130,13 @@ class NodeStorageHandler {
    *        only: each folder is resident.
    */
   auto ChildFolders(const SleeveFolder& folder) const -> std::vector<std::shared_ptr<SleeveFolder>>;
+  /**
+   * @brief The live child folders of @p folder as entries at @p folder_path / name, in the
+   *        order of the folder entries. Reads memory only.
+   */
+  auto ChildFolderEntries(const SleeveFolder&          folder,
+                          const std::filesystem::path& folder_path) const
+      -> std::vector<FolderTreeEntry>;
   /**
    * @brief Every live folder below @p root at each of its paths, parents before children, in
    *        the order of the folder entries. Reads memory only.
