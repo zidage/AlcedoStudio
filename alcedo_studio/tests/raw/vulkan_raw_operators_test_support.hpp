@@ -2,14 +2,16 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Support of VulkanRawOperatorsTest (plan phase VK4): the real RAW inputs of the test run, OpenCL
-// buffers and images for the product OpenCL encode functions, and Vulkan buffers for the Vulkan
-// encode functions. Each stage gets the same host input on both backends.
+// Support of VulkanRawOperatorsTest and VulkanHighlightReconstructTest (plan phases VK4 and VK5):
+// the real RAW inputs of the test run, the OpenCL stages that give the input of a Vulkan stage,
+// OpenCL buffers and images for the product OpenCL encode functions, and Vulkan buffers for the
+// Vulkan encode functions. Each stage gets the same host input on both backends.
 
 #pragma once
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -170,6 +172,82 @@ inline auto OpenClQueue() -> opencl::OpenClEncodeQueue {
 }
 
 inline void FinishOpenCl() { CheckCl(clFinish(OpenClContext::Instance().Queue()), "clFinish"); }
+
+// ---- OpenCL stages (the inputs of the Vulkan stages) ------------------------------------
+
+/// Linear F32 CFA of @p input from its U16 samples, at a CFA offset of @p cfa_offset bytes.
+inline auto ToLinearRefOnOpenCl(const PreparedRawInput& input, std::uint32_t rows,
+                                std::uint32_t cfa_offset = 0) -> std::vector<float> {
+  const std::uint32_t    width = input.host_extent.width;
+  const std::size_t      count = static_cast<std::size_t>(width) * rows;
+  std::vector<std::byte> cfa(cfa_offset + count * sizeof(std::uint16_t));
+  std::memcpy(cfa.data() + cfa_offset, input.pixels.bytes.get(), count * sizeof(std::uint16_t));
+  OpenClTestBuffer source{std::span<const std::byte>(cfa)};
+  OpenClTestBuffer linear(count * sizeof(float));
+  auto             queue = OpenClQueue();
+  OpenCL::EncodeToLinearRef(queue, source.View(cfa_offset), linear.View(), width, rows,
+                            input.linearization, input.cfa_pattern);
+  FinishOpenCl();
+  return linear.ReadFloats(count);
+}
+
+inline auto CfaClampOnOpenCl(const std::vector<float>& linear, std::uint32_t width,
+                             std::uint32_t height) -> std::vector<float> {
+  OpenClTestBuffer buffer(AsBytes(linear));
+  auto             queue = OpenClQueue();
+  OpenCL::EncodeCfaClamp01(queue, buffer.View(), width, height);
+  FinishOpenCl();
+  return buffer.ReadFloats(linear.size());
+}
+
+/// The R, G, B planes of a demosaic, one after the other.
+struct Planes {
+  std::vector<float> r;
+  std::vector<float> g;
+  std::vector<float> b;
+};
+
+inline auto RcdOnOpenCl(const std::vector<float>& linear, const BayerPattern2x2& pattern,
+                        std::uint32_t width, std::uint32_t height) -> Planes {
+  const std::size_t bytes = linear.size() * sizeof(float);
+  OpenClTestBuffer  cfa(AsBytes(linear));
+  OpenClTestBuffer  r(bytes), g(bytes), b(bytes), vh(bytes), pq(bytes);
+  auto              queue = OpenClQueue();
+  OpenCL::EncodeBayerRcd(queue, cfa.View(), r.View(), g.View(), b.View(), vh.View(), pq.View(),
+                         pattern, width, height);
+  FinishOpenCl();
+  return {r.ReadFloats(linear.size()), g.ReadFloats(linear.size()), b.ReadFloats(linear.size())};
+}
+
+/// The green plane and the RGBA result of the X-Trans demosaic.
+struct XTransResult {
+  std::vector<float> green;
+  std::vector<float> rgba;
+};
+
+inline auto XTransOnOpenCl(const std::vector<float>& linear, const XTransPattern6x6& pattern,
+                           std::uint32_t width, std::uint32_t height, int passes) -> XTransResult {
+  OpenClTestBuffer cfa(AsBytes(linear));
+  OpenClTestBuffer green(linear.size() * sizeof(float));
+  OpenClTestBuffer rgba(linear.size() * 4 * sizeof(float));
+  auto             queue = OpenClQueue();
+  OpenCL::EncodeXTrans(queue, cfa.View(), green.View(), rgba.View(), pattern, width, height,
+                       passes);
+  FinishOpenCl();
+  return {green.ReadFloats(linear.size()), rgba.ReadFloats(linear.size() * 4)};
+}
+
+inline auto OrientedExtent(RectI crop, int flip) -> std::array<std::uint32_t, 2> {
+  const auto w = static_cast<std::uint32_t>(crop.width);
+  const auto h = static_cast<std::uint32_t>(crop.height);
+  return (flip == 5 || flip == 6) ? std::array{h, w} : std::array{w, h};
+}
+
+/// The clamped linear CFA of @p input from OpenCL: the input of the demosaic stages.
+inline auto ClampedLinearOnOpenCl(const PreparedRawInput& input) -> std::vector<float> {
+  return CfaClampOnOpenCl(ToLinearRefOnOpenCl(input, input.host_extent.height),
+                          input.host_extent.width, input.host_extent.height);
+}
 
 // ---- Vulkan ---------------------------------------------------------------------------------
 

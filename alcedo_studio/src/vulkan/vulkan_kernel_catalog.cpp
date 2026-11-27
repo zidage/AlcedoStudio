@@ -6,7 +6,10 @@
 
 #include "vulkan/vulkan_color_math_check_kernels.hpp"
 #include "vulkan/vulkan_debayer_rcd_kernels.hpp"
+#include "vulkan/vulkan_dng_warp_kernels.hpp"
 #include "vulkan/vulkan_geometry_kernels.hpp"
+#include "vulkan/vulkan_highlight_kernels.hpp"
+#include "vulkan/vulkan_lens_calib_kernels.hpp"
 #include "vulkan/vulkan_raw_core_kernels.hpp"
 #include "vulkan/vulkan_raw_pack_kernels.hpp"
 #include "vulkan/vulkan_test_fill_kernels.hpp"
@@ -28,9 +31,19 @@ auto VulkanKernelCatalog() -> std::vector<VulkanKernelDescriptor> {
       xtrans_kernels::RgbaDescriptor(),
       raw_pack_kernels::PackPlanesDescriptor(),
       raw_pack_kernels::CopyRgbaDescriptor(),
+      highlight_kernels::ReconstructPlanarPackDescriptor(),
+      dng_warp_kernels::WarpRectilinearDescriptor(),
+      lens_calib_kernels::VignettingDescriptor(),
+      lens_calib_kernels::WarpDescriptor(),
   };
   for (const auto kernel : debayer_rcd_kernels::kRcdKernels) {
     catalog.push_back(debayer_rcd_kernels::Descriptor(kernel));
+  }
+  for (const auto kernel : highlight_kernels::kRgbaKernels) {
+    catalog.push_back(highlight_kernels::RgbaDescriptor(kernel));
+  }
+  for (const auto kernel : highlight_kernels::kPlanarKernels) {
+    catalog.push_back(highlight_kernels::PlanarDescriptor(kernel));
   }
   return catalog;
 }

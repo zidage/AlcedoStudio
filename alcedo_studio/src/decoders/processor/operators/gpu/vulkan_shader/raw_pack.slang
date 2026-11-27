@@ -8,21 +8,7 @@
 // names, the binding, and the push constant layouts are in
 // include/vulkan/vulkan_raw_pack_kernels.hpp.
 
-// PackOrientParams: 48 bytes, the struct of cvt_ref_space.cl.
-struct PackOrientParams {
-  uint  src_x;
-  uint  src_y;
-  uint  src_width;
-  uint  src_height;
-  uint  dst_width;
-  uint  dst_height;
-  uint  flip;
-  float scale_r;
-  float scale_g;
-  float scale_b;
-  uint  plane_stride;
-  uint  src_stride;
-};
+#include "raw_pack.slangh"
 
 // PackPlanesPushConstants: 72 bytes.
 struct PackPlanesPushConstants {
@@ -39,21 +25,6 @@ struct CopyRgbaPushConstants {
 };
 
 [[vk::binding(0, 0)]] [vk::image_format("rgba32f")] RWTexture2D<float4> destination;
-
-// The destination texel of crop texel (x, y): flip 3 turns 180 degrees, flip 5 and 6 turn 90
-// degrees, every other value keeps the orientation.
-static uint2 OrientedCoord(uint x, uint y, PackOrientParams params) {
-  if (params.flip == 3u) {
-    return uint2(params.src_width - 1u - x, params.src_height - 1u - y);
-  }
-  if (params.flip == 5u) {
-    return uint2(y, params.src_width - 1u - x);
-  }
-  if (params.flip == 6u) {
-    return uint2(params.src_height - 1u - y, x);
-  }
-  return uint2(x, y);
-}
 
 [shader("compute")]
 [numthreads(16, 16, 1)]

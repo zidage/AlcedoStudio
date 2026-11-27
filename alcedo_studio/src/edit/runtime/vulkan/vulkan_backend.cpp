@@ -535,6 +535,23 @@ void VulkanBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
   last_h2d_ranges_.push_back(ByteRange{offset, static_cast<std::uint32_t>(bytes.size())});
 }
 
+void VulkanBackend::FillBufferRange(Buffer& buffer, std::uint32_t offset, std::size_t bytes,
+                                    std::uint32_t value, CommandContext& command_context) {
+  if (bytes == 0) {
+    return;
+  }
+  if (buffer.Empty() || static_cast<std::size_t>(offset) + bytes > buffer.Bytes()) {
+    throw std::runtime_error("VulkanBackend::FillBufferRange: range exceeds buffer");
+  }
+  if (offset % 4 != 0 || bytes % 4 != 0) {
+    throw std::runtime_error(
+        "VulkanBackend::FillBufferRange: the offset and the size must be multiples of 4");
+  }
+  const VkCommandBuffer command_buffer = BeginCommand(command_context);
+  functions_->vkCmdFillBuffer(command_buffer, buffer.Native(), offset, bytes, value);
+  command_context.NoteWrite();
+}
+
 void VulkanBackend::DownloadBufferRange(const Buffer& buffer, std::uint32_t offset,
                                         std::span<std::byte> out, CommandContext& command_context) {
   ++d2h_copy_count_;
@@ -653,6 +670,42 @@ void VulkanBackend::CopyTexture2D(const Texture2D& src, Texture2D& dst,
   region.srcSubresource = ColorLayers();
   region.dstSubresource = ColorLayers();
   region.extent         = {src.Width(), src.Height(), 1};
+  functions_->vkCmdCopyImage(command_buffer, src.Native(), VK_IMAGE_LAYOUT_GENERAL, dst.Native(),
+                             VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+  command_context.NoteWrite();
+}
+
+void VulkanBackend::CopyTexture2DRegion(const Texture2D& src, RectI rectangle, Texture2D& dst,
+                                        CommandContext& command_context) {
+  if (src.Empty() || dst.Empty()) {
+    throw std::runtime_error("VulkanBackend::CopyTexture2DRegion: empty texture");
+  }
+  if (src.Format() != dst.Format()) {
+    throw std::runtime_error("VulkanBackend::CopyTexture2DRegion: format mismatch");
+  }
+  if (rectangle.x < 0 || rectangle.y < 0 || rectangle.width <= 0 || rectangle.height <= 0 ||
+      static_cast<std::int64_t>(rectangle.x) + rectangle.width > src.Width() ||
+      static_cast<std::int64_t>(rectangle.y) + rectangle.height > src.Height()) {
+    throw std::runtime_error("VulkanBackend::CopyTexture2DRegion: rectangle (" +
+                             std::to_string(rectangle.x) + ", " + std::to_string(rectangle.y) +
+                             ", " + std::to_string(rectangle.width) + " x " +
+                             std::to_string(rectangle.height) + ") is not inside the source of " +
+                             std::to_string(src.Width()) + " x " + std::to_string(src.Height()));
+  }
+  if (dst.Width() != static_cast<std::uint32_t>(rectangle.width) ||
+      dst.Height() != static_cast<std::uint32_t>(rectangle.height)) {
+    throw std::runtime_error(
+        "VulkanBackend::CopyTexture2DRegion: the destination is not the "
+        "size of the rectangle");
+  }
+  const VkCommandBuffer command_buffer = BeginCommand(command_context);
+  PrepareImage(src, command_context);
+  PrepareImage(dst, command_context);
+  VkImageCopy region{};
+  region.srcSubresource = ColorLayers();
+  region.srcOffset      = {rectangle.x, rectangle.y, 0};
+  region.dstSubresource = ColorLayers();
+  region.extent         = {dst.Width(), dst.Height(), 1};
   functions_->vkCmdCopyImage(command_buffer, src.Native(), VK_IMAGE_LAYOUT_GENERAL, dst.Native(),
                              VK_IMAGE_LAYOUT_GENERAL, 1, &region);
   command_context.NoteWrite();

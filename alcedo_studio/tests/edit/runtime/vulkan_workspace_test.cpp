@@ -160,6 +160,62 @@ TEST_F(VulkanWorkspaceFixture, BufferRangeUploadsAndDownloadsAtItsOffset) {
   EXPECT_EQ(range, std::vector<std::byte>(100, std::byte{0x7C}));
 }
 
+TEST_F(VulkanWorkspaceFixture, BufferFillWritesTheValueOnlyInItsRange) {
+  VulkanRenderDevice device;
+  auto&              backend  = device.Workspace().Device();
+  auto&              commands = device.CommandContext();
+  auto               buffer   = backend.CreateBuffer(256);
+  backend.UploadBufferRange(buffer, 0, std::vector<std::byte>(256, std::byte{0x5A}), commands);
+  backend.FillBufferRange(buffer, 64, 24, 0, commands);
+  backend.FillBufferRange(buffer, 128, 8, 0x3F800000U, commands);  // 1.0F
+
+  std::vector<std::byte> readback(256);
+  backend.DownloadBufferRange(buffer, 0, readback, commands);
+  for (std::size_t i = 0; i < readback.size(); ++i) {
+    std::byte expected = std::byte{0x5A};
+    if (i >= 64 && i < 88) {
+      expected = std::byte{0};
+    } else if (i >= 128 && i < 136) {
+      expected = (i % 4 == 3) ? std::byte{0x3F} : (i % 4 == 2 ? std::byte{0x80} : std::byte{0});
+    }
+    EXPECT_EQ(readback[i], expected) << "byte " << i;
+  }
+  EXPECT_THROW(backend.FillBufferRange(buffer, 2, 8, 0, commands), std::runtime_error);
+  EXPECT_THROW(backend.FillBufferRange(buffer, 0, 6, 0, commands), std::runtime_error);
+  EXPECT_THROW(backend.FillBufferRange(buffer, 252, 8, 0, commands), std::runtime_error);
+}
+
+TEST_F(VulkanWorkspaceFixture, TextureRegionCopyKeepsTheTexelsOfTheRectangle) {
+  VulkanRenderDevice      device;
+  auto&                   backend  = device.Workspace().Device();
+  auto&                   commands = device.CommandContext();
+  constexpr std::uint32_t kWidth   = 21;
+  constexpr std::uint32_t kHeight  = 13;
+  const auto              pixels   = RampRgba32f(kWidth, kHeight, 0.125F);
+  const RectI             rectangle{3, 2, 11, 7};
+  auto                    source = backend.CreateTexture2D(kWidth, kHeight, TextureFormat::Rgba32f);
+  auto                    region = backend.CreateTexture2D(11, 7, TextureFormat::Rgba32f);
+  backend.UploadTexture2D(source, AsBytes(pixels), commands);
+  backend.CopyTexture2DRegion(source, rectangle, region, commands);
+
+  std::vector<float> readback(std::size_t{11} * 7 * 4);
+  backend.DownloadTexture2D(region, AsWritableBytes(readback), commands);
+  for (std::uint32_t y = 0; y < 7; ++y) {
+    for (std::uint32_t x = 0; x < 11; ++x) {
+      for (std::uint32_t c = 0; c < 4; ++c) {
+        const std::size_t from = ((y + 2) * kWidth + (x + 3)) * 4 + c;
+        ASSERT_EQ(readback[(y * 11 + x) * 4 + c], pixels[from]) << "x=" << x << " y=" << y;
+      }
+    }
+  }
+  auto r32f = backend.CreateTexture2D(11, 7, TextureFormat::R32f);
+  EXPECT_THROW(backend.CopyTexture2DRegion(source, RectI{11, 2, 11, 7}, region, commands),
+               std::runtime_error);
+  EXPECT_THROW(backend.CopyTexture2DRegion(source, RectI{3, 2, 10, 7}, region, commands),
+               std::runtime_error);
+  EXPECT_THROW(backend.CopyTexture2DRegion(source, rectangle, r32f, commands), std::runtime_error);
+}
+
 TEST_F(VulkanWorkspaceFixture, ImageCopiedThroughABufferAndAnImageKeepsEveryTexel) {
   VulkanRenderDevice      device;
   auto&                   backend = device.Workspace().Device();

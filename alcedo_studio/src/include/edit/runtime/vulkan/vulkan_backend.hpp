@@ -223,6 +223,14 @@ class VulkanBackend {
   /// @throws std::runtime_error For a range outside the buffer.
   void UploadBufferRange(Buffer& buffer, std::uint32_t offset, std::span<const std::byte> bytes,
                          CommandContext& command_context);
+  /**
+   * @brief Records a fill of @p bytes of @p buffer at @p offset with the 32-bit @p value
+   * (`vkCmdFillBuffer`): the Vulkan form of `OpenClBackend::FillDeviceMemory` (phase VK5).
+   * @throws std::runtime_error For a range outside the buffer, or an offset or a size that is not
+   *         a multiple of 4. Nothing is recorded.
+   */
+  void FillBufferRange(Buffer& buffer, std::uint32_t offset, std::size_t bytes, std::uint32_t value,
+                       CommandContext& command_context);
   /// Copies the range of @p buffer to @p out. Submits the recording and waits for it.
   void DownloadBufferRange(const Buffer& buffer, std::uint32_t offset, std::span<std::byte> out,
                            CommandContext& command_context);
@@ -238,6 +246,15 @@ class VulkanBackend {
                          CommandContext& command_context);
   /// Records a copy of @p src to @p dst (same size and format).
   void CopyTexture2D(const Texture2D& src, Texture2D& dst, CommandContext& command_context);
+  /**
+   * @brief Records a copy of @p rectangle of @p src to all of @p dst: the Vulkan form of
+   * `OpenClImage::CropTo` (phase VK5).
+   * @throws std::runtime_error For an empty texture, two textures of different formats, a
+   *         rectangle that is empty or not inside @p src, or a @p dst that is not the size of
+   *         @p rectangle. Nothing is recorded.
+   */
+  void CopyTexture2DRegion(const Texture2D& src, RectI rectangle, Texture2D& dst,
+                           CommandContext& command_context);
   /// Records a copy of packed pixels from @p src at @p src_offset to all of @p dst.
   void CopyBufferToImage(const Buffer& src, std::uint32_t src_offset, Texture2D& dst,
                          CommandContext& command_context);

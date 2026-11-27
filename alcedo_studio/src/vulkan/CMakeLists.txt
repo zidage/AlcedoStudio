@@ -58,6 +58,29 @@ alcedo_add_slang_kernels(AlcedoVulkanKernels
     KERNELS pack_planes_crop_inverse_orient copy_rgba_crop_inverse_orient
 )
 
+# Phase VK5: the highlight reconstruction (OpenCL program raw_processor_highlight), the DNG
+# WarpRectilinear kernel of the OpenCL program opencl_dag_geometry_camera, and the lens calibration
+# (OpenCL program edit_geometry_lens_calib).
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP highlight_reconstruct
+    SOURCE "${_alcedo_vulkan_raw_shader_dir}/highlight_reconstruct.slang"
+    KERNELS hlr_build_mask hlr_dilate_mask hlr_chrominance_contrib hlr_reconstruct_from_stats
+            hlr_build_mask_planar hlr_chrominance_contrib_planar
+            hlr_reconstruct_from_stats_planar_pack
+    INCLUDE_DIRS "${ALCEDO_SRC_ROOT}"
+)
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP dng_warp
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/shader/dng_warp.slang"
+    KERNELS warp_rectilinear_rgba32f
+)
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP lens_calib
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/lens/vulkan/shader/lens_calib.slang"
+    KERNELS edit_geometry_lens_vignetting_rgba32f edit_geometry_lens_warp_rgba32f
+    INCLUDE_DIRS "${ALCEDO_SRC_ROOT}"
+)
+
 set(_alcedo_vulkan_context_sources
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_api_counters.cpp"
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_compute_pipeline_cache.cpp"

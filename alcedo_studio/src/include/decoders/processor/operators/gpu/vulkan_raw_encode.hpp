@@ -16,12 +16,13 @@
 #include "edit/geometry/types.hpp"
 #include "edit/runtime/vulkan/vulkan_backend.hpp"
 #include "edit/runtime/vulkan/vulkan_buffer_view.hpp"
+#include "vulkan/vulkan_highlight_kernels.hpp"
 #include "vulkan/vulkan_raw_core_kernels.hpp"
 #include "vulkan/vulkan_xtrans_kernels.hpp"
 
 /**
  * @file
- * @brief The Vulkan RAW encode functions before the highlight reconstruction (plan phase VK4).
+ * @brief The Vulkan RAW encode functions of the Develop pass (plan phases VK4 and VK5).
  *
  * Each function is the Vulkan form of the `OpenCL::Encode*` function of the same name in
  * `opencl_encode.hpp`, with the same parameters and the same result. The RAW intermediate data
@@ -139,6 +140,63 @@ void EncodeCopyRgbaCropInverseOrient(VulkanBackend& backend, VulkanCommandContex
                                      RectI crop, std::uint32_t source_width,
                                      std::uint32_t source_height, std::span<const float, 4> cam_mul,
                                      int flip);
+
+// ---- Highlight reconstruction (phase VK5) ---------------------------------------------------
+
+/// Bytes of the statistics view of @ref HighlightScratch: the float sums and counts of R, G, B.
+inline constexpr std::size_t kHighlightStatisticsBytes =
+    highlight_kernels::kStatisticsWords * sizeof(std::uint32_t);
+
+/// Bytes of each mask view of @ref HighlightScratch for a region of @p width x @p height: one
+/// 32-bit word for each texel with one bit for each of R, G, B.
+[[nodiscard]] constexpr auto HighlightMaskBytes(std::uint32_t width, std::uint32_t height)
+    -> std::size_t {
+  return static_cast<std::size_t>(width) * height * sizeof(std::uint32_t);
+}
+
+/**
+ * @brief The scratch of one highlight reconstruction: the Vulkan form of the five OpenCL scratch
+ * views (the OpenCL `anyclipped` count has no reader and is not kept).
+ *
+ * The caller allocates the views; the encode function writes all of them, so their content
+ * before the call does not matter. No other command of the recording uses them until the
+ * reconstruction is complete.
+ */
+struct HighlightScratch {
+  VulkanBufferView mask;        ///< @ref HighlightMaskBytes of the region (4-byte aligned)
+  VulkanBufferView dilated;     ///< @ref HighlightMaskBytes of the region (4-byte aligned)
+  VulkanBufferView statistics;  ///< @ref kHighlightStatisticsBytes (4-byte aligned)
+};
+
+/**
+ * @brief Reconstructs the clipped highlights of an RGBA buffer into another RGBA buffer (the
+ * opposed algorithm: clip mask, 7 x 7 dilation, chrominance of the ring around the clipped
+ * texels, then the reconstruction of each texel near its clip level).
+ *
+ * The clip level of each channel is 0.987 times the ratio of its @p cam_mul gain to green (the
+ * OpenCL `MakeHighlightParams`). Records the clear of the statistics and four dispatches.
+ *
+ * @param source, destination width * height RGBA float values each (16-byte aligned), two
+ *        different ranges. Alpha is copied.
+ */
+void EncodeHighlightReconstruct(VulkanBackend& backend, VulkanCommandContext& command_context,
+                                VulkanBufferView source, VulkanBufferView destination,
+                                const HighlightScratch& scratch, std::span<const float, 4> cam_mul,
+                                std::uint32_t width, std::uint32_t height);
+
+/**
+ * @brief Reconstructs the clipped highlights of the @p crop of R, G, B planes and packs the result
+ * into @p destination with the inverse white balance and the orientation (the rule of
+ * @ref EncodePackPlanesCropInverseOrient). The statistics and the masks cover the crop only.
+ *
+ * @param scratch The masks of the crop size.
+ * @param destination RGBA32F of the oriented crop size; alpha 1.
+ */
+void EncodeHighlightReconstructPlanarAndPack(
+    VulkanBackend& backend, VulkanCommandContext& command_context, VulkanBufferView r,
+    VulkanBufferView g, VulkanBufferView b, VulkanBackend::Texture2D& destination,
+    const HighlightScratch& scratch, std::span<const float, 4> cam_mul, RectI crop,
+    std::uint32_t plane_width, std::uint32_t plane_height, int flip);
 
 }  // namespace alcedo::vulkan::raw
 

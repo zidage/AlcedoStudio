@@ -67,4 +67,16 @@ if(ALCEDO_VULKAN_ENABLED AND ALCEDO_OPENCL_ENABLED)
     DISCOVERY_TIMEOUT 60
     PROPERTIES LABELS "gpu;raw;vulkan;opencl")
   alcedo_register_test_target(VulkanRawOperatorsTest gpu)
+
+  # Phase VK5: the highlight reconstruction against the product OpenCL functions.
+  add_executable(VulkanHighlightReconstructTest
+    ${ALCEDO_TEST_ROOT}/raw/vulkan_highlight_reconstruct_test.cpp)
+  target_include_directories(VulkanHighlightReconstructTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(VulkanHighlightReconstructTest PRIVATE
+    GTest::gtest_main RawProcessorOpVulkan RawProcessorOp OpenClProgramLibrary EditInput)
+  add_dependencies(VulkanHighlightReconstructTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanHighlightReconstructTest TEST_PREFIX "VulkanHighlightReconstructTest."
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "gpu;raw;vulkan;opencl")
+  alcedo_register_test_target(VulkanHighlightReconstructTest gpu)
 endif()

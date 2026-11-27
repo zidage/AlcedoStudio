@@ -227,6 +227,30 @@ if(ALCEDO_VULKAN_ENABLED AND ALCEDO_OPENCL_ENABLED)
   gtest_discover_tests(VulkanGeometryTest TEST_PREFIX "VulkanGeometryTest."
     PROPERTIES LABELS "gpu;edit;runtime;vulkan;opencl")
   alcedo_register_test_target(VulkanGeometryTest gpu)
+
+  # Phase VK5: the lens calibration (also against the CPU reference of the OpenCL lens test) and
+  # the DNG WarpRectilinear of the Develop pass.
+  add_executable(VulkanLensCalibTest ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_lens_calib_test.cpp)
+  target_include_directories(VulkanLensCalibTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(VulkanLensCalibTest PRIVATE
+    GTest::gtest_main EditRuntimeLensVulkan EditRuntimeLens OpenClGeometryUtils
+    OpenClProgramLibrary ImageBuffer)
+  add_dependencies(VulkanLensCalibTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanLensCalibTest TEST_PREFIX "VulkanLensCalibTest."
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan;opencl")
+  alcedo_register_test_target(VulkanLensCalibTest gpu)
+
+  add_executable(VulkanDngWarpTest ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_dng_warp_test.cpp)
+  target_include_directories(VulkanDngWarpTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(VulkanDngWarpTest PRIVATE
+    GTest::gtest_main EditRuntimeVulkan EditRuntimeOpenCl EditInput OpenClProgramLibrary)
+  target_compile_definitions(VulkanDngWarpTest PRIVATE
+    ALCEDO_CI_RAW_FIXTURE_ROOT="${ALCEDO_TEST_ROOT}/resources/sample_images/ci_rawfiles")
+  add_dependencies(VulkanDngWarpTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanDngWarpTest TEST_PREFIX "VulkanDngWarpTest."
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan;opencl")
+  alcedo_register_test_target(VulkanDngWarpTest gpu)
 endif()
 
 add_executable(PipelineSchedulerRequestIdTest
