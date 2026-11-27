@@ -293,6 +293,10 @@ class VulkanBackend {
   /// Submits an open recording, waits for every batch of @p command_context, and completes the
   /// render submission in flight. Destroys the resources that no batch uses now.
   void               Wait(CommandContext& command_context);
+  /// Submits an open recording and waits for every batch of @p command_context, without a change
+  /// of the render submission in flight: the render records on after the call (phase VK6, the
+  /// Develop scratch rule of `PlanExecutor`). Destroys the resources that no batch uses now.
+  void               SynchronizeRecordedWork(CommandContext& command_context);
 
   [[nodiscard]] auto HasInFlightSubmission() const -> bool { return in_flight_submission_ != 0; }
   [[nodiscard]] auto CompletedSubmission() const -> std::uint64_t { return completed_submission_; }

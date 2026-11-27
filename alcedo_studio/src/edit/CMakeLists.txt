@@ -432,6 +432,12 @@ if(ALCEDO_VULKAN_ENABLED)
         SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/lens/vulkan/vulkan_lens_calib.cpp
         PUBLIC_DEPS EditRuntimeVulkan EditRuntimeLens
     )
+    # The pass encoders of the Vulkan backend (#1036): the Develop pass from phase VK6.
+    def_library(EditRuntimeVulkanPasses
+        SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_develop_pass.cpp
+        PUBLIC_DEPS EditRuntimeVulkan EditInput
+        PRIVATE_DEPS RawProcessorOpVulkan EditRuntimeLensVulkan EditRuntimeLens PreviewPerformance
+    )
 endif()
 
 if(ALCEDO_CUDA_ENABLED)

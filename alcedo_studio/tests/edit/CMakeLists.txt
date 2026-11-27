@@ -204,6 +204,29 @@ if(ALCEDO_VULKAN_ENABLED)
   alcedo_register_test_target(GpuDagVulkanWorkspaceTest gpu)
 endif()
 
+# The Develop pass of Vulkan against the Develop pass of a reference backend on the same GPU
+# (#1036, phase VK6, decision B9): OpenCL when the build has it (Windows), else Metal (macOS).
+if(ALCEDO_VULKAN_ENABLED AND (ALCEDO_OPENCL_ENABLED OR ALCEDO_METAL_ENABLED))
+  add_executable(VulkanDevelopTest ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_develop_test.cpp)
+  target_include_directories(VulkanDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(VulkanDevelopTest PRIVATE
+    GTest::gtest_main EditRuntimeVulkanPasses EditInput EditGraph)
+  if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(VulkanDevelopTest PRIVATE EditRuntimeOpenCl OpenClProgramLibrary)
+  else()
+    target_link_libraries(VulkanDevelopTest PRIVATE EditRuntimeMetal EditRuntimeLens RawProcessorOp)
+    add_dependencies(VulkanDevelopTest GpuDagMetalShaders RawProcessorOpMetalShaders)
+  endif()
+  target_compile_definitions(VulkanDevelopTest PRIVATE
+    ALCEDO_LENS_PROFILE_DB_DIR="${ALCEDO_SRC_DIR}/config/lens_calib"
+    ALCEDO_CI_RAW_FIXTURE_ROOT="${ALCEDO_TEST_ROOT}/resources/sample_images/ci_rawfiles")
+  add_dependencies(VulkanDevelopTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanDevelopTest TEST_PREFIX "VulkanDevelopTest."
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan")
+  alcedo_register_test_target(VulkanDevelopTest gpu)
+endif()
+
 # Vulkan against OpenCL on the same GPU (#1036, phase VK3, decision B9): the shared color math
 # and the crop and resize of the Develop pass. The OpenCL side runs the product sources.
 if(ALCEDO_VULKAN_ENABLED AND ALCEDO_OPENCL_ENABLED)
