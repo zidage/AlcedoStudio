@@ -761,7 +761,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
                                               mount_id_t, const MountScanResult& result) {
     const bool folders_changed = result.folders_added_count + result.folders_removed_count > 0;
     if (folders_changed) {
-      library->ReloadFolderTree(folders->current_folder_path());
+      library->ReloadFolderTree();
     }
     if (folders_changed || MountScanChangedPhotos(result)) {
       library->RequestLibraryContentRefresh();
@@ -863,13 +863,12 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
                                     semantic = semantic_generation_.get(),
                                     editor_session = editor_session_.get(),
                                     project = project_.get()] {
-    const auto preferred_folder_path =
-        folders ? folders->current_folder_path() : std::filesystem::path{};
     if (import_export) {
       import_export->ResetExportState();
     }
     if (library) {
-      library->ReloadFolderTree(preferred_folder_path);
+      // The tree read keeps the current folder (the root after ClearState).
+      library->ReloadFolderTree();
     }
     if (stats) {
       stats->ClearFilters();

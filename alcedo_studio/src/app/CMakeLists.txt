@@ -803,11 +803,12 @@ target_link_libraries(EditorSessionService PUBLIC EditorWorkingDocument)
 
 def_library(ImportService
     SOURCES "${ALCEDO_APP_ROOT}/import_service.cpp"
+            "${ALCEDO_APP_ROOT}/ordinary_import_sources.cpp"
             "${ALCEDO_INCLUDE_ROOT}/app/raw_import_look_source.hpp"
     # Import creates each image's history root through InitializeImageRoot on the
     # PipelineMgmtService injected at construction; it constructs no executor.
     PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService
-    PRIVATE_DEPS SourceFileUtils
+    PRIVATE_DEPS AlcedoLog Qt6::Core SourceFileUtils
 )
 
 def_library(ThumbnailService

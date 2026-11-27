@@ -165,8 +165,8 @@ class MountScanRun {
   /// The stored state of the mount in the form of the comparison (Mounted Folder Plan, MF3).
   auto ReadRecords() -> MountScanRecords {
     MountScanRecords records;
-    const auto       tree = sleeve_service_.ReadMountTree(mount_.root_folder_id, mount_.id);
-    for (const auto& folder : tree.folders) {
+    // The folders only: a memory read that loads no file element (Sleeve Node Cache Plan, SN5).
+    for (const auto& folder : sleeve_service_.ReadMountFolders(mount_.root_folder_id, mount_.id)) {
       records.folders.push_back(MountScanFolderRecord{folder.folder_id, folder.relative_path});
     }
 
@@ -307,8 +307,7 @@ class MountScanRun {
       return true;
     }
     std::unordered_map<std::wstring, sl_element_id_t> folder_at{{L"", mount_.root_folder_id}};
-    for (const auto& folder :
-         sleeve_service_.ReadMountTree(mount_.root_folder_id, mount_.id).folders) {
+    for (const auto& folder : sleeve_service_.ReadMountFolders(mount_.root_folder_id, mount_.id)) {
       folder_at.emplace(folder.relative_path, folder.folder_id);
     }
 
@@ -659,7 +658,7 @@ void MountService::LocateMissingFile(sl_element_id_t              element_id,
   } catch (const std::exception&) {
   }
   const auto source = mounts.ReadSourceFile(element_id);
-  if (!element || element->type_ != ElementType::FILE || element->sync_flag_ == SyncFlag::DELETED ||
+  if (!element || element->type_ != ElementType::FILE || !element->IsLive() ||
       !element->mount_id_.has_value() || !source.has_value() ||
       source->state != SourceFileState::kMissing) {
     throw MountOperationError(
@@ -719,8 +718,7 @@ void MountService::LocateMissingFile(sl_element_id_t              element_id,
     changes.mount_id       = mount.id;
     changes.root_folder_id = mount.root_folder_id;
     std::unordered_set<std::wstring> folders;
-    for (const auto& folder :
-         sleeve_service_->ReadMountTree(mount.root_folder_id, mount.id).folders) {
+    for (const auto& folder : sleeve_service_->ReadMountFolders(mount.root_folder_id, mount.id)) {
       folders.insert(folder.relative_path);
     }
     // A directory that the last scan did not see gets its folders now, a parent first.

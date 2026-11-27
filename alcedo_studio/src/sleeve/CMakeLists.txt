@@ -16,6 +16,7 @@ set(ELEMENT_SRCS
     "${ALCEDO_SRC_ROOT}/sleeve/sleeve_element/sleeve_element.cpp"
     "${ALCEDO_SRC_ROOT}/sleeve/sleeve_element/sleeve_file.cpp"
     "${ALCEDO_SRC_ROOT}/sleeve/sleeve_element/sleeve_folder.cpp"
+    "${ALCEDO_SRC_ROOT}/sleeve/node_cache.cpp"
 )
 
 def_library(SleeveElement
@@ -33,6 +34,7 @@ set(FS_SRCS
     "${ALCEDO_SRC_ROOT}/sleeve/sleeve_base.cpp"
     "${ALCEDO_SRC_ROOT}/sleeve/path_resolver.cpp"
     "${ALCEDO_SRC_ROOT}/sleeve/dentry_cache_manager.cpp"
+    "${ALCEDO_SRC_ROOT}/sleeve/node_storage_handler.cpp"
     "${ALCEDO_SRC_ROOT}/sleeve/sleeve_filesystem.cpp"
 )
 

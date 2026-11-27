@@ -223,6 +223,22 @@ TEST_F(EditorSessionCheckpointStoreTest, RecoverAndMaterializeAsyncRunsOffCaller
   EXPECT_TRUE(outcome.accepted) << outcome.error;
 }
 
+/// Issue #1175: the store lives for the application; a save and a recovery leave no
+/// reference to the Storage of the project, so a project switch closes its database.
+TEST_F(EditorSessionCheckpointStoreTest, SaveAndRecoveryKeepNoReferenceToTheStorage) {
+  const long  owners_before = storage_.use_count();
+  const auto  capture       = CaptureEdit();
+  std::string error;
+  ASSERT_TRUE(
+      store_->Materialize(std::make_shared<const alcedo::EditorMiniGitSaveCapture>(capture), &error)
+          .materialized)
+      << error;
+  EXPECT_EQ(storage_.use_count(), owners_before);
+
+  EXPECT_TRUE(store_->RecoverAndMaterialize(element_id_, 1, &error).accepted) << error;
+  EXPECT_EQ(storage_.use_count(), owners_before);
+}
+
 /// Phase 4A: null capture and missing storage fail; never report a silent success.
 TEST_F(EditorSessionCheckpointStoreTest, ConfiguredProjectWithoutHistoryStoreOrStorageFails) {
   std::string error;

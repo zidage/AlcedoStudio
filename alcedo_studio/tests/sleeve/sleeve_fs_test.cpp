@@ -70,12 +70,12 @@ TEST(SleeveFSTest, AddGetTest1) {
       FileSystem     fs{db_path, storage_service, 0};
       fs.InitRoot();
 
-      fs.Create(L"", L"FILE", ElementType::FILE);
-      auto new_file = fs.Get("/FILE", false);
+      auto new_file = fs.Create(L"", L"FILE", ElementType::FILE);
       EXPECT_FALSE(new_file == nullptr);
       EXPECT_EQ(new_file->element_name_, L"FILE");
       EXPECT_EQ(new_file->element_id_, 1);
       EXPECT_EQ(new_file->ref_count_, 1);
+      EXPECT_EQ(fs.ListFileIds(0), (std::vector<sl_element_id_t>{1}));
     } catch (std::exception& e) {
       std::cout << e.what() << std::endl;
       FAIL();
@@ -95,14 +95,15 @@ TEST(SleeveFSTest, AddGetTest2) {
 
     fs.Create(L"", L"Folder", ElementType::FOLDER);
     fs.Create(L"/Folder", L"Subfolder", ElementType::FOLDER);
-    fs.Create(L"/Folder", L"File", ElementType::FILE);
+    const auto file   = fs.Create(L"/Folder", L"File", ElementType::FILE);
 
     auto folder = fs.Get(L"/Folder", false);
     EXPECT_FALSE(folder == nullptr);
     auto subfolder = fs.Get(L"/Folder/Subfolder", false);
     EXPECT_FALSE(subfolder == nullptr);
-    auto file = fs.Get(L"/Folder/File", false);
-    EXPECT_FALSE(file == nullptr);
+    EXPECT_TRUE(ContainsId(fs.ListFileIds(folder->element_id_), file->element_id_));
+    // A file has no path: its name is a label (Sleeve Node Cache Plan, SN4).
+    EXPECT_THROW(fs.Get(L"/Folder/File", false), std::runtime_error);
 
     std::cout << conv::ToBytes(fs.Tree(L"/"));
   } catch (std::exception& e) {
@@ -180,15 +181,15 @@ TEST(SleeveFSTest, DeleteTest1) {
     FileSystem     fs{db_path, storage_service, 0};
     fs.InitRoot();
 
-    fs.Create(L"", L"FILE", ElementType::FILE);
-    auto new_file = fs.Get("/FILE", false);
+    auto new_file = fs.Create(L"", L"FILE", ElementType::FILE);
     EXPECT_FALSE(new_file == nullptr);
     EXPECT_EQ(new_file->element_name_, L"FILE");
     EXPECT_EQ(new_file->element_id_, 1);
     EXPECT_EQ(new_file->ref_count_, 1);
 
-    fs.Delete(L"/FILE");
-    fs.Get("/FILE", false);
+    fs.Delete(new_file->element_id_);
+    EXPECT_EQ(new_file->SyncState(), SyncFlag::DELETED);
+    EXPECT_TRUE(fs.ListFileIds(0).empty());
   } catch (std::runtime_error& e) {
     std::cout << "Expected exception: " << e.what() << std::endl;
   } catch (std::exception& e) {
@@ -223,6 +224,37 @@ TEST(SleeveFSTest, DeleteTest2) {
   if (std::filesystem::exists(db_path)) {
     std::filesystem::remove(db_path);
   }
+}
+
+// #1179: a path cache record of a deleted folder does not hide a new folder at the same path.
+TEST(SleeveFSTest, PathOfADeletedFolderResolvesToTheNewFolder) {
+  {
+    Storage    storage_service{db_path};
+    FileSystem fs{db_path, storage_service, 0};
+    fs.InitRoot();
+
+    // Delete by path.
+    fs.Create(L"", L"A", ElementType::FOLDER);
+    const auto old_b = fs.Create(L"/A", L"B", ElementType::FOLDER);
+    ASSERT_EQ(fs.Get(L"/A/B", false)->element_id_, old_b->element_id_);
+    fs.Delete(L"/A");
+    EXPECT_THROW(fs.Get(L"/A/B", false), std::runtime_error);
+    fs.Create(L"", L"A", ElementType::FOLDER);
+    const auto new_b = fs.Create(L"/A", L"B", ElementType::FOLDER);
+    EXPECT_EQ(fs.Get(L"/A/B", false)->element_id_, new_b->element_id_);
+    EXPECT_EQ(fs.Get(L"/A/B", false)->element_id_, new_b->element_id_);
+
+    // Delete by id.
+    const auto c     = fs.Create(L"/A", L"C", ElementType::FOLDER);
+    const auto old_d = fs.Create(L"/A/C", L"D", ElementType::FOLDER);
+    ASSERT_EQ(fs.Get(L"/A/C/D", false)->element_id_, old_d->element_id_);
+    fs.Delete(c->element_id_);
+    EXPECT_THROW(fs.Get(L"/A/C/D", false), std::runtime_error);
+    fs.Create(L"/A", L"C", ElementType::FOLDER);
+    const auto new_d = fs.Create(L"/A/C", L"D", ElementType::FOLDER);
+    EXPECT_EQ(fs.Get(L"/A/C/D", false)->element_id_, new_d->element_id_);
+  }
+  CleanupTestFiles();
 }
 
 TEST(SleeveFSTest, CopyTest1) {
@@ -325,23 +357,8 @@ TEST(SleeveFSTest, LinkFileToFoldersKeepsSingleFileIdentity) {
     EXPECT_EQ(CountId(album_a_ids, file->element_id_), 1u);
     EXPECT_EQ(CountId(album_b_ids, file->element_id_), 1u);
     EXPECT_EQ(file->ref_count_, 1u);
-
-    auto from_root =
-        std::static_pointer_cast<SleeveFile>(fs.Get(L"/Shared.arw", false));
-    auto from_album_a =
-        std::static_pointer_cast<SleeveFile>(fs.Get(L"/AlbumA/Shared.arw", false));
-    auto from_album_b =
-        std::static_pointer_cast<SleeveFile>(fs.Get(L"/AlbumB/Shared.arw", false));
-
-    EXPECT_EQ(from_root->element_id_, file->element_id_);
-    EXPECT_EQ(from_album_a->element_id_, file->element_id_);
-    EXPECT_EQ(from_album_b->element_id_, file->element_id_);
-
-    auto edited =
-        std::static_pointer_cast<SleeveFile>(fs.Get(L"/AlbumA/Shared.arw", true));
-    edited->SetLastModifiedTime();
-    EXPECT_EQ(from_root->last_modified_time_, edited->last_modified_time_);
-    EXPECT_EQ(from_album_b->last_modified_time_, edited->last_modified_time_);
+    // Each folder holds the id, and the id names one element.
+    EXPECT_EQ(fs.Get(file->element_id_), file);
   } catch (std::exception& e) {
     std::cout << e.what() << std::endl;
     FAIL();
@@ -350,7 +367,9 @@ TEST(SleeveFSTest, LinkFileToFoldersKeepsSingleFileIdentity) {
   CleanupTestFiles();
 }
 
-TEST(SleeveFSTest, CopyFilePathLinksMembershipInsteadOfDuplicatingFile) {
+// Sleeve Node Cache Plan SN4: a file has no path, so a copy names folders only; a file joins a
+// folder with LinkFileToFolder.
+TEST(SleeveFSTest, CopyRefusesAFilePathAndLinksNothing) {
   CleanupTestFiles();
   try {
     Storage storage_service{db_path};
@@ -362,14 +381,9 @@ TEST(SleeveFSTest, CopyFilePathLinksMembershipInsteadOfDuplicatingFile) {
     ASSERT_NE(file, nullptr);
 
     const auto next_id_before_copy = fs.GetCurrentID();
-    fs.Copy(L"/CopyMe.arw", L"/Album");
+    EXPECT_THROW(fs.Copy(L"/CopyMe.arw", L"/Album"), std::runtime_error);
     EXPECT_EQ(fs.GetCurrentID(), next_id_before_copy);
-
-    auto from_root = fs.Get(L"/CopyMe.arw", false);
-    auto from_album = fs.Get(L"/Album/CopyMe.arw", false);
-    EXPECT_EQ(from_root->element_id_, file->element_id_);
-    EXPECT_EQ(from_album->element_id_, file->element_id_);
-    EXPECT_TRUE(ContainsId(fs.ListFolderContent(album->element_id_), file->element_id_));
+    EXPECT_TRUE(fs.ListFileIds(album->element_id_).empty());
     EXPECT_EQ(file->ref_count_, 1u);
   } catch (std::exception& e) {
     std::cout << e.what() << std::endl;
@@ -391,14 +405,14 @@ TEST(SleeveFSTest, DeletingFromAlbumOnlyUnlinksMembership) {
     ASSERT_NE(file, nullptr);
     fs.LinkFileToFolder(file->element_id_, album->element_id_);
 
-    fs.Delete(L"/Album/KeepInRoot.arw");
+    fs.UnlinkFileFromFolder(file->element_id_, album->element_id_);
 
-    auto from_root = fs.Get(L"/KeepInRoot.arw", false);
-    EXPECT_EQ(from_root->element_id_, file->element_id_);
     EXPECT_TRUE(ContainsId(fs.ListFolderContent(0), file->element_id_));
     EXPECT_FALSE(ContainsId(fs.ListFolderContent(album->element_id_), file->element_id_));
-    EXPECT_NE(file->sync_flag_, SyncFlag::DELETED);
-    EXPECT_THROW(fs.Get(L"/Album/KeepInRoot.arw", false), std::runtime_error);
+    EXPECT_NE(file->SyncState(), SyncFlag::DELETED);
+    // A second unlink finds no member.
+    EXPECT_THROW(fs.UnlinkFileFromFolder(file->element_id_, album->element_id_),
+                 std::runtime_error);
   } catch (std::exception& e) {
     std::cout << e.what() << std::endl;
     FAIL();
@@ -421,15 +435,12 @@ TEST(SleeveFSTest, DeletingFromRootDeletesFileEverywhere) {
     fs.LinkFileToFolder(file->element_id_, album_a->element_id_);
     fs.LinkFileToFolder(file->element_id_, album_b->element_id_);
 
-    fs.Delete(L"/DeleteEverywhere.arw");
+    fs.Delete(file->element_id_);
 
-    EXPECT_EQ(file->sync_flag_, SyncFlag::DELETED);
+    EXPECT_EQ(file->SyncState(), SyncFlag::DELETED);
     EXPECT_FALSE(ContainsId(fs.ListFolderContent(0), file->element_id_));
     EXPECT_FALSE(ContainsId(fs.ListFolderContent(album_a->element_id_), file->element_id_));
     EXPECT_FALSE(ContainsId(fs.ListFolderContent(album_b->element_id_), file->element_id_));
-    EXPECT_THROW(fs.Get(L"/DeleteEverywhere.arw", false), std::runtime_error);
-    EXPECT_THROW(fs.Get(L"/AlbumA/DeleteEverywhere.arw", false), std::runtime_error);
-    EXPECT_THROW(fs.Get(L"/AlbumB/DeleteEverywhere.arw", false), std::runtime_error);
   } catch (std::exception& e) {
     std::cout << e.what() << std::endl;
     FAIL();
@@ -471,18 +482,18 @@ TEST(SleeveFSTest, DeleteFilesEverywhereRemovesBatchFromEveryFolderAndKeepsOther
     const auto album_b_content = fs.ListFolderContent(album_b->element_id_);
     for (const auto id : deleted_ids) {
       EXPECT_TRUE(ContainsId(removed, id));
-      EXPECT_EQ(fs.Get(id)->sync_flag_, SyncFlag::DELETED);
+      EXPECT_EQ(fs.Get(id)->SyncState(), SyncFlag::DELETED);
       EXPECT_FALSE(ContainsId(root_content, id));
       EXPECT_FALSE(ContainsId(album_a_content, id));
       EXPECT_FALSE(ContainsId(album_b_content, id));
     }
     for (const auto id : kept_ids) {
-      EXPECT_NE(fs.Get(id)->sync_flag_, SyncFlag::DELETED);
+      EXPECT_NE(fs.Get(id)->SyncState(), SyncFlag::DELETED);
       EXPECT_EQ(CountId(root_content, id), 1U);
       EXPECT_EQ(CountId(album_a_content, id), 1U);
     }
     auto folder_a = std::static_pointer_cast<SleeveFolder>(album_a);
-    EXPECT_EQ(folder_a->ContentSize(), kept_ids.size());
+    EXPECT_EQ(fs.ListFileIds(album_a->element_id_).size(), kept_ids.size());
     // Files added and removed before the folder was written leave no pending content change.
     for (const auto id : deleted_ids) {
       EXPECT_FALSE(folder_a->ContentAddedSinceSync().contains(id));

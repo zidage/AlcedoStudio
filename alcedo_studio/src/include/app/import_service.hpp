@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "app/mount_file_importer.hpp"
+#include "app/ordinary_import_sources.hpp"
 #include "app/raw_import_look_source.hpp"
 #include "app/sleeve_service.hpp"
 #include "concurrency/thread_pool.hpp"
@@ -159,8 +160,8 @@ class ImportService {
 
   /// Persist a finished import. Each `metadata_failed_` entry loses its library element and
   /// its placeholder Image, so a failed import writes no Element, FileImage, or Image row;
-  /// then the image pool and the sleeve file system are written to storage.
-  /// Throws when the image store rejects the removal of failed Images.
+  /// then the image pool, sleeve file system, and recorded sources are written to storage.
+  /// Throws when an image removal or storage write fails.
   virtual void SyncImports(const ImportLogSnapshot& log_snapshot, const image_path_t& dest) = 0;
 };
 
@@ -240,21 +241,21 @@ class ImportServiceImpl final : public ImportService, public MountFileImporter {
 
  private:
   /// Creates the library element of the file @p index of an import, with the name @p file_name,
-  /// inside the lock of the sleeve service. When create_file is false, validate the ordinary
-  /// destination without creating an element. Throws when the destination or placement is invalid.
+  /// inside the lock of the sleeve service. Throws or returns empty when placement fails.
   using FilePlacement = std::function<std::shared_ptr<SleeveElement>(
-      FileSystem& fs, std::size_t index, const file_name_t& file_name, bool create_file)>;
+      FileSystem& fs, std::size_t index, const file_name_t& file_name)>;
 
   void StartImport(const std::vector<image_path_t>& paths, FilePlacement placement,
                    ImportOptions options, const std::shared_ptr<ImportJob>& job,
-                   bool ordinary_import);
+                   std::shared_ptr<OrdinaryImportSources> sources = nullptr);
 
-  void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>&       paths,
-                                   const FilePlacement&                   placement,
-                                   const std::shared_ptr<ImportJob>&      job,
-                                   const std::shared_ptr<ImportLog>&      import_log,
-                                   const std::shared_ptr<ImportProgress>& progress,
-                                   const ImportOptions& options, bool ordinary_import,
-                                   const std::shared_ptr<const RawImportLook>& raw_import_look);
+  void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>&              paths,
+                                   const FilePlacement&                          placement,
+                                   const std::shared_ptr<ImportJob>&             job,
+                                   const std::shared_ptr<ImportLog>&             import_log,
+                                   const std::shared_ptr<ImportProgress>&        progress,
+                                   const ImportOptions&                          options,
+                                   const std::shared_ptr<OrdinaryImportSources>& sources,
+                                   const std::shared_ptr<const RawImportLook>&   raw_import_look);
 };
 };  // namespace alcedo

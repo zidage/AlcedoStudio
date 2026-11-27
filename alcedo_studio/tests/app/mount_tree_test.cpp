@@ -22,6 +22,7 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/storage.hpp"
+#include "storage/store/sleeve/folder_entry_store.hpp"
 #include "support/test_temp_directory.hpp"
 #include "utils/clock/time_provider.hpp"
 
@@ -136,6 +137,47 @@ class MountTreeTest : public ::testing::Test {
     return it == tree.home_folders.end() ? std::vector<sl_element_id_t>{} : it->second;
   }
 
+  /// @p count files of the library with @p mount_id in @p folder_id, created in one write.
+  auto AddFiles(const std::wstring& prefix, int count, sl_element_id_t folder_id,
+                std::optional<mount_id_t> mount_id) -> std::vector<sl_element_id_t> {
+    auto [ids, sync] = sleeve_->Write<std::vector<sl_element_id_t>>([&](FileSystem& fs) {
+      std::vector<sl_element_id_t> created;
+      for (int i = 0; i < count; ++i) {
+        auto file       = fs.CreateFileInLibrary(prefix + std::to_wstring(i) + L".jpg");
+        file->image_id_ = file->element_id_;
+        file->mount_id_ = mount_id;
+        fs.LinkFileToFolder(file->element_id_, folder_id);
+        created.push_back(file->element_id_);
+      }
+      return created;
+    });
+    EXPECT_TRUE(sync.success_) << sync.message_;
+    return ids;
+  }
+
+  /// The number of elements in the node cache.
+  auto CachedCount() -> std::size_t {
+    return sleeve_->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().Size(); });
+  }
+
+  /// True when the node cache holds @p id.
+  auto IsCached(sl_element_id_t id) -> bool {
+    return sleeve_->Read<bool>([id](FileSystem& fs) { return fs.Nodes().Contains(id); });
+  }
+
+  /// The ids of @p ids that the node cache holds.
+  auto CachedOf(const std::vector<sl_element_id_t>& ids) -> std::vector<sl_element_id_t> {
+    return sleeve_->Read<std::vector<sl_element_id_t>>([&ids](FileSystem& fs) {
+      std::vector<sl_element_id_t> cached;
+      for (const auto id : ids) {
+        if (fs.Nodes().Contains(id)) {
+          cached.push_back(id);
+        }
+      }
+      return cached;
+    });
+  }
+
   auto FolderAt(sl_element_id_t root_id, const std::wstring& path) -> sl_element_id_t {
     for (const auto& folder : sleeve_->ReadMountTree(root_id, kMount).folders) {
       if (folder.relative_path == path) {
@@ -173,6 +215,148 @@ TEST_F(MountTreeTest, ReadMountTreeListsTheMountedFoldersAndHomeLinksOnly) {
   EXPECT_THROW(sleeve_->ReadMountTree(notes, kMount), std::runtime_error);
 }
 
+// Sleeve Node Cache Plan SN5: the stored links of the mount folders, with the stored mount id of
+// each file, in file id order.
+TEST_F(MountTreeTest, MountFileFolderRowsHoldTheFileLinksOfTheMountFoldersOnly) {
+  constexpr mount_id_t kOtherMount = 2;
+  const auto           root        = MountRoot();
+  const auto           day1        = AddFolder(root, L"Day1", kMount);
+  const auto           notes       = AddFolder(0, L"Notes", std::nullopt);
+  const auto           a           = AddFile(L"a.jpg", root, kMount);
+  const auto           b           = AddFile(L"b.jpg", day1, kMount);
+  const auto           ordinary    = AddFile(L"ordinary.jpg", day1, std::nullopt);
+  const auto           other       = AddFile(L"other.jpg", day1, kOtherMount);
+  AddFile(L"note.jpg", notes, kMount);
+  Reopen();
+
+  const auto rows = storage_->GetFolderEntryStore().ReadMountFileFolders(kMount);
+  EXPECT_EQ(rows, (std::vector<MountFileFolderRow>{{a, root, kMount},
+                                                   {b, day1, kMount},
+                                                   {ordinary, day1, std::nullopt},
+                                                   {other, day1, kOtherMount}}));
+  EXPECT_TRUE(storage_->GetFolderEntryStore().ReadMountFileFolders(kOtherMount).empty());
+}
+
+// Sleeve Node Cache Plan SN5: after a reopen the cache holds the folders only, and the tree read
+// of a mount with 1,000 files leaves it so.
+TEST_F(MountTreeTest, ReadMountTreeLoadsNoFileElement) {
+  const auto root  = MountRoot();
+  const auto day1  = AddFolder(root, L"Day1", kMount);
+  const auto day2  = AddFolder(root, L"Day2", kMount);
+  const auto first = AddFiles(L"d1_", 600, day1, kMount);
+  const auto other = AddFiles(L"d2_", 400, day2, kMount);
+  Reopen();
+  // The library root, the mount root, Day1, and Day2.
+  ASSERT_EQ(CachedCount(), 4u);
+
+  const auto tree = sleeve_->ReadMountTree(root, kMount);
+  EXPECT_EQ(tree.folders, (std::vector<MountTreeFolder>{{L"Day1", day1}, {L"Day2", day2}}));
+  ASSERT_EQ(tree.home_folders.size(), 1000u);
+  EXPECT_EQ(tree.home_folders.at(first.front()), std::vector<sl_element_id_t>{day1});
+  EXPECT_EQ(tree.home_folders.at(other.back()), std::vector<sl_element_id_t>{day2});
+  EXPECT_EQ(CachedCount(), 4u);
+  EXPECT_EQ(sleeve_->ReadMountFolders(root, kMount), tree.folders);
+  EXPECT_EQ(CachedCount(), 4u);
+}
+
+// Sleeve Node Cache Plan SN5: inside a write, the tree read applies the pending links and
+// unlinks of the mount folders and decides a cached file from memory.
+TEST_F(MountTreeTest, ReadMountTreeAppliesThePendingChangesOfTheWrite) {
+  const auto root     = MountRoot();
+  const auto day1     = AddFolder(root, L"Day1", kMount);
+  const auto kept     = AddFile(L"kept.jpg", day1, kMount);
+  const auto unlinked = AddFile(L"unlinked.jpg", day1, kMount);
+  const auto deleted  = AddFile(L"deleted.jpg", day1, kMount);
+  const auto adopted  = AddFile(L"adopted.jpg", day1, std::nullopt);
+  const auto released = AddFile(L"released.jpg", root, kMount);
+  Reopen();
+
+  sl_element_id_t created = 0;
+  const auto      sync    = sleeve_->Write<void>([&](FileSystem& fs) {
+    auto file       = fs.CreateFileInLibrary(L"new.jpg");
+    file->mount_id_ = kMount;
+    fs.LinkFileToFolder(file->element_id_, root);
+    created = file->element_id_;
+    fs.UnlinkFileFromFolder(unlinked, day1);
+    fs.DeleteFileEverywhere(deleted);
+    auto adopted_file       = fs.Get(adopted);
+    adopted_file->mount_id_ = kMount;
+    adopted_file->MarkModified();
+    auto released_file = fs.Get(released);
+    released_file->mount_id_.reset();
+    released_file->MarkModified();
+
+    const auto tree = ReadMountTree(fs, root, kMount);
+    EXPECT_EQ(tree.home_folders.size(), 3u);
+    EXPECT_EQ(tree.home_folders.at(kept), std::vector<sl_element_id_t>{day1});
+    EXPECT_EQ(tree.home_folders.at(adopted), std::vector<sl_element_id_t>{day1});
+    EXPECT_EQ(tree.home_folders.at(created), std::vector<sl_element_id_t>{root});
+    EXPECT_FALSE(tree.home_folders.contains(unlinked));
+    EXPECT_FALSE(tree.home_folders.contains(deleted));
+    EXPECT_FALSE(tree.home_folders.contains(released));
+  });
+  EXPECT_TRUE(sync.success_) << sync.message_;
+}
+
+// Sleeve Node Cache Plan SN5: a placement in a mount with 10,000 files loads the placed file
+// only, and the unlink from its old home folder needs no other element.
+TEST_F(MountTreeTest, PlacementOfOneFileLoadsOneFileElement) {
+  const auto root  = MountRoot();
+  const auto day1  = AddFolder(root, L"Day1", kMount);
+  const auto day2  = AddFolder(root, L"Day2", kMount);
+  const auto files = AddFiles(L"img_", 10'000, day1, kMount);
+  Reopen();
+  ASSERT_EQ(CachedCount(), 4u);
+
+  const auto       moved = files[1234];
+  MountTreeChanges changes{.mount_id = kMount, .root_folder_id = root};
+  changes.placements = {{moved, L"Day2", L"moved.jpg"}};
+  const auto sync    = sleeve_->ApplyMountTreeChanges(changes);
+  ASSERT_TRUE(sync.success_) << sync.message_;
+
+  // The four folders and the placed file.
+  EXPECT_EQ(CachedCount(), 5u);
+  EXPECT_TRUE(IsCached(moved));
+  Reopen();
+  const auto tree = sleeve_->ReadMountTree(root, kMount);
+  EXPECT_EQ(tree.home_folders.size(), 10'000u);
+  EXPECT_EQ(tree.home_folders.at(moved), std::vector<sl_element_id_t>{day2});
+  EXPECT_EQ(tree.home_folders.at(files.front()), std::vector<sl_element_id_t>{day1});
+  EXPECT_EQ(Element(moved)->element_name_, L"moved.jpg");
+}
+
+// Sleeve Node Cache Plan SN5: a removed folder gives its files to its parent with no file element
+// load, and a file that a placement moved out of it stays in its new folder.
+TEST_F(MountTreeTest, RemovedFolderMovesItsFilesWithNoFileElementLoad) {
+  const auto root    = MountRoot();
+  const auto day1    = AddFolder(root, L"Day1", kMount);
+  const auto morning = AddFolder(day1, L"Morning", kMount);
+  const auto day2    = AddFolder(root, L"Day2", kMount);
+  const auto files   = AddFiles(L"m_", 1000, morning, kMount);
+  const auto upper   = AddFiles(L"d_", 10, day1, kMount);
+  Reopen();
+
+  const auto       placed = files.front();
+  MountTreeChanges changes{.mount_id = kMount, .root_folder_id = root};
+  changes.placements        = {{placed, L"Day2", L"placed.jpg"}};
+  changes.folders_to_remove = {L"Day1/Morning", L"Day1"};
+  const auto sync           = sleeve_->ApplyMountTreeChanges(changes);
+  ASSERT_TRUE(sync.success_) << sync.message_;
+
+  EXPECT_EQ(CachedOf(files), std::vector<sl_element_id_t>{placed});
+  EXPECT_TRUE(CachedOf(upper).empty());
+  Reopen();
+  EXPECT_EQ(FolderPaths(root), std::vector<std::wstring>{L"Day2"});
+  const auto tree = sleeve_->ReadMountTree(root, kMount);
+  EXPECT_EQ(tree.home_folders.size(), 1010u);
+  EXPECT_EQ(tree.home_folders.at(placed), std::vector<sl_element_id_t>{day2});
+  EXPECT_EQ(tree.home_folders.at(files.back()), std::vector<sl_element_id_t>{root});
+  EXPECT_EQ(tree.home_folders.at(upper.front()), std::vector<sl_element_id_t>{root});
+  EXPECT_EQ(
+      sleeve_->Read<std::size_t>([root](FileSystem& fs) { return fs.ListFileIds(root).size(); }),
+      1009u);
+}
+
 TEST_F(MountTreeTest, AppliedChangesAddPlaceAndRemoveFoldersAndSurviveReopen) {
   const auto root       = MountRoot();
   const auto day1       = AddFolder(root, L"Day1", kMount);
@@ -207,7 +391,9 @@ TEST_F(MountTreeTest, AppliedChangesAddPlaceAndRemoveFoldersAndSurviveReopen) {
   EXPECT_THROW(Element(day1), std::exception);
 }
 
-TEST_F(MountTreeTest, PlacedFileTakesAFreeNameWhenTheLibraryHoldsItsName) {
+// Sleeve Node Cache Plan SN4: a file name is a label, so a placed file takes the name of its file
+// on the disk when another photo of the library holds it.
+TEST_F(MountTreeTest, PlacedFileTakesItsDiskNameWhenTheLibraryHoldsIt) {
   const auto       root     = MountRoot();
   const auto       day2     = AddFolder(root, L"Day2", kMount);
   const auto       ordinary = AddFile(L"a.jpg", 0, std::nullopt);
@@ -218,34 +404,25 @@ TEST_F(MountTreeTest, PlacedFileTakesAFreeNameWhenTheLibraryHoldsItsName) {
   ASSERT_TRUE(sleeve_->ApplyMountTreeChanges(changes).success_);
   Reopen();
 
-  EXPECT_EQ(Element(mounted)->element_name_, L"a.jpg@");
+  EXPECT_EQ(Element(mounted)->element_name_, L"a.jpg");
   EXPECT_EQ(Element(ordinary)->element_name_, L"a.jpg");
-  EXPECT_EQ(Children(day2), (std::map<std::wstring, sl_element_id_t>{{L"a.jpg@", mounted}}));
+  EXPECT_EQ(Children(day2), (std::map<std::wstring, sl_element_id_t>{{L"a.jpg", mounted}}));
   EXPECT_EQ(HomeFolders(root, mounted), std::vector<sl_element_id_t>{day2});
-
-  // A placement with the name that the file already holds keeps it.
-  changes.placements = {{mounted, L"Day2", L"a.jpg"}};
-  ASSERT_TRUE(sleeve_->ApplyMountTreeChanges(changes).success_);
-  EXPECT_EQ(Element(mounted)->element_name_, L"a.jpg@");
 }
 
-TEST_F(MountTreeTest, NewFolderTakesItsDirectoryNameFromAFileThatHeldIt) {
-  const auto root = MountRoot();
-  AddFile(L"a.jpg", 0, std::nullopt);
-  const auto       mounted = AddFile(L"x.jpg", root, kMount);
-  MountTreeChanges changes{.mount_id = kMount, .root_folder_id = root};
-  changes.placements = {{mounted, L"", L"a.jpg"}};
-  ASSERT_TRUE(sleeve_->ApplyMountTreeChanges(changes).success_);
-  ASSERT_EQ(Element(mounted)->element_name_, L"a.jpg@");
+// Sleeve Node Cache Plan SN4: only folder names are unique among the child folders of a parent,
+// so a new folder takes the name of its directory and a file with that name keeps its name.
+TEST_F(MountTreeTest, NewFolderTakesTheNameOfAFileInItsParent) {
+  const auto       root    = MountRoot();
+  const auto       mounted = AddFile(L"a.jpg", root, kMount);
 
-  // A directory named like the free name of the file.
   MountTreeChanges folder_changes{.mount_id = kMount, .root_folder_id = root};
-  folder_changes.folders_to_add = {L"a.jpg@"};
+  folder_changes.folders_to_add = {L"a.jpg"};
   ASSERT_TRUE(sleeve_->ApplyMountTreeChanges(folder_changes).success_);
   Reopen();
 
-  EXPECT_EQ(FolderPaths(root), std::vector<std::wstring>{L"a.jpg@"});
-  EXPECT_EQ(Element(mounted)->element_name_, L"a.jpg@@");
+  EXPECT_EQ(FolderPaths(root), std::vector<std::wstring>{L"a.jpg"});
+  EXPECT_EQ(Element(mounted)->element_name_, L"a.jpg");
   EXPECT_EQ(HomeFolders(root, mounted), std::vector<sl_element_id_t>{root});
 }
 

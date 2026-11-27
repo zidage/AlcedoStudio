@@ -1041,9 +1041,7 @@ auto AddMountTree(SleeveServiceImpl& sleeve, const std::vector<sl_element_id_t>&
     const auto place = [&fs](sl_element_id_t file_id, sl_element_id_t folder_id) {
       auto file       = fs.Get(file_id);
       file->mount_id_ = kCountMount;
-      if (file->sync_flag_ == SyncFlag::SYNCED) {
-        file->SetSyncFlag(SyncFlag::MODIFIED);
-      }
+      file->MarkModified();
       fs.LinkFileToFolder(file_id, folder_id);
     };
     for (const auto file_id : in_root) {

@@ -11,6 +11,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -34,7 +35,8 @@ FileSystem::FileSystem(std::filesystem::path db_path, Storage& storage_service,
     : id_gen_(start_id),
       db_path_(db_path),
       storage_service_(storage_service),
-      storage_handler_(storage_service_.GetElementStore(), storage_),
+      storage_handler_(storage_service_.GetElementStore(), storage_service_.GetFolderEntryStore(),
+                       nodes_),
       resolver_(storage_handler_, id_gen_) {
   root_ = nullptr;
 }
@@ -50,10 +52,10 @@ auto FileSystem::InitRoot() -> bool {
   } catch (std::exception& e) {
     root = SleeveElementFactory::CreateElement(ElementType::FOLDER, 0, L"");
   }
-  storage_[0] = root;
-  root_       = std::static_pointer_cast<SleeveFolder>(root);
-  if (root_->sync_flag_ == SyncFlag::UNSYNC) {
-    root_->MarkChildrenLoaded();
+  nodes_.Insert(root);
+  root_ = std::static_pointer_cast<SleeveFolder>(root);
+  if (root_->SyncState() != SyncFlag::UNSYNC) {
+    storage_handler_.LoadFolderTree();
   }
   resolver_.SetRoot(root_);
   return true;
@@ -65,28 +67,27 @@ auto FileSystem::Create(std::filesystem::path dest, std::wstring filename, Eleme
   if (dest_element->type_ != ElementType::FOLDER) {
     throw std::runtime_error("Filesystem: Cannot create element under a file");
   }
-  auto       dest_folder                  = std::static_pointer_cast<SleeveFolder>(dest_element);
-  const bool create_album_file_membership = type == ElementType::FILE && !IsRootPath(dest);
-  if (create_album_file_membership) {
-    storage_handler_.EnsureChildrenLoaded(root_);
-  }
-  while (dest_folder->Contains(filename) ||
-         (create_album_file_membership && root_->Contains(filename))) {
-    filename = filename + L"@";
+  auto dest_folder = std::static_pointer_cast<SleeveFolder>(dest_element);
+  if (type == ElementType::FOLDER) {
+    while (dest_folder->Contains(filename)) {
+      filename = filename + L"@";
+    }
   }
   auto new_id      = id_gen_.GenerateID();
   auto new_element = SleeveElementFactory::CreateElement(type, new_id, filename);
-  if (new_element->type_ == ElementType::FOLDER) {
-    std::static_pointer_cast<SleeveFolder>(new_element)->MarkChildrenLoaded();
-  }
-  storage_[new_id] = new_element;
-  if (create_album_file_membership) {
-    root_->AddElementToMap(new_element);
-    dest_folder->AddElementToMap(new_element, true, false);
-  } else {
+  nodes_.Insert(new_element);
+  if (type == ElementType::FOLDER) {
     dest_folder->AddElementToMap(new_element);
+    resolver_.InvalidateAll();
+    return new_element;
   }
-
+  // Each file has one link in the library root (D2), which holds the stored reference count of
+  // the file.
+  new_element->IncrementRefCount();
+  root_->RecordFileLinked(new_id);
+  if (dest_folder != root_) {
+    dest_folder->RecordFileLinked(new_id);
+  }
   return new_element;
 }
 
@@ -96,51 +97,20 @@ auto FileSystem::CreateFileInLibrary(file_name_t name) -> std::shared_ptr<Sleeve
 }
 
 void FileSystem::LinkFileToFolder(sl_element_id_t file_id, sl_element_id_t folder_id) {
-  auto file = Get(file_id);
-  if (!file || file->type_ != ElementType::FILE || file->sync_flag_ == SyncFlag::DELETED) {
-    throw std::runtime_error("Filesystem: Specified file id is not a live file");
-  }
-
-  auto folder_element = Get(folder_id);
-  if (!folder_element || folder_element->type_ != ElementType::FOLDER ||
-      folder_element->sync_flag_ == SyncFlag::DELETED) {
-    throw std::runtime_error("Filesystem: Specified folder id is not a live folder");
-  }
-
-  auto folder = std::static_pointer_cast<SleeveFolder>(folder_element);
-  storage_handler_.EnsureChildrenLoaded(folder);
-  if (folder->ContainsElementId(file_id)) {
-    return;
-  }
-  if (auto existing = folder->GetElementIdByName(file->element_name_);
-      existing.has_value() && existing.value() != file_id) {
-    throw std::runtime_error("Filesystem: Folder already contains a different element with name");
-  }
-
-  folder->AddElementToMap(file, true, false);
+  LiveFile(file_id);
+  LiveFolder(folder_id)->RecordFileLinked(file_id);
 }
 
 void FileSystem::UnlinkFileFromFolder(sl_element_id_t file_id, sl_element_id_t folder_id) {
   if (folder_id == 0) {
     throw std::runtime_error("Filesystem: Root file removal must use DeleteFileEverywhere");
   }
-
-  auto file = Get(file_id);
-  if (!file || file->type_ != ElementType::FILE || file->sync_flag_ == SyncFlag::DELETED) {
-    throw std::runtime_error("Filesystem: Specified file id is not a live file");
-  }
-
-  auto folder_element = Get(folder_id);
-  if (!folder_element || folder_element->type_ != ElementType::FOLDER ||
-      folder_element->sync_flag_ == SyncFlag::DELETED) {
-    throw std::runtime_error("Filesystem: Specified folder id is not a live folder");
-  }
-
-  auto folder = std::static_pointer_cast<SleeveFolder>(folder_element);
-  storage_handler_.EnsureChildrenLoaded(folder);
-  if (!folder->RemoveElementById(file_id)) {
+  LiveFile(file_id);
+  auto folder = LiveFolder(folder_id);
+  if (!storage_handler_.HeldFiles(*folder, std::span(&file_id, 1)).contains(file_id)) {
     throw std::runtime_error("Filesystem: File is not a member of the folder");
   }
+  folder->RecordFileUnlinked(file_id);
 }
 
 auto FileSystem::UnlinkFilesFromFolder(std::span<const sl_element_id_t> file_ids,
@@ -149,78 +119,46 @@ auto FileSystem::UnlinkFilesFromFolder(std::span<const sl_element_id_t> file_ids
   if (folder_id == 0) {
     throw std::runtime_error("Filesystem: Root file removal must use DeleteFilesEverywhere");
   }
-
-  auto folder_element = Get(folder_id);
-  if (!folder_element || folder_element->type_ != ElementType::FOLDER ||
-      folder_element->sync_flag_ == SyncFlag::DELETED) {
-    throw std::runtime_error("Filesystem: Specified folder id is not a live folder");
-  }
-
-  auto folder = std::static_pointer_cast<SleeveFolder>(folder_element);
-  storage_handler_.EnsureChildrenLoaded(folder);
-
-  std::vector<sl_element_id_t> removed_ids;
-  removed_ids.reserve(file_ids.size());
-  std::unordered_set<sl_element_id_t> seen;
-  seen.reserve(file_ids.size() * 2 + 1);
-
+  auto                                folder = LiveFolder(folder_id);
+  // One read for the batch, before any change: a failed read changes nothing. The read gives
+  // only live files, so no file element loads.
+  const auto                          held   = storage_handler_.HeldFiles(*folder, file_ids);
+  std::vector<sl_element_id_t>        removed_ids;
+  std::unordered_set<sl_element_id_t> removed;
   for (const auto file_id : file_ids) {
-    if (file_id == 0 || !seen.insert(file_id).second) {
-      continue;
-    }
-    std::shared_ptr<SleeveElement> file;
-    try {
-      file = Get(file_id);
-    } catch (...) {
-      continue;
-    }
-    if (!file || file->type_ != ElementType::FILE || file->sync_flag_ == SyncFlag::DELETED) {
-      continue;
-    }
-    if (folder->RemoveElementById(file_id)) {
+    if (held.contains(file_id) && removed.insert(file_id).second) {
+      folder->RecordFileUnlinked(file_id);
       removed_ids.push_back(file_id);
     }
   }
   return removed_ids;
 }
 
+auto FileSystem::LinkFilesToFolder(std::span<const sl_element_id_t> file_ids,
+                                   sl_element_id_t folder_id) -> std::vector<sl_element_id_t> {
+  auto       folder     = LiveFolder(folder_id);
+  const auto linked_ids = storage_handler_.LiveFileIds(*root_, file_ids);
+  for (const auto file_id : linked_ids) {
+    folder->RecordFileLinked(file_id);
+  }
+  return linked_ids;
+}
+
 auto FileSystem::DuplicateFileToFolder(sl_element_id_t file_id, sl_element_id_t folder_id)
     -> std::shared_ptr<SleeveFile> {
-  auto source = Get(file_id);
-  if (!source || source->type_ != ElementType::FILE || source->sync_flag_ == SyncFlag::DELETED) {
-    throw std::runtime_error("Filesystem: Specified file id is not a live file");
-  }
+  const auto source_file = std::static_pointer_cast<SleeveFile>(LiveFile(file_id));
+  auto       folder      = LiveFolder(folder_id);
 
-  auto folder_element = Get(folder_id);
-  if (!folder_element || folder_element->type_ != ElementType::FOLDER ||
-      folder_element->sync_flag_ == SyncFlag::DELETED) {
-    throw std::runtime_error("Filesystem: Specified folder id is not a live folder");
-  }
-
-  auto folder = std::static_pointer_cast<SleeveFolder>(folder_element);
-  storage_handler_.EnsureChildrenLoaded(folder);
-  if (folder_id != 0) {
-    storage_handler_.EnsureChildrenLoaded(root_);
-  }
-
-  auto source_file = std::static_pointer_cast<SleeveFile>(source);
-
-  auto duplicate_name = source->element_name_;
-  while (folder->Contains(duplicate_name) || (folder_id != 0 && root_->Contains(duplicate_name))) {
-    duplicate_name += L"@";
-  }
-
-  auto duplicated       = std::static_pointer_cast<SleeveFile>(source_file->Copy(id_gen_.GenerateID()));
-  duplicated->element_name_ = duplicate_name;
+  auto duplicated = std::static_pointer_cast<SleeveFile>(source_file->Copy(id_gen_.GenerateID()));
   duplicated->image_id_ = source_file->image_id_;
   // The duplicate is a new photo that no directory holds, so it is an ordinary element.
   duplicated->mount_id_.reset();
-  storage_[duplicated->element_id_] = duplicated;
-  if (folder_id == 0) {
-    folder->AddElementToMap(duplicated);
-  } else {
-    root_->AddElementToMap(duplicated);
-    folder->AddElementToMap(duplicated, true, false);
+  // The root link holds the stored reference count of the file, as in Create.
+  duplicated->IncrementRefCount();
+  nodes_.Insert(duplicated);
+  root_->RecordFileLinked(duplicated->element_id_);
+  if (folder != root_) {
+    folder->RecordFileLinked(duplicated->element_id_);
   }
   return duplicated;
 }
@@ -229,23 +167,11 @@ void FileSystem::DeleteFileEverywhere(sl_element_id_t file_id) {
   if (file_id == 0) {
     throw std::runtime_error("Filesystem: root cannot be deleted");
   }
+  auto                                      file = LiveFile(file_id);
 
-  auto file = Get(file_id);
-  if (!file || file->type_ != ElementType::FILE || file->sync_flag_ == SyncFlag::DELETED) {
-    throw std::runtime_error("Filesystem: Specified file id is not a live file");
-  }
-
-  for (auto& [_, element] : storage_) {
-    if (!element || element->type_ != ElementType::FOLDER ||
-        element->sync_flag_ == SyncFlag::DELETED) {
-      continue;
-    }
-    auto folder = std::static_pointer_cast<SleeveFolder>(element);
-    if (folder->ChildrenLoaded()) {
-      folder->RemoveElementById(file_id);
-    }
-  }
-
+  // The delete of the element removes every row of the file, so no folder keeps a pending link.
+  const std::unordered_set<sl_element_id_t> deleted{file_id};
+  nodes_.ForEachFolder([&deleted](SleeveFolder& folder) { folder.DropPendingChanges(deleted); });
   file->SetSyncFlag(SyncFlag::DELETED);
 }
 
@@ -268,7 +194,7 @@ auto FileSystem::DeleteFilesEverywhere(std::span<const sl_element_id_t> file_ids
     } catch (...) {
       continue;
     }
-    if (!file || file->type_ != ElementType::FILE || file->sync_flag_ == SyncFlag::DELETED) {
+    if (!file || file->type_ != ElementType::FILE || !file->IsLive()) {
       continue;
     }
     live_files.push_back(std::move(file));
@@ -277,23 +203,15 @@ auto FileSystem::DeleteFilesEverywhere(std::span<const sl_element_id_t> file_ids
     return deleted_ids;
   }
 
-  // One pass over the folders removes every deleted file. Scanning every element of storage_
-  // once per file made deleting the rejected files of a large import quadratic.
+  // One pass over the folders forgets the pending links of every deleted file. A walk of the
+  // folders once per file made deleting the rejected files of a large import quadratic.
   std::unordered_set<sl_element_id_t> live_file_ids;
   live_file_ids.reserve(live_files.size() * 2 + 1);
   for (const auto& file : live_files) {
     live_file_ids.insert(file->element_id_);
   }
-  for (auto& [_, element] : storage_) {
-    if (!element || element->type_ != ElementType::FOLDER ||
-        element->sync_flag_ == SyncFlag::DELETED) {
-      continue;
-    }
-    auto folder = std::static_pointer_cast<SleeveFolder>(element);
-    if (folder->ChildrenLoaded()) {
-      folder->RemoveElementsById(live_file_ids);
-    }
-  }
+  nodes_.ForEachFolder(
+      [&live_file_ids](SleeveFolder& folder) { folder.DropPendingChanges(live_file_ids); });
   for (const auto& file : live_files) {
     file->SetSyncFlag(SyncFlag::DELETED);
     deleted_ids.push_back(file->element_id_);
@@ -313,39 +231,32 @@ auto FileSystem::Get(std::filesystem::path target, bool write) -> std::shared_pt
   return resolver_.Resolve(target);
 }
 
-auto FileSystem::ListFolderContent(const std::filesystem::path& folder_path, bool write)
-    -> std::vector<sl_element_id_t> {
-  std::shared_ptr<SleeveElement> folder_element;
-  if (write) {
-    folder_element = resolver_.ResolveForWrite(folder_path);
-  } else {
-    folder_element = resolver_.Resolve(folder_path);
-  }
-
-  if (!folder_element || folder_element->type_ != ElementType::FOLDER) {
-    throw std::runtime_error("Filesystem: Specified path is not a folder");
-  }
-
-  auto folder = std::static_pointer_cast<SleeveFolder>(folder_element);
-  storage_handler_.EnsureChildrenLoaded(folder);
-  const auto& elements = folder->ListElements();
-  return std::vector<sl_element_id_t>(elements.begin(), elements.end());
+auto FileSystem::ListFolderContent(sl_element_id_t folder_id) -> std::vector<sl_element_id_t> {
+  const auto  folder   = LiveFolder(folder_id);
+  const auto& children = folder->ListElements();
+  auto        members  = std::vector<sl_element_id_t>(children.begin(), children.end());
+  const auto  file_ids = storage_handler_.FileIds(*folder);
+  members.insert(members.end(), file_ids.begin(), file_ids.end());
+  return members;
 }
 
-auto FileSystem::ListFolderContent(sl_element_id_t folder_id) -> std::vector<sl_element_id_t> {
-  auto folder_element = Get(folder_id);
-  if (!folder_element || folder_element->type_ != ElementType::FOLDER) {
-    throw std::runtime_error("Filesystem: Specified id is not a folder");
-  }
+auto FileSystem::ListFileIds(sl_element_id_t folder_id) -> std::vector<sl_element_id_t> {
+  return storage_handler_.FileIds(*LiveFolder(folder_id));
+}
 
-  auto folder = std::static_pointer_cast<SleeveFolder>(folder_element);
-  storage_handler_.EnsureChildrenLoaded(folder);
-  const auto& elements = folder->ListElements();
-  return std::vector<sl_element_id_t>(elements.begin(), elements.end());
+auto FileSystem::ListMountFileLinks(mount_id_t                       mount_id,
+                                    std::span<const sl_element_id_t> folder_ids)
+    -> std::vector<FileLink> {
+  std::vector<std::shared_ptr<SleeveFolder>> folders;
+  folders.reserve(folder_ids.size());
+  for (const auto folder_id : folder_ids) {
+    folders.push_back(LiveFolder(folder_id));
+  }
+  return storage_handler_.MountFileLinks(mount_id, folders);
 }
 
 void FileSystem::Delete(std::filesystem::path target) {
-  if (!target.has_parent_path()) {
+  if (!target.has_parent_path() || IsRootPath(target)) {
     throw std::runtime_error("Filesystem: root cannot be deleted");
   }
   auto parent           = target.parent_path();
@@ -356,47 +267,23 @@ void FileSystem::Delete(std::filesystem::path target) {
   auto parent_node    = std::static_pointer_cast<SleeveFolder>(resolver_.Resolve(parent));
   auto delete_node_id = parent_node->GetElementIdByName(delete_node_name.wstring());
   auto delete_node    = storage_handler_.GetElement(delete_node_id.value());
-  if (delete_node->type_ == ElementType::FILE) {
-    if (IsRootPath(parent)) {
-      DeleteFileEverywhere(delete_node->element_id_);
-    } else {
-      UnlinkFileFromFolder(delete_node->element_id_, parent_node->element_id_);
-    }
-    resolver_.Invalidate(target);
-    return;
-  }
 
   // Now re-acquire parent_node using write method for folder-tree mutation.
   auto parent_write_node =
       std::static_pointer_cast<SleeveFolder>(resolver_.ResolveForWrite(parent));
   delete_node->DecrementRefCount();
 
-  if (delete_node->ref_count_ <= 0) {
-    // Mark the node as deleted in storage handler
-    // Album membership does not own files. Removing a folder only decrements nested folder
-    // identities that participate in folder-tree CoW; file children remain live library files.
-    if (delete_node->type_ == ElementType::FOLDER) {
-      auto delete_folder = std::static_pointer_cast<SleeveFolder>(delete_node);
-      storage_handler_.EnsureChildrenLoaded(delete_folder);
-      auto& children = delete_folder->ListElements();
-      for (auto& child_id : children) {
-        auto child = storage_handler_.GetElement(child_id);
-        if (!child || child->sync_flag_ == SyncFlag::DELETED || child->type_ != ElementType::FOLDER) {
-          continue;
-        }
-        child->DecrementRefCount();
-        if (child->ref_count_ <= 0) {
-          // Recursively decrement
-          std::filesystem::path child_path =
-              target / child->element_name_;  // Construct child's path for resolver
-          Delete(child_path);
-        }
-      }
-    }
+  // Album membership does not own files. Removing a folder only decrements nested folder
+  // identities that participate in folder-tree CoW; file children remain live library files.
+  // The release goes by id, as in Delete(sl_element_id_t): the path of a child passes through the
+  // folder that is now deleted, so it does not resolve.
+  if (delete_node->ref_count_ <= 0 && delete_node->type_ == ElementType::FOLDER) {
+    ReleaseChildFolders(std::static_pointer_cast<SleeveFolder>(delete_node));
   }
 
   parent_write_node->RemoveNameFromMap(delete_node_name.wstring());
-  resolver_.Invalidate(target);
+  // The records of the paths under the target name deleted folders too.
+  resolver_.InvalidateAll();
 }
 
 void FileSystem::Delete(sl_element_id_t target_id) {
@@ -405,7 +292,7 @@ void FileSystem::Delete(sl_element_id_t target_id) {
   }
 
   auto delete_node = Get(target_id);
-  if (!delete_node || delete_node->sync_flag_ == SyncFlag::DELETED) {
+  if (!delete_node || !delete_node->IsLive()) {
     throw std::runtime_error("Filesystem: Deleting node does not exist");
   }
   if (delete_node->type_ == ElementType::FILE) {
@@ -416,11 +303,10 @@ void FileSystem::Delete(sl_element_id_t target_id) {
   const auto remove_from_folder = [this, target_id, &delete_node](
                                       const std::shared_ptr<SleeveFolder>& folder,
                                       const auto&                          self) -> bool {
-    storage_handler_.EnsureChildrenLoaded(folder);
     const auto children = folder->ListElements();
     for (const auto child_id : children) {
       auto child = storage_handler_.GetElement(child_id);
-      if (!child || child->sync_flag_ == SyncFlag::DELETED) {
+      if (!child || !child->IsLive()) {
         continue;
       }
       if (child_id == target_id) {
@@ -442,14 +328,14 @@ void FileSystem::Delete(sl_element_id_t target_id) {
   if (!remove_from_folder(root_, remove_from_folder)) {
     throw std::runtime_error("Filesystem: Deleting node does not exist");
   }
+  resolver_.InvalidateAll();
 }
 
 void FileSystem::ReleaseChildFolders(const std::shared_ptr<SleeveFolder>& folder) {
-  storage_handler_.EnsureChildrenLoaded(folder);
   const auto children = folder->ListElements();
   for (const auto child_id : children) {
     auto child = storage_handler_.GetElement(child_id);
-    if (!child || child->sync_flag_ == SyncFlag::DELETED || child->type_ != ElementType::FOLDER) {
+    if (!child || !child->IsLive() || child->type_ != ElementType::FOLDER) {
       continue;
     }
     child->DecrementRefCount();
@@ -461,13 +347,18 @@ void FileSystem::ReleaseChildFolders(const std::shared_ptr<SleeveFolder>& folder
 
 auto FileSystem::LiveFolder(sl_element_id_t folder_id) -> std::shared_ptr<SleeveFolder> {
   auto element = Get(folder_id);
-  if (!element || element->type_ != ElementType::FOLDER ||
-      element->sync_flag_ == SyncFlag::DELETED) {
+  if (!element || element->type_ != ElementType::FOLDER || !element->IsLive()) {
     throw std::runtime_error("Filesystem: Specified folder id is not a live folder");
   }
-  auto folder = std::static_pointer_cast<SleeveFolder>(element);
-  storage_handler_.EnsureChildrenLoaded(folder);
-  return folder;
+  return std::static_pointer_cast<SleeveFolder>(element);
+}
+
+auto FileSystem::LiveFile(sl_element_id_t file_id) -> std::shared_ptr<SleeveElement> {
+  auto element = Get(file_id);
+  if (!element || element->type_ != ElementType::FILE || !element->IsLive()) {
+    throw std::runtime_error("Filesystem: Specified file id is not a live file");
+  }
+  return element;
 }
 
 auto FileSystem::CreateFolderIn(sl_element_id_t parent_id, const file_name_t& name)
@@ -482,78 +373,23 @@ auto FileSystem::CreateFolderIn(sl_element_id_t parent_id, const file_name_t& na
   const auto new_id = id_gen_.GenerateID();
   auto       folder = std::static_pointer_cast<SleeveFolder>(
       SleeveElementFactory::CreateElement(ElementType::FOLDER, new_id, name));
-  folder->MarkChildrenLoaded();
-  storage_[new_id] = folder;
+  nodes_.Insert(folder);
   parent->AddElementToMap(folder);
   resolver_.InvalidateAll();
   return folder;
 }
 
-auto FileSystem::RenameFile(sl_element_id_t file_id, const file_name_t& base_name,
-                            sl_element_id_t folder_id) -> file_name_t {
-  if (base_name.empty()) {
+void FileSystem::RenameFile(sl_element_id_t file_id, const file_name_t& name) {
+  if (name.empty()) {
     throw std::runtime_error("Filesystem: file name cannot be empty");
   }
-  auto file = Get(file_id);
-  if (!file || file->type_ != ElementType::FILE || file->sync_flag_ == SyncFlag::DELETED) {
-    throw std::runtime_error("Filesystem: Specified file id is not a live file");
-  }
-  auto folder = LiveFolder(folder_id);
-  storage_handler_.EnsureChildrenLoaded(root_);
-  // The file already holds the name in the root and in each folder that holds it, so only the
-  // target folder can hold another element with it. A file that moves keeps its name in most
-  // scans (a renamed directory), and this check needs no walk over the loaded folders.
-  if (file->element_name_ == base_name) {
-    const auto id = folder->GetElementIdByName(base_name);
-    if (!id.has_value() || *id == file_id) {
-      return base_name;
-    }
-  }
-
-  // The loaded folders that hold the file keep it in their name maps. A folder that is not
-  // loaded reads the name from the element when it loads.
-  std::vector<std::shared_ptr<SleeveFolder>> holders;
-  for (auto& [_, element] : storage_) {
-    if (!element || element->type_ != ElementType::FOLDER ||
-        element->sync_flag_ == SyncFlag::DELETED) {
-      continue;
-    }
-    auto holder = std::static_pointer_cast<SleeveFolder>(element);
-    if (holder->ChildrenLoaded() && holder->ContainsElementId(file_id)) {
-      holders.push_back(std::move(holder));
-    }
-  }
-  const auto taken = [&](const file_name_t& name) {
-    const auto held_by_other = [&](const SleeveFolder& candidate) {
-      const auto id = candidate.GetElementIdByName(name);
-      return id.has_value() && *id != file_id;
-    };
-    return held_by_other(*root_) || held_by_other(*folder) ||
-           std::any_of(holders.begin(), holders.end(),
-                       [&](const auto& holder) { return held_by_other(*holder); });
-  };
-  file_name_t name = base_name;
-  while (taken(name)) {
-    name += L"@";
-  }
-  if (name == file->element_name_) {
-    return name;
-  }
-
-  for (auto& holder : holders) {
-    holder->RemoveNameFromMap(file->element_name_);
+  auto file = LiveFile(file_id);
+  if (file->element_name_ == name) {
+    return;
   }
   file->element_name_ = name;
-  for (auto& holder : holders) {
-    // The remove and the add of one id cancel out in the content change sets.
-    holder->AddElementToMap(file, true, false);
-  }
   file->SetLastModifiedTime();
-  if (file->sync_flag_ == SyncFlag::SYNCED) {
-    file->SetSyncFlag(SyncFlag::MODIFIED);
-  }
-  resolver_.InvalidateAll();
-  return name;
+  file->MarkModified();
 }
 
 void FileSystem::RemoveFolderFrom(sl_element_id_t parent_id, sl_element_id_t folder_id) {
@@ -561,7 +397,7 @@ void FileSystem::RemoveFolderFrom(sl_element_id_t parent_id, sl_element_id_t fol
     throw std::runtime_error("Filesystem: root cannot be deleted");
   }
   auto parent = LiveFolder(parent_id);
-  if (!parent->ContainsElementId(folder_id)) {
+  if (!parent->HoldsChildFolder(folder_id)) {
     throw std::runtime_error("Filesystem: Folder is not a member of the parent folder");
   }
   auto folder = LiveFolder(folder_id);
@@ -600,9 +436,7 @@ void FileSystem::RenameFolder(const std::filesystem::path& target, const file_na
   folder->element_name_ = new_name;
   parent->AddElementToMap(folder, true, false);
   folder->SetLastModifiedTime();
-  if (folder->sync_flag_ == SyncFlag::SYNCED) {
-    folder->SetSyncFlag(SyncFlag::MODIFIED);
-  }
+  folder->MarkModified();
   resolver_.InvalidateAll();
 }
 
@@ -632,7 +466,6 @@ void FileSystem::MoveFolder(const std::filesystem::path& target,
       std::static_pointer_cast<SleeveFolder>(resolver_.ResolveForWrite(source.parent_path()));
   auto folder = resolver_.ResolveForWrite(source);
   auto dest   = std::static_pointer_cast<SleeveFolder>(resolver_.ResolveForWrite(destination));
-  storage_handler_.EnsureChildrenLoaded(dest);
   if (dest->Contains(folder->element_name_)) {
     throw std::runtime_error("Filesystem: Destination folder already contains an element with name");
   }
@@ -653,12 +486,6 @@ void FileSystem::Copy(std::filesystem::path from, std::filesystem::path dest) {
   }
 
   auto from_node = resolver_.Resolve(from);
-  if (from_node->type_ == ElementType::FILE) {
-    auto dest_node = std::static_pointer_cast<SleeveFolder>(resolver_.Resolve(dest));
-    LinkFileToFolder(from_node->element_id_, dest_node->element_id_);
-    return;
-  }
-
   auto dest_node = std::static_pointer_cast<SleeveFolder>(resolver_.ResolveForWrite(dest));
   dest_node->AddElementToMap(from_node);
 }
@@ -710,46 +537,25 @@ auto FileSystem::ApplyFilterToFolder(const std::filesystem::path&       folder_p
   return result_elements;
 }
 
-auto FileSystem::GetModifiedElements() -> std::vector<std::shared_ptr<SleeveElement>> {
-  std::vector<std::shared_ptr<SleeveElement>> modified_elements;
-  for (auto& pair : storage_) {
-    auto element = pair.second;
-    if (element->sync_flag_ == SyncFlag::MODIFIED) {
-      modified_elements.push_back(element);
+void FileSystem::MarkWritten(std::span<const std::shared_ptr<SleeveElement>> written) {
+  for (const auto& element : written) {
+    if (!element->IsLive()) {
+      nodes_.Erase(element->element_id_);
+      continue;
     }
-  }
-  return modified_elements;
-}
-
-auto FileSystem::GetUnsyncedElements() -> std::vector<std::shared_ptr<SleeveElement>> {
-  std::vector<std::shared_ptr<SleeveElement>> unsynced_elements;
-  for (auto& pair : storage_) {
-    auto element = pair.second;
-    if (element->sync_flag_ == SyncFlag::UNSYNC) {
-      unsynced_elements.push_back(element);
+    if (element->type_ == ElementType::FOLDER) {
+      std::static_pointer_cast<SleeveFolder>(element)->MarkContentSynced();
     }
+    element->SetSyncFlag(SyncFlag::SYNCED);
   }
-  return unsynced_elements;
-}
-
-auto FileSystem::GetDeletedElements() -> std::vector<std::shared_ptr<SleeveElement>> {
-  std::vector<std::shared_ptr<SleeveElement>> deleted_elements;
-  for (auto& pair : storage_) {
-    auto element = pair.second;
-    if (element->sync_flag_ == SyncFlag::DELETED) {
-      deleted_elements.push_back(element);
-    }
-  }
-  return deleted_elements;
 }
 
 void FileSystem::SyncToDB() {
   auto& element_ctrl = storage_service_.GetElementStore();
-  for (auto& pair : storage_) {
-    auto element = pair.second;
-    if (element->sync_flag_ == SyncFlag::UNSYNC) {
+  for (const auto& element : nodes_.DirtyElements()) {
+    if (element->SyncState() == SyncFlag::UNSYNC) {
       element_ctrl.AddElement(element);
-    } else if (element->sync_flag_ == SyncFlag::MODIFIED) {
+    } else if (element->SyncState() == SyncFlag::MODIFIED) {
       element_ctrl.UpdateElement(element);
     }
   }

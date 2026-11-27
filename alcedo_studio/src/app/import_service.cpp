@@ -4,6 +4,7 @@
 
 #include "app/import_service.hpp"
 
+#include <QScopeGuard>
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -23,7 +24,6 @@
 #include <vector>
 
 #include "app/pipeline_service.hpp"
-#include "app/sleeve_error.hpp"
 #include "decoders/processor/raw_color_context.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "image/image.hpp"
@@ -31,17 +31,8 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filesystem.hpp"
 #include "sleeve/storage.hpp"
-#include "storage/store/mount/mount_store.hpp"
-#include "type/mount_records.hpp"
-#include "utils/file/mount_directory_listing.hpp"
-#include "utils/file/source_file_fingerprint.hpp"
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
+#include "type/source_file_record.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo {
 namespace {
@@ -49,97 +40,6 @@ namespace {
 auto IsRootImportDestination(const image_path_t& dest) -> bool {
   const auto normalized = dest.lexically_normal();
   return normalized.empty() || normalized == image_path_t{L"/"} || normalized == image_path_t{L"."};
-}
-
-auto SourcePathKey(const image_path_t& path) -> image_path_t::string_type {
-  auto key = std::filesystem::absolute(path).lexically_normal().make_preferred().native();
-#ifdef _WIN32
-  const auto   length        = static_cast<int>(key.size());
-  const auto   folded_length = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, key.data(),
-                                             length, nullptr, 0, nullptr, nullptr, 0);
-  std::wstring folded(folded_length, L'\0');
-  if (folded_length == 0 ||
-      LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, key.data(), length, folded.data(),
-                    folded_length, nullptr, nullptr, 0) == 0) {
-    throw std::system_error(static_cast<int>(GetLastError()), std::system_category(),
-                            "Cannot normalize the import source path");
-  }
-  return folded;
-#else
-  return key;
-#endif
-}
-
-auto MeasureImportSource(const image_path_t& path) -> SourceFileRecord {
-  const auto attributes = ReadSourceFileAttributes(path);
-  if (!attributes) {
-    throw std::runtime_error("Cannot read import source attributes");
-  }
-  const auto fingerprint = ComputeSourceFileFingerprint(path);
-  switch (fingerprint.error) {
-    case SourceFileFingerprintError::kCannotOpen:
-      throw std::runtime_error("Cannot open import source for fingerprinting");
-    case SourceFileFingerprintError::kReadFailed:
-      throw std::runtime_error("Cannot read import source for fingerprinting");
-    case SourceFileFingerprintError::kSizeChangedDuringRead:
-      throw std::runtime_error("Import source size changed during fingerprinting");
-    case SourceFileFingerprintError::kNone:
-      break;
-  }
-  if (attributes != ReadSourceFileAttributes(path)) {
-    throw std::runtime_error("Import source attributes changed during fingerprinting");
-  }
-  SourceFileRecord record;
-  record.byte_size           = attributes->byte_size;
-  record.modified_ns         = attributes->modified_ns;
-  record.fingerprint         = fingerprint.fingerprint.hash;
-  record.fingerprint_version = fingerprint.fingerprint.version;
-  return record;
-}
-
-auto IsSameSource(const SourceFileRecord& existing, const SourceFileRecord& incoming) -> bool {
-  return existing.state == SourceFileState::kPresent && existing.byte_size == incoming.byte_size &&
-         existing.modified_ns == incoming.modified_ns &&
-         existing.fingerprint == incoming.fingerprint &&
-         existing.fingerprint_version == incoming.fingerprint_version;
-}
-
-struct ImportSourceCandidates {
-  std::vector<sl_element_id_t> stored;
-  std::vector<sl_element_id_t> submitted;
-};
-
-auto IsDuplicateSource(const ImportSourceCandidates& candidates, const SourceFileRecord& source,
-                       const MountStore& store, ImportLog& log) -> bool {
-  for (const auto id : candidates.submitted) {
-    if (const auto record = log.FindRecordedSource(id); record && IsSameSource(*record, source)) {
-      return true;
-    }
-  }
-  sl_element_id_t legacy_id  = 0;
-  bool            has_record = false;
-  for (const auto id : candidates.stored) {
-    auto record = log.FindRecordedSource(id);
-    if (!record) {
-      record = store.ReadSourceFile(id);
-    }
-    if (record) {
-      has_record = true;
-      if (IsSameSource(*record, source)) {
-        return true;
-      }
-    } else if (legacy_id == 0) {
-      legacy_id = id;
-    }
-  }
-  // No earlier measurement exists for this legacy entry. Record the source it already references.
-  if (legacy_id != 0 && !has_record) {
-    auto record       = source;
-    record.element_id = legacy_id;
-    log.RecordSource(std::move(record));
-    return true;
-  }
-  return false;
 }
 
 /// Encode the immutable history root of a newly imported image on a private default document.
@@ -240,6 +140,19 @@ void CountFailedFile(ImportProgress& progress, bool raw_extension) {
   }
 }
 
+void ReportImportProgress(const std::shared_ptr<ImportJob>& job, const ImportProgress& progress) {
+  if (!job || !job->on_progress_) {
+    return;
+  }
+  try {
+    job->on_progress_(progress);
+  } catch (const std::exception& error) {
+    ALCEDO_LOG_WARN(Library) << "Import progress callback failed: " << error.what();
+  } catch (...) {
+    ALCEDO_LOG_WARN(Library) << "Import progress callback failed with an unknown error";
+  }
+}
+
 }  // namespace
 
 static void SetImportResult(const std::shared_ptr<ImportJob>& job, const ImportResult& result) {
@@ -276,7 +189,8 @@ static void WriteImportRootBatch(std::vector<ImportRootBatchWriter::PendingRoot>
                                  PipelineMgmtService&                            pipeline_service,
                                  const std::shared_ptr<ImportJob>&               job,
                                  const std::shared_ptr<ImportLog>&               import_log,
-                                 const std::shared_ptr<ImportProgress>&          progress) {
+                                 const std::shared_ptr<ImportProgress>&          progress,
+                                 OrdinaryImportSources*                          sources) {
   if (batch.empty()) {
     return;
   }
@@ -299,10 +213,10 @@ static void WriteImportRootBatch(std::vector<ImportRootBatchWriter::PendingRoot>
 
   for (auto& pending : batch) {
     if (written) {
+      if (pending.source_) {
+        sources->RecordSource(std::move(*pending.source_));
+      }
       if (import_log) {
-        if (pending.source_) {
-          import_log->RecordSource(std::move(*pending.source_));
-        }
         import_log->MarkMetadataSuccess(pending.image_id_);
       }
       progress->metadata_done_.fetch_add(1);
@@ -316,49 +230,44 @@ static void WriteImportRootBatch(std::vector<ImportRootBatchWriter::PendingRoot>
       CountFailedFile(*progress, pending.raw_extension_);
     }
   }
-  if (job && job->on_progress_) {
-    job->on_progress_(*progress);
-  }
   if (job) {
     job->metadata_tasks_finished_.fetch_add(static_cast<uint32_t>(batch.size()));
   }
+  ReportImportProgress(job, *progress);
 }
 
 auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
                                        const image_path_t& dest, const ImportOptions& options,
                                        std::shared_ptr<ImportJob> job)
     -> std::shared_ptr<ImportJob> {
-  // A mounted folder takes new files only from its directory (D7): refuse before any source
-  // file is read.
-  fs_service_->CheckFolderStructureEditable(dest);
+  // Refuse a mounted destination before reading any source.
+  const auto folder_id = IsRootImportDestination(dest)
+                             ? std::optional<sl_element_id_t>{0}
+                             : fs_service_->CheckFolderStructureEditable(dest);
   if (!job) {
     job = std::make_shared<ImportJob>();
   }
+  auto sources =
+      folder_id ? std::make_shared<OrdinaryImportSources>(*fs_service_->GetStorage()) : nullptr;
   StartImport(
       paths,
-      [dest](FileSystem& fs, std::size_t, const file_name_t& file_name,
-             bool create_file) -> std::shared_ptr<SleeveElement> {
-        std::shared_ptr<SleeveElement> target;
-        if (!IsRootImportDestination(dest)) {
-          target = fs.Get(dest, false);
-          if (!target || target->type_ != ElementType::FOLDER) {
-            throw std::runtime_error("ImportService: import target is not a folder");
-          }
-          if (!SleeveServiceImpl::CanEditFolderStructure(*target)) {
-            throw SleeveOperationError(SleeveError::kMountedFolderStructureIsReadOnly,
-                                       "ImportService: import target is a mounted folder");
-          }
-        }
-        if (!create_file) {
+      [folder_id](FileSystem&        fs, std::size_t,
+                  const file_name_t& file_name) -> std::shared_ptr<SleeveElement> {
+        if (!folder_id) {
           return nullptr;
         }
         auto file = fs.CreateFileInLibrary(file_name);
-        if (target) {
-          fs.LinkFileToFolder(file->element_id_, target->element_id_);
+        if (*folder_id != 0) {
+          try {
+            fs.LinkFileToFolder(file->element_id_, *folder_id);
+          } catch (...) {
+            fs.DeleteFileEverywhere(file->element_id_);
+            throw;
+          }
         }
         return file;
       },
-      options, job, true);
+      options, job, std::move(sources));
   return job;
 }
 
@@ -381,9 +290,9 @@ auto ImportServiceImpl::ImportMountedFiles(std::span<const MountFileImportReques
   job->on_finished_ = [&finished](const ImportResult& result) { finished.set_value(result); };
   StartImport(
       paths,
-      [placements = std::move(placements)](FileSystem& fs, std::size_t index,
-                                           const file_name_t& file_name,
-                                           bool) -> std::shared_ptr<SleeveElement> {
+      [placements = std::move(placements)](
+          FileSystem& fs, std::size_t index,
+          const file_name_t& file_name) -> std::shared_ptr<SleeveElement> {
         const auto& request = placements.at(index);
         auto        file    = fs.CreateFileInLibrary(file_name);
         file->mount_id_     = request.mount_id;
@@ -395,7 +304,7 @@ auto ImportServiceImpl::ImportMountedFiles(std::span<const MountFileImportReques
         }
         return file;
       },
-      ImportOptions{}, job, false);
+      ImportOptions{}, job);
   finished_future.wait();
 
   const auto snapshot = job->import_log_->Snapshot();
@@ -429,7 +338,7 @@ auto ImportServiceImpl::ImportMountedFiles(std::span<const MountFileImportReques
 
 void ImportServiceImpl::StartImport(const std::vector<image_path_t>& paths, FilePlacement placement,
                                     ImportOptions options, const std::shared_ptr<ImportJob>& job,
-                                    bool ordinary_import) {
+                                    std::shared_ptr<OrdinaryImportSources> sources) {
   auto import_log = std::make_shared<ImportLog>();
   if (job) {
     job->import_log_ = import_log;
@@ -453,10 +362,11 @@ void ImportServiceImpl::StartImport(const std::vector<image_path_t>& paths, File
   // immutable value until the last of them finishes.
   auto raw_import_look = std::make_shared<const RawImportLook>(raw_import_look_source_->Read());
   submission_thread_.Submit([this, paths, placement = std::move(placement), job, import_log,
-                             progress_ptr, options = std::move(options), ordinary_import,
+                             progress_ptr, options = std::move(options),
+                             sources         = std::move(sources),
                              raw_import_look = std::move(raw_import_look)]() {
-    CreatePlaceholdersAndSubmit(paths, placement, job, import_log, progress_ptr, options,
-                                ordinary_import, raw_import_look);
+    CreatePlaceholdersAndSubmit(paths, placement, job, import_log, progress_ptr, options, sources,
+                                raw_import_look);
   });
 }
 
@@ -464,29 +374,14 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     const std::vector<image_path_t>& paths, const FilePlacement& placement,
     const std::shared_ptr<ImportJob>& job, const std::shared_ptr<ImportLog>& import_log,
     const std::shared_ptr<ImportProgress>& progress_ptr, const ImportOptions& options,
-    bool ordinary_import, const std::shared_ptr<const RawImportLook>& raw_import_look) {
+    const std::shared_ptr<OrdinaryImportSources>& sources,
+    const std::shared_ptr<const RawImportLook>&   raw_import_look) {
   // TODO: Use sleeve service to interact with FS
   // The current implementation is a temporary solution
   auto       root_writer     = std::make_shared<ImportRootBatchWriter>();
-  const auto report_progress = [&job, &progress_ptr]() {
-    if (job && job->on_progress_) {
-      job->on_progress_(*progress_ptr);
-    }
-  };
-  auto&      store           = fs_service_->GetStorage()->GetMountStore();
-  const bool skip_duplicates = ordinary_import && options.skip_duplicates_;
-  std::unordered_map<image_path_t::string_type, ImportSourceCandidates> candidates_by_path;
-  std::exception_ptr                                                    lookup_error;
-  if (skip_duplicates) {
-    try {
-      for (const auto& file : store.ReadImportedFileLocations()) {
-        if (!file.image_path.empty()) {
-          candidates_by_path[SourcePathKey(file.image_path)].stored.push_back(file.element_id);
-        }
-      }
-    } catch (...) {
-      lookup_error = std::current_exception();
-    }
+  const auto report_progress = [&job, &progress_ptr] { ReportImportProgress(job, *progress_ptr); };
+  if (sources && options.skip_duplicates_) {
+    sources->LoadCandidates();
   }
 
   // Files the loop took up: each is counted failed here or handed to a metadata task.
@@ -509,61 +404,73 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     }
     const std::wstring file_name = image_path.filename().wstring();
 
-    std::shared_ptr<SleeveElement> element = nullptr;
-    ImportSourceCandidates*        candidates = nullptr;
-    try {
-      if (lookup_error) {
-        std::rethrow_exception(lookup_error);
+    auto*              candidates = sources ? sources->TrackPath(image_path) : nullptr;
+    if (candidates && !candidates->submitted.empty()) {
+      // Wait for the first occurrence's result. A failed or canceled occurrence cannot match.
+      WriteImportRootBatch(root_writer->Drain(), *pipeline_service_, job, import_log, progress_ptr,
+                           sources.get());
+      if (job && job->IsCancelled()) {
+        --files_reached;
+        break;
       }
-      if (skip_duplicates) {
-        candidates = &candidates_by_path[SourcePathKey(image_path)];
-        if (!candidates->submitted.empty()) {
-          // A failed or canceled occurrence leaves no record and cannot cause a skip.
-          WriteImportRootBatch(root_writer->Drain(), *pipeline_service_, job, import_log,
-                               progress_ptr);
-          if (job && job->IsCancelled()) {
-            --files_reached;
-            break;
-          }
+    }
+    if (candidates && (!candidates->stored.empty() || !candidates->submitted.empty())) {
+      if (auto measured = OrdinaryImportSources::Measure(image_path)) {
+        std::optional<OrdinaryImportSources::Match> match;
+        try {
+          match = sources->FindMatch(*candidates, *measured);
+        } catch (const std::exception& error) {
+          ALCEDO_LOG_WARN(Library)
+              << "Import duplicate check for " << image_path << ": " << error.what();
         }
-        if (!candidates->stored.empty() || !candidates->submitted.empty()) {
-          fs_service_->Read<void>(
-              [&](FileSystem& fs) { placement(fs, file_index, file_name, false); });
-          const auto source = MeasureImportSource(image_path);
-          if (IsDuplicateSource(*candidates, source, store, *import_log)) {
-            progress_ptr->duplicates_.fetch_add(1);
-            if (raw_extension) {
-              progress_ptr->raw_duplicates_.fetch_add(1);
-            }
-            report_progress();
-            continue;
+        if (match) {
+          if (match->needs_measurement) {
+            measured->element_id = match->element_id;
+            sources->RecordSource(std::move(*measured));
           }
+          progress_ptr->duplicates_.fetch_add(1);
+          if (raw_extension) {
+            progress_ptr->raw_duplicates_.fetch_add(1);
+          }
+          report_progress();
+          continue;
         }
       }
-      element = fs_service_->Write_NoSync<std::shared_ptr<SleeveElement>>(
-          [&placement, file_index, &file_name](FileSystem& fs) {
-            return placement(fs, file_index, file_name, true);
-          });
-    } catch (...) {
-      CountFailedFile(*progress_ptr, raw_extension);
-      report_progress();
-      continue;
     }
-    if (!element) {
-      CountFailedFile(*progress_ptr, raw_extension);
-      report_progress();
-      continue;
-    }
-    // Create the corresponding image file
-    auto sleeve_file   = std::static_pointer_cast<SleeveFile>(element);
 
-    // MetadataExtractor sets image_type_ from the file content.
-    auto image_handler = image_pool_service_->CreateAndReturnPinned([&](Image& image) {
+    // MetadataExtractor sets image_type_ from the file content. The image pool owns the new
+    // Image until SyncImports stores it; the metadata task below holds it pinned.
+    auto image_handler           = image_pool_service_->CreateAndReturnPinned([&](Image& image) {
       image.image_path_ = image_path;
       image.image_name_ = file_name;
     });
-
     if (!image_handler) {
+      CountFailedFile(*progress_ptr, raw_extension);
+      report_progress();
+      continue;
+    }
+    const auto      image_id   = image_handler.Get()->image_id_;
+
+    // The file element and its image id are created in one fs_lock_ scope, so a sync on another
+    // thread writes the element with its image id (#1169). The element holds the id only, not
+    // the Image (Sleeve Node Cache Plan, SN7): the node cache can then drop a clean file element.
+    sl_element_id_t element_id = 0;
+    try {
+      element_id = fs_service_->Write_NoSync<sl_element_id_t>(
+          [&placement, file_index, &file_name, image_id](FileSystem& fs) -> sl_element_id_t {
+            const auto element = placement(fs, file_index, file_name);
+            if (!element) {
+              return 0;
+            }
+            std::static_pointer_cast<SleeveFile>(element)->image_id_ = image_id;
+            return element->element_id_;
+          });
+    } catch (...) {
+      element_id = 0;
+    }
+    if (element_id == 0) {
+      // No element refers to the Image: the next SyncWithStorage drops it.
+      image_pool_service_->Remove(image_id);
       CountFailedFile(*progress_ptr, raw_extension);
       report_progress();
       continue;
@@ -571,14 +478,9 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
 
     auto image_handler_ptr =
         std::make_shared<ImagePoolManager::PinnedImageHandle>(std::move(image_handler));
-    auto image_ptr = image_handler_ptr->Get();
-
-    // Link the image to the SleeveFile
-    sleeve_file->SetImage(image_ptr);
     const auto placeholders_created = progress_ptr->placeholders_created_.fetch_add(1) + 1;
     if (import_log) {
-      import_log->AddPlaceholder(image_ptr->image_id_, sleeve_file->element_id_, file_name,
-                                 image_path);
+      import_log->AddPlaceholder(image_id, element_id, file_name, image_path);
     }
 
     if (job) {
@@ -586,7 +488,6 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     }
     root_writer->AddOutstandingEncode();
 
-    const auto element_id       = sleeve_file->element_id_;
     if (candidates) {
       candidates->submitted.push_back(element_id);
     }
@@ -600,7 +501,8 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     // usually finds most tasks still queued: each one checks the job before reading its file.
     thread_pool_.Submit([image_handler_ptr, progress_ptr, job, import_log, element_id,
                          pipeline_service, root_writer, file_categories, raw_extension,
-                         raw_import_look, ordinary_import]() {
+                         raw_import_look, sources]() {
+      const auto finish    = qScopeGuard([&] { root_writer->FinishEncode(); });
       auto image_ptr = image_handler_ptr ? image_handler_ptr->Get() : nullptr;
       std::vector<ImportRootBatchWriter::PendingRoot> full_batch;
       bool                                            encoded     = false;
@@ -618,12 +520,9 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
         try {
           MetadataExtractor::ExtractEXIF_ToImage(image_ptr->image_path_, *image_ptr,
                                                  file_categories);
-          std::optional<SourceFileRecord> source;
-          if (ordinary_import) {
-            source             = MeasureImportSource(image_ptr->image_path_);
-            source->element_id = element_id;
-          }
-          full_batch = root_writer->Add(
+          auto source = sources ? OrdinaryImportSources::Measure(image_ptr->image_path_, element_id)
+                                : std::nullopt;
+          full_batch  = root_writer->Add(
               image_ptr->image_id_, raw_extension,
               EncodeImportedImageRoot(*pipeline_service, element_id, image_ptr, *raw_import_look),
               std::move(source));
@@ -660,15 +559,13 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
         if (canceled) {
           progress_ptr->canceled_.fetch_add(1);
         }
-        if (job && job->on_progress_) {
-          job->on_progress_(*progress_ptr);
-        }
         if (job) {
           job->metadata_tasks_finished_.fetch_add(1);
         }
+        ReportImportProgress(job, *progress_ptr);
       }
-      WriteImportRootBatch(std::move(full_batch), *pipeline_service, job, import_log, progress_ptr);
-      root_writer->FinishEncode();
+      WriteImportRootBatch(std::move(full_batch), *pipeline_service, job, import_log, progress_ptr,
+                           sources.get());
     });
 
     if (placeholders_created % kPlaceholderProgressInterval == 0) {
@@ -691,7 +588,11 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     }
     job->submission_closed_.store(true);
   }
-  WriteImportRootBatch(root_writer->Drain(), *pipeline_service_, job, import_log, progress_ptr);
+  WriteImportRootBatch(root_writer->Drain(), *pipeline_service_, job, import_log, progress_ptr,
+                       sources.get());
+  if (sources) {
+    import_log->SetSourceRecords(sources->TakeSourceRecords());
+  }
   TryFinishImportJob(job, progress_ptr);
 }
 
@@ -722,14 +623,12 @@ void ImportServiceImpl::SyncImports(const ImportLogSnapshot& log_snapshot,
   image_pool_service_->RemoveBatch(failed_image_ids);
   const auto images = image_pool_service_->SyncWithStorage();
   const auto files  = fs_service_->Sync();
-  if (!log_snapshot.source_records_.empty()) {
-    if (!images.failed_images_.empty()) {
-      throw std::runtime_error(images.failed_images_.front().message_);
-    }
-    if (!files.success_) {
-      throw std::runtime_error(files.message_);
-    }
-    fs_service_->GetStorage()->GetMountStore().UpsertSourceFiles(log_snapshot.source_records_);
+  if (!images.failed_images_.empty()) {
+    throw std::runtime_error(images.failed_images_.front().message_);
   }
+  if (!files.success_) {
+    throw std::runtime_error(files.message_);
+  }
+  fs_service_->GetStorage()->GetSourceFileStore().UpsertSourceFiles(log_snapshot.source_records_);
 }
 };  // namespace alcedo

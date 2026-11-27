@@ -5,6 +5,7 @@
 #include "app/album_browse_service.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <mutex>
 #include <stdexcept>
 #include <string_view>
@@ -12,6 +13,7 @@
 #include <utility>
 
 #include "storage/query/filter_compiler.hpp"
+#include "utils/logging/log.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -24,6 +26,15 @@ auto BuildFolderView(const std::filesystem::path&         parent_path,
   out.folder_name_ = folder ? folder->element_name_ : file_name_t{};
   out.folder_path_ = parent_path / out.folder_name_;
   out.mount_id_    = folder ? folder->mount_id_ : std::nullopt;
+  return out;
+}
+
+auto BuildFolderView(const FolderTreeEntry& entry) -> AlbumFolderView {
+  AlbumFolderView out;
+  out.folder_id_   = entry.folder_id_;
+  out.folder_name_ = entry.name_;
+  out.folder_path_ = entry.path_;
+  out.mount_id_    = entry.mount_id_;
   return out;
 }
 
@@ -100,52 +111,39 @@ auto AlbumBrowseService::ListFolders(const std::filesystem::path& folder_path) c
   }
 
   try {
-    const auto entries = sleeve_service_->ListFolderEntries(folder_path);
-    folders.reserve(entries.size());
-    for (const auto& entry : entries) {
-      if (!entry || entry->type_ != ElementType::FOLDER || entry->sync_flag_ == SyncFlag::DELETED) {
-        continue;
-      }
-      auto folder = std::dynamic_pointer_cast<SleeveFolder>(entry);
-      if (!folder) {
-        continue;
-      }
-      folders.push_back(BuildFolderView(folder_path, folder));
+    const auto child_folders = sleeve_service_->ListChildFolders(folder_path);
+    folders.reserve(child_folders.size());
+    for (const auto& entry : child_folders) {
+      folders.push_back(BuildFolderView(entry));
     }
-  } catch (...) {
-    return {};
+  } catch (const std::exception& e) {
+    ALCEDO_LOG_WARN(Library) << "AlbumBrowseService: the folders of "
+                             << conv::ToBytes(folder_path.generic_wstring())
+                             << " did not list: " << e.what();
+    throw;
   }
 
   return folders;
 }
 
-auto AlbumBrowseService::ListFilesInFolder(const std::filesystem::path& folder_path) const
-    -> std::vector<AlbumFileView> {
-  std::vector<AlbumFileView> files;
+auto AlbumBrowseService::ListFolderTree() const -> std::vector<AlbumFolderView> {
+  std::vector<AlbumFolderView> folders;
   if (!sleeve_service_) {
-    return files;
+    return folders;
   }
 
   try {
-    const auto folder    = sleeve_service_->ResolveFolder(folder_path);
-    const auto folder_id = folder ? folder->element_id_ : 0;
-    const auto entries   = sleeve_service_->ListFolderEntries(folder_path);
-    files.reserve(entries.size());
-    for (const auto& entry : entries) {
-      if (!entry || entry->type_ != ElementType::FILE || entry->sync_flag_ == SyncFlag::DELETED) {
-        continue;
-      }
-      auto file = std::dynamic_pointer_cast<SleeveFile>(entry);
-      if (!file || file->image_id_ == 0) {
-        continue;
-      }
-      files.push_back(BuildFileView(folder_path, file, folder_id));
+    const auto tree = sleeve_service_->ListFolderTree();
+    folders.reserve(tree.size());
+    for (const auto& entry : tree) {
+      folders.push_back(BuildFolderView(entry));
     }
-  } catch (...) {
-    return {};
+  } catch (const std::exception& e) {
+    ALCEDO_LOG_WARN(Library) << "AlbumBrowseService: the folder tree did not list: " << e.what();
+    throw;
   }
 
-  return files;
+  return folders;
 }
 
 auto AlbumBrowseService::ListFilesInFolderById(sl_element_id_t folder_id) const
@@ -406,53 +404,6 @@ auto AlbumBrowseService::MoveFolder(const std::filesystem::path& folder_path,
   return out;
 }
 
-auto AlbumBrowseService::DeleteFiles(const std::vector<std::filesystem::path>& file_paths)
-    -> AlbumDeleteResult {
-  AlbumDeleteResult out;
-  if (!sleeve_service_ || file_paths.empty()) {
-    return out;
-  }
-
-  std::unordered_set<std::wstring> seen;
-  seen.reserve(file_paths.size() * 2 + 1);
-
-  for (const auto& path : file_paths) {
-    const auto normalized = path.lexically_normal().wstring();
-    if (normalized.empty() || !seen.insert(normalized).second) {
-      continue;
-    }
-
-    try {
-      const auto file = sleeve_service_->ResolveFile(path);
-      if (!file || file->image_id_ == 0) {
-        out.failed_paths_.push_back(path);
-        continue;
-      }
-
-      const auto parent_folder = sleeve_service_->ResolveFolder(path.parent_path());
-      const auto folder_id     = parent_folder ? parent_folder->element_id_ : 0;
-      const auto view          = BuildFileView(path.parent_path(), file, folder_id);
-      const auto sync          = sleeve_service_->DeletePath(path);
-      if (!sync.success_) {
-        out.failed_paths_.push_back(path);
-        continue;
-      }
-      out.deleted_files_.push_back(view);
-    } catch (const SleeveOperationError& e) {
-      out.refusal_ = e.Code();
-      out.failed_paths_.push_back(path);
-    } catch (...) {
-      out.failed_paths_.push_back(path);
-    }
-  }
-
-  if (filter_service_ && !out.deleted_files_.empty()) {
-    filter_service_->InvalidateResultCache();
-  }
-
-  return out;
-}
-
 auto AlbumBrowseService::DeleteFilesByElementIds(const std::vector<sl_element_id_t>& element_ids)
     -> AlbumDeleteResult {
   AlbumDeleteResult out;
@@ -546,8 +497,7 @@ auto AlbumBrowseService::LinkFilesToFolder(const std::vector<sl_element_id_t>& e
       const auto file = sleeve_service_->Read<std::shared_ptr<SleeveFile>>(
           [element_id](FileSystem& fs) -> std::shared_ptr<SleeveFile> {
             const auto element = fs.Get(element_id);
-            if (!element || element->type_ != ElementType::FILE ||
-                element->sync_flag_ == SyncFlag::DELETED) {
+            if (!element || element->type_ != ElementType::FILE || !element->IsLive()) {
               return nullptr;
             }
             return std::dynamic_pointer_cast<SleeveFile>(element);

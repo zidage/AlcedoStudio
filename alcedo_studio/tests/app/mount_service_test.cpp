@@ -38,6 +38,7 @@
 #include "support/storage_invariants.hpp"
 #include "support/test_temp_directory.hpp"
 #include "type/mount_records.hpp"
+#include "type/source_file_record.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/file/mount_directory_listing.hpp"
 #include "utils/file/volume_identity.hpp"

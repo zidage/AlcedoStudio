@@ -12,6 +12,7 @@
 #include <duckdb.h>
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
@@ -21,6 +22,7 @@
 #include <memory>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -30,12 +32,15 @@
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "app/sleeve_service.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "image/raster_color_description.hpp"
 #include "library_search_test_support.hpp"
+#include "sleeve/sleeve_element/sleeve_element.hpp"
+#include "sleeve/sleeve_filesystem.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
-#include "storage/store/mount/mount_store.hpp"
+#include "storage/store/image/source_file_store.hpp"
 #include "support/non_raw_import_files.hpp"
 #include "support/storage_invariants.hpp"
 #include "support/test_temp_directory.hpp"
@@ -104,6 +109,12 @@ auto RasterFixturePath(const char* name) -> std::filesystem::path {
 
 auto CountRows(ProjectService& project, const std::string& table) -> int64_t {
   return QueryCount(project, "SELECT COUNT(*) FROM " + table);
+}
+
+void ExecuteStorageSql(ProjectService& project, const char* sql) {
+  auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
+  auto lock  = guard.Lock();
+  ASSERT_EQ(duckdb_query(guard.conn_, sql, nullptr), DuckDBSuccess) << sql;
 }
 
 /// FileImage rows whose image_id has no Image row: a library file that cannot display.
@@ -221,7 +232,7 @@ TEST_F(ImportContentClassificationTest, OrdinaryCollectionSkipsRepeatedSourceAcr
     EXPECT_EQ(imported.result_.duplicates_, 1u);
     EXPECT_EQ(imported.result_.failed_, 0u);
     original_id       = ElementOf(imported, "photo.jpg");
-    const auto source = project.GetStorage()->GetMountStore().ReadSourceFile(original_id);
+    const auto source = project.GetStorage()->GetSourceFileStore().ReadSourceFile(original_id);
     ASSERT_TRUE(source.has_value());
     EXPECT_EQ(source->byte_size, std::filesystem::file_size(photo));
     EXPECT_NE(source->fingerprint_version, 0u);
@@ -234,7 +245,7 @@ TEST_F(ImportContentClassificationTest, OrdinaryCollectionSkipsRepeatedSourceAcr
   EXPECT_EQ(repeated.result_.duplicates_, 1u);
   EXPECT_EQ(repeated.result_.failed_, 0u);
   EXPECT_TRUE(repeated.snapshot_.created_.empty());
-  EXPECT_TRUE(reopened.GetStorage()->GetMountStore().ReadSourceFile(original_id));
+  EXPECT_TRUE(reopened.GetStorage()->GetSourceFileStore().ReadSourceFile(original_id));
   EXPECT_EQ(CountRows(reopened, "Image"), 2);
 }
 
@@ -247,7 +258,7 @@ TEST_F(ImportContentClassificationTest, SameSizeAndTimeWithDifferentFingerprintI
   ProjectService project(db_path_, meta_path_);
   const auto     initial = ImportToLibraryRoot(project, {photo});
   ASSERT_EQ(initial.result_.imported_, 1u);
-  auto&      store    = project.GetStorage()->GetMountStore();
+  auto&      store    = project.GetStorage()->GetSourceFileStore();
   const auto original = store.ReadSourceFile(ElementOf(initial, "photo.jpg"));
   ASSERT_TRUE(original.has_value());
 
@@ -277,7 +288,7 @@ TEST_F(ImportContentClassificationTest, ExistingEntryWithoutSourceRecordIsRecord
   const auto     initial = ImportToLibraryRoot(project, {photo});
   ASSERT_EQ(initial.result_.imported_, 1u);
   const auto id    = ElementOf(initial, "photo.jpg");
-  auto&      store = project.GetStorage()->GetMountStore();
+  auto&      store = project.GetStorage()->GetSourceFileStore();
   store.RemoveSourceFiles(std::span(&id, 1));
   ASSERT_FALSE(store.ReadSourceFile(id));
 
@@ -285,6 +296,18 @@ TEST_F(ImportContentClassificationTest, ExistingEntryWithoutSourceRecordIsRecord
   EXPECT_EQ(repeated.result_.duplicates_, 1u);
   EXPECT_TRUE(repeated.snapshot_.created_.empty());
   EXPECT_TRUE(store.ReadSourceFile(id));
+  EXPECT_EQ(CountRows(project, "Image"), 1);
+}
+
+TEST_F(ImportContentClassificationTest, RepeatedSourceFailsWhenItsDestinationDoesNotExist) {
+  const auto photo = scratch_dir_ / "photo.jpg";
+  test_support::WriteRgbRaster(photo, ".jpg");
+  ProjectService project(db_path_, meta_path_);
+  ASSERT_EQ(ImportToLibraryRoot(project, {photo}).result_.imported_, 1u);
+
+  const auto repeated = ImportToLibraryRoot(project, {photo}, {}, {}, L"/Missing");
+  EXPECT_EQ(repeated.result_.duplicates_, 0u);
+  EXPECT_EQ(repeated.result_.failed_, 1u);
   EXPECT_EQ(CountRows(project, "Image"), 1);
 }
 
@@ -314,6 +337,61 @@ TEST_F(ImportContentClassificationTest, ExcludedOccurrenceDoesNotHideAcceptedImp
   EXPECT_EQ(imported.result_.duplicates_, 0u);
   EXPECT_EQ(imported.result_.excluded_type_, 1u);
   EXPECT_EQ(CountRows(project, "SourceFile"), 1);
+}
+
+TEST_F(ImportContentClassificationTest, CatalogLookupFailureStillImportsBothOccurrences) {
+  const auto photo = scratch_dir_ / "photo.jpg";
+  test_support::WriteRgbRaster(photo, ".jpg");
+  ProjectService project(db_path_, meta_path_);
+  // The catalog read requires Image. Put it back before SyncImports writes the new rows.
+  ExecuteStorageSql(project, "ALTER TABLE Image RENAME TO ImagesDuringImportTest");
+  const auto outcome = ImportToLibraryRoot(project, {photo, photo}, [&] {
+    ExecuteStorageSql(project, "ALTER TABLE ImagesDuringImportTest RENAME TO Image");
+  });
+  EXPECT_EQ(outcome.result_.imported_, 2u);
+  EXPECT_EQ(outcome.result_.duplicates_, 0u);
+  EXPECT_EQ(outcome.result_.failed_, 0u);
+  EXPECT_EQ(CountRows(project, "SourceFile"), 2);
+}
+
+TEST_F(ImportContentClassificationTest, ThrowingProgressCallbackDoesNotBlockImportCompletion) {
+  const auto photo   = scratch_dir_ / "photo.jpg";
+  const auto unknown = scratch_dir_ / "unknown.bin";
+  test_support::WriteRgbRaster(photo, ".jpg");
+  test_support::WriteUnknownBinary(unknown);
+  ProjectService             project(db_path_, meta_path_);
+  ImportServiceImpl          importer(project.GetSleeveService(), project.GetImagePoolService(),
+                                      std::make_shared<PipelineMgmtService>(project.GetStorage()));
+  auto                       job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> finished;
+  auto                       result = finished.get_future();
+  job->on_progress_                 = [](const ImportProgress& progress) {
+    if (progress.failed_.load() != 0) {
+      throw std::runtime_error("test progress callback failure");
+    }
+  };
+  job->on_finished_ = [&finished](const ImportResult& completed) { finished.set_value(completed); };
+
+  importer.ImportToFolder({unknown, photo, photo}, L"", {}, job);
+  ASSERT_EQ(result.wait_for(std::chrono::seconds(10)), std::future_status::ready);
+  const auto completed = result.get();
+  EXPECT_EQ(completed.imported_, 1u);
+  EXPECT_EQ(completed.duplicates_, 1u);
+  EXPECT_EQ(completed.failed_, 1u);
+  importer.SyncImports(job->import_log_->Snapshot(), L"");
+}
+
+TEST_F(ImportContentClassificationTest, SyncFailureIsReportedWithoutSourceRecords) {
+  ProjectService project(db_path_, meta_path_);
+  auto           sleeve = project.GetSleeveService();
+  sleeve->Write_NoSync<void>(
+      [](FileSystem& fs) { fs.Create(L"/", L"Pending", ElementType::FOLDER); });
+  ImportServiceImpl importer(sleeve, project.GetImagePoolService(),
+                             std::make_shared<PipelineMgmtService>(project.GetStorage()));
+  ExecuteStorageSql(project, "ALTER TABLE Element RENAME TO ElementsDuringImportTest");
+  EXPECT_THROW(importer.SyncImports({}, L""), std::runtime_error);
+  ExecuteStorageSql(project, "ALTER TABLE ElementsDuringImportTest RENAME TO Element");
+  EXPECT_TRUE(sleeve->Sync().success_);
 }
 
 TEST_F(ImportContentClassificationTest, NikonCfaAndCameraTaggedRgbTiffImportAsDistinctTypes) {

@@ -18,8 +18,8 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "storage/mapper/image/source_file_mapper.hpp"
 #include "storage/mapper/mount/mount_root_mapper.hpp"
-#include "storage/mapper/mount/source_file_mapper.hpp"
 #include "storage/mapper/utc_timestamp_text.hpp"
 #include "utils/string/convert.hpp"
 
@@ -64,7 +64,8 @@ auto SortedUniqueIds(std::span<const sl_element_id_t> ids) -> std::vector<sl_ele
 }
 }  // namespace
 
-MountStore::MountStore(Database& database) : database_(database) {}
+MountStore::MountStore(Database& database, SourceFileStore& sources)
+    : database_(database), sources_(sources) {}
 
 void MountStore::InsertMountRoot(const MountRootRecord& record) {
   if (record.id == 0) {
@@ -154,37 +155,12 @@ void MountStore::RemoveMountRoot(mount_id_t mount_id) {
 }
 
 void MountStore::UpsertSourceFiles(std::span<const SourceFileRecord> records) {
-  if (records.empty()) {
-    return;
-  }
-  std::vector<SourceFileMapperParams> rows;
-  std::vector<sl_element_id_t>        element_ids;
-  rows.reserve(records.size());
-  element_ids.reserve(records.size());
-  for (const auto& record : records) {
-    rows.push_back(SourceFileMapper::ToParams(record));
-    element_ids.push_back(record.element_id);
-  }
-  if (SortedUniqueIds(element_ids).size() != element_ids.size()) {
-    throw std::invalid_argument("MountStore: two source records name one element");
-  }
-
-  auto                 guard   = database_.GetConnectionGuard();
-  auto                 db_lock = guard.Lock();
-  duckorm::Transaction transaction(guard.conn_);
-  SourceFileMapper(guard.conn_).UpsertParamsRows(rows);
-  transaction.commit();
+  sources_.UpsertSourceFiles(records);
 }
 
 auto MountStore::ReadSourceFile(sl_element_id_t element_id) const
     -> std::optional<SourceFileRecord> {
-  auto guard   = database_.GetConnectionGuard();
-  auto db_lock = guard.Lock();
-  auto row     = SourceFileMapper(guard.conn_).GetById(element_id);
-  if (!row.has_value()) {
-    return std::nullopt;
-  }
-  return SourceFileMapper::FromParams(std::move(*row));
+  return sources_.ReadSourceFile(element_id);
 }
 
 auto MountStore::ReadSourceFilesOfMount(mount_id_t mount_id) const
@@ -236,12 +212,7 @@ void MountStore::UpdateSourceFileState(std::span<const sl_element_id_t> element_
 }
 
 void MountStore::RemoveSourceFiles(std::span<const sl_element_id_t> element_ids) {
-  if (element_ids.empty()) {
-    return;
-  }
-  auto guard   = database_.GetConnectionGuard();
-  auto db_lock = guard.Lock();
-  SourceFileMapper(guard.conn_).RemoveByIds(element_ids);
+  sources_.RemoveSourceFiles(element_ids);
 }
 
 auto MountStore::ReadFileLocationsOfMount(mount_id_t mount_id) const
@@ -253,11 +224,6 @@ auto MountStore::ReadFileLocationsOfMount(mount_id_t mount_id) const
 
 auto MountStore::ReadOrdinaryFileLocations() const -> std::vector<FileLocationRecord> {
   return ReadFileLocations(expr::raw("e.mount_id IS NULL"));
-}
-
-auto MountStore::ReadImportedFileLocations() const -> std::vector<FileLocationRecord> {
-  return ReadFileLocations(
-      expr::raw("EXISTS (SELECT 1 FROM PipelineRoot r WHERE r.element_id = e.id)"));
 }
 
 auto MountStore::ReadFileLocations(const duckorm::SqlFragment& condition) const

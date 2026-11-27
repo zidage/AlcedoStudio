@@ -625,6 +625,7 @@ TEST_F(AutomationLibraryCommandsTest, ImportWithMountedCurrentFolderReturnsTheNa
   auto [mount_root, sync] = project->GetSleeveService()->CreateMountRootFolder(L"Trip", 1);
   ASSERT_TRUE(sync.success_) << sync.message_;
   session.host().folders()->ReloadTree(L"/Trip");
+  ASSERT_TRUE(ui::test::WaitForFolderTree(*session.host().folders()));
   ASSERT_EQ(session.host().folders()->CurrentFolderElementId(), mount_root->element_id_);
 
   const QString raw_root = QStringLiteral(TEST_IMG_PATH) + QStringLiteral("/ci_rawfiles");
@@ -746,6 +747,52 @@ TEST_F(AutomationLibraryCommandsTest, MountSyncAndUnmountReturnTheServiceResults
   EXPECT_EQ(ErrorCode(session.Call(QStringLiteral("library.unmount"),
                                    QJsonObject{{"mount_id", mount_id}})),
             AutomationErrorCode::Rejected);
+}
+
+// Sleeve Node Cache Plan SN3: library.folders lists the whole tree from one tree read, each
+// folder after its parent, with the id of the parent and its depth below the root.
+TEST_F(AutomationLibraryCommandsTest, FoldersListsEachFolderAfterItsParentWithParentIdAndDepth) {
+  InProcessAutomationSession session;
+  ASSERT_FALSE(session
+                   .CallResult(QStringLiteral("project.create"),
+                               QJsonObject{{"folder", Folder()}, {"name", "folder_tree"}})
+                   .isEmpty());
+  const auto project = session.host().project()->handler().project();
+  ASSERT_NE(project, nullptr);
+  auto             sleeve  = project->GetSleeveService();
+  const auto       trip    = sleeve->CreateFolder(L"/", L"Trip").first->element_id_;
+  const auto       day     = sleeve->CreateFolder(L"/Trip", L"Day 1").first->element_id_;
+  const auto       selects = sleeve->CreateFolder(L"/Trip/Day 1", L"Selects").first->element_id_;
+  const auto       archive = sleeve->CreateFolder(L"/", L"Archive").first->element_id_;
+  const auto       root_id = sleeve->ResolveFolder(L"/")->element_id_;
+
+  const QJsonArray folders =
+      session.CallResult(QStringLiteral("library.folders")).value("folders").toArray();
+  struct Row {
+    double  folder_id;
+    double  parent_id;
+    QString path;
+    int     depth;
+  };
+  std::vector<Row> rows;
+  for (const auto& value : folders) {
+    const auto folder = value.toObject();
+    rows.push_back({folder.value("folder_id").toDouble(), folder.value("parent_id").toDouble(),
+                    folder.value("path").toString(), folder.value("depth").toInt()});
+  }
+  ASSERT_EQ(rows.size(), 5u);
+  EXPECT_EQ(rows[0].folder_id, static_cast<double>(root_id));
+  EXPECT_EQ(rows[0].depth, 0);
+  const auto expect_row = [&rows](std::size_t index, sl_element_id_t id, sl_element_id_t parent,
+                                  int depth) {
+    EXPECT_EQ(rows[index].folder_id, static_cast<double>(id)) << rows[index].path.toStdString();
+    EXPECT_EQ(rows[index].parent_id, static_cast<double>(parent)) << rows[index].path.toStdString();
+    EXPECT_EQ(rows[index].depth, depth) << rows[index].path.toStdString();
+  };
+  expect_row(1, trip, root_id, 1);
+  expect_row(2, day, trip, 2);
+  expect_row(3, selects, day, 3);
+  expect_row(4, archive, root_id, 1);
 }
 
 }  // namespace

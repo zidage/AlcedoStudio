@@ -229,10 +229,19 @@ class ElementStore {
   Database&   database_;
 
   // Insert the element row plus its child rows (file binding / folder content) on @p conn.
-  // Does not touch sync_flag_ and does not manage a transaction, so it can run
+  // Does not change the sync flag and does not manage a transaction, so it can run
   // either autocommit (AddElement) or inside a shared transaction (AddElements).
   static void InsertElementRows(duckorm::Connection&                  conn,
                                 const std::shared_ptr<SleeveElement>& element);
+  // The rows of InsertElementRows for each element of @p elements, with multi-row statements.
+  // Same transaction-neutrality behavior as InsertElementRows.
+  static void InsertElementBatchRows(duckorm::Connection&                            conn,
+                                     std::span<const std::shared_ptr<SleeveElement>> elements);
+  // Delete the rows of each element of @p elements: for a file its pipeline, source file,
+  // image binding, semantic, AI, and FolderContent rows; for a folder its FolderContent rows;
+  // then the Element rows. Same transaction-neutrality behavior as InsertElementRows.
+  static void RemoveElementBatchRows(duckorm::Connection&                            conn,
+                                     std::span<const std::shared_ptr<SleeveElement>> elements);
   // Update the element row plus its child rows. For a folder, only the FolderContent rows of
   // the children added or removed since the last sync are written. Same
   // transaction-neutrality behavior as InsertElementRows; the caller clears the folder's
@@ -243,7 +252,7 @@ class ElementStore {
  public:
   explicit ElementStore(Database& database);
 
-  void AddElement(const std::shared_ptr<SleeveElement> element);
+  void AddElement(const std::shared_ptr<SleeveElement>& element);
   // Bulk-insert a batch of elements (and their file/folder-content child
   // rows) in a single transaction. Import sync should prefer this over the per-row
   // AddElement loop: one transaction for N elements instead of one autocommit
@@ -257,9 +266,22 @@ class ElementStore {
   void RemoveElement(const sl_element_id_t id);
   void RemoveElement(const std::shared_ptr<SleeveElement> element);
   void RemoveElements(std::span<const std::shared_ptr<SleeveElement>> elements);
-  void UpdateElement(const std::shared_ptr<SleeveElement> element);
+  void UpdateElement(const std::shared_ptr<SleeveElement>& element);
   // Bulk-update a batch of elements in a single transaction.
   void UpdateElements(std::span<const std::shared_ptr<SleeveElement>> elements);
+  /**
+   * @brief Writes the rows of one sync in one transaction: the inserts of @p inserts, the
+   *        updates of @p updates (for a folder, only its pending content changes), and the
+   *        deletes of @p deletes, in that order.
+   *
+   * Changes no element: the caller marks the elements after the call returns (Sleeve Node Cache
+   * Plan, P7). A deleted element without a row costs statements that remove nothing.
+   * @throws std::runtime_error with the DuckDB message when a statement or the commit fails.
+   *         The transaction then rolls back, so the database holds no part of the three groups.
+   */
+  void WriteSync(std::span<const std::shared_ptr<SleeveElement>> inserts,
+                 std::span<const std::shared_ptr<SleeveElement>> updates,
+                 std::span<const std::shared_ptr<SleeveElement>> deletes);
   auto GetElementById(const sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
   // Every element that FolderContent lists under @p folder_id, loaded as GetElementById loads
   // one element (SYNCED, file image binding read), with two queries for the whole folder.
@@ -393,8 +415,6 @@ class ElementStore {
       int64_t occurrence_begin, int64_t occurrence_end,
       const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> std::vector<sl_element_id_t>;
-
-  void EnsureChildrenLoaded(sl_element_id_t folder_id);
 
   [[nodiscard]] auto GetPipelineJsonByElementId(sl_element_id_t element_id)
       -> std::optional<nlohmann::json>;

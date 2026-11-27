@@ -186,8 +186,23 @@ Rectangle {
         const created = Number(folderController.CreateFolderIn(Number(parent.folderId), trimmed))
         if (created > 0) {
             selectedElementId = created
-            revealElement(created)
+            // The row of the new collection comes with the next tree read.
+            pendingRevealElementId = created
+            revealPendingElement()
         }
+    }
+
+    // elementId of a new collection whose row is revealed when it arrives; -1 when none.
+    property int pendingRevealElementId: -1
+    onOrderedRowsChanged: revealPendingElement()
+
+    function revealPendingElement() {
+        if (pendingRevealElementId <= 0 || !rowOfElement(pendingRevealElementId)) {
+            return
+        }
+        const elementId = pendingRevealElementId
+        pendingRevealElementId = -1
+        revealElement(elementId)
     }
 
     ColumnLayout {
