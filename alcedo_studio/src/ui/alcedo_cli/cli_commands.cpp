@@ -74,8 +74,10 @@ Commands:
   schema                          Print the command schemas.
   session start --headless (--project <path> | --create <folder>,<name>)
         [--editor-backend cuda|opencl|metal] [--viewport <w>x<h>] [--settings-dir <dir>]
-        [--log-file <path>] [--host-binary <path>]
+        [--log-file <path>] [--host-binary <path>] [--mount-watcher on|off]
                                   Start a headless session and wait until it answers.
+                                  --mount-watcher off: a change of a mounted directory
+                                  starts no scan until library.sync (a test option).
   session stop                    Shut the session down and wait for its process to exit.
   session list                    List the session files and their state.
   session prune                   Remove the stale session records. Keep every other file
@@ -519,7 +521,8 @@ auto ParseStartOptions(const QStringList& words, QStringList* host_arguments, QS
       *host_arguments << word << QFileInfo(value.left(comma)).absoluteFilePath()
                       << value.mid(comma + 1);
       project = true;
-    } else if (word == QStringLiteral("--editor-backend") || word == QStringLiteral("--viewport")) {
+    } else if (word == QStringLiteral("--editor-backend") || word == QStringLiteral("--viewport") ||
+               word == QStringLiteral("--mount-watcher")) {
       if (!take_value(&value)) return false;
       *host_arguments << word << value;
     } else if (word == QStringLiteral("--settings-dir")) {

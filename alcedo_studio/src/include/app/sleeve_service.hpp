@@ -54,6 +54,21 @@ class SleeveService {
   virtual auto Sync() -> SyncResult = 0;
 };
 
+/// The environment variable that ReadTestCleanFileLimit reads (#1191).
+inline constexpr const char* kTestCleanFileLimitVariable = "ALCEDO_TEST_SLEEVE_CLEAN_FILE_LIMIT";
+
+/**
+ * @brief Test entry point of the file management fuzz (#1191): the clean file limit of the node
+ *        cache that the environment variable ALCEDO_TEST_SLEEVE_CLEAN_FILE_LIMIT gives.
+ *
+ * A test run never reaches NodeCache::kCleanFileLimit, so the fuzz sets a small limit to run the
+ * eviction. SleeveServiceImpl applies the limit when the project opens. Production code reads
+ * the variable only through this function.
+ * @return Nothing when the variable is not set or is empty.
+ * @throws std::invalid_argument when the value is not a decimal number of files.
+ */
+[[nodiscard]] auto ReadTestCleanFileLimit() -> std::optional<std::size_t>;
+
 class SleeveServiceImpl final : public SleeveService {
  private:
   std::shared_ptr<Storage> storage_;

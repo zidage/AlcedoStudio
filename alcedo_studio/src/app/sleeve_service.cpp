@@ -4,7 +4,11 @@
 
 #include "app/sleeve_service.hpp"
 
+#include <charconv>
+#include <cstdlib>
 #include <stdexcept>
+#include <string>
+#include <system_error>
 #include <unordered_set>
 #include <vector>
 
@@ -150,6 +154,35 @@ SleeveServiceImpl::SleeveServiceImpl(std::shared_ptr<Storage> storage_service,
   }
   fs_ = std::make_unique<FileSystem>(db_path_, *storage_, start_id);
   fs_->InitRoot();
+  if (const auto limit = ReadTestCleanFileLimit(); limit.has_value()) {
+    fs_->SetCleanFileLimit(*limit);
+  }
+}
+
+auto ReadTestCleanFileLimit() -> std::optional<std::size_t> {
+  std::string value;
+#if defined(_MSC_VER)
+  char*       buffer = nullptr;
+  std::size_t length = 0;
+  if (_dupenv_s(&buffer, &length, kTestCleanFileLimitVariable) == 0 && buffer != nullptr) {
+    value = buffer;
+  }
+  std::free(buffer);
+#else
+  if (const char* buffer = std::getenv(kTestCleanFileLimitVariable); buffer != nullptr) {
+    value = buffer;
+  }
+#endif
+  if (value.empty()) {
+    return std::nullopt;
+  }
+  std::size_t limit       = 0;
+  const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), limit);
+  if (error != std::errc{} || end != value.data() + value.size()) {
+    throw std::invalid_argument(std::string(kTestCleanFileLimitVariable) +
+                                " must be a decimal number of files, not '" + value + "'");
+  }
+  return limit;
 }
 
 auto SleeveServiceImpl::Sync() -> SyncResult {

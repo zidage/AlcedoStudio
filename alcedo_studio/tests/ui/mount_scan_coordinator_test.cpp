@@ -328,7 +328,8 @@ class MountScanCoordinatorTest : public ::testing::Test {
     MakeCoordinator(std::make_unique<ManualWatcher>());
   }
 
-  void MakeCoordinator(std::unique_ptr<MountDirectoryWatcher> watcher) {
+  void MakeCoordinator(std::unique_ptr<MountDirectoryWatcher> watcher,
+                       MountWatcherMode watcher_mode = MountWatcherMode::kOn) {
     coordinator_.reset();
     auto clock = std::make_unique<ManualClock>();
     clock_     = clock.get();
@@ -337,6 +338,7 @@ class MountScanCoordinatorTest : public ::testing::Test {
     dependencies.tasks         = &tasks_;
     dependencies.clock         = std::move(clock);
     dependencies.watcher       = std::move(watcher);
+    dependencies.watcher_mode  = watcher_mode;
     dependencies.on_scan_ended = [this](mount_id_t, const MountScanResult&) { ++ended_count_; };
     dependencies.read_volume_identity = [this](const stdfs::path& mount_point) {
       const auto it = volume_identities_.find(mount_point);
@@ -410,6 +412,27 @@ TEST_F(MountScanCoordinatorTest, TenNotificationsInTwoSecondsStartOneScan) {
   clock_->Advance(seconds(30));
   ProcessQueuedEvents();
   EXPECT_EQ(port_->ScanCount(), 2);
+}
+
+// #1191: with the watcher off (alcedo_main --headless --mount-watcher off) a change notification
+// starts no scan, so the counts of each library.sync of the file management fuzz are known. The
+// mount stays watched: the volume events and Synchronize still scan it.
+TEST_F(MountScanCoordinatorTest, WatcherOffStartsNoScanForANotificationAndKeepsTheOtherTriggers) {
+  MakeCoordinator(std::make_unique<ManualWatcher>(), MountWatcherMode::kOff);
+  StartAndWaitForTheOpenScan();
+  ASSERT_TRUE(coordinator_->IsWatched(kMount));
+
+  watcher_->Notify(kMount);
+  clock_->Advance(seconds(30));
+  ProcessQueuedEvents();
+  EXPECT_EQ(port_->ScanCount(), 1);
+  EXPECT_FALSE(coordinator_->HasPendingScans());
+
+  coordinator_->RequestScan(kMount, MountScanTrigger::kSynchronize);
+  ASSERT_TRUE(WaitForScans(2));
+  watcher_->RemoveVolume(kMount);
+  ASSERT_TRUE(WaitForScans(3));
+  EXPECT_TRUE(coordinator_->IsWatched(kMount)) << "the scan of the volume event watches it again";
 }
 
 TEST_F(MountScanCoordinatorTest, RequestDuringAScanStartsExactlyOneMoreScan) {
