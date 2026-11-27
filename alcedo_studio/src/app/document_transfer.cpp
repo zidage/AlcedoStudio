@@ -4,6 +4,7 @@
 
 #include "app/document_transfer.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -15,6 +16,7 @@
 #include "app/pipeline_history_applier.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/history/pipeline_history_format.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/json_read.hpp"
@@ -24,6 +26,13 @@ namespace alcedo {
 namespace {
 
 [[noreturn]] void Fail(std::string message) { throw std::runtime_error(std::move(message)); }
+
+/// Read or validate the source document revision before using transferred fields.
+void              RequireSupportedTransferDocumentVersion(std::uint64_t version) {
+  if (!IsSupportedPipelineDocumentFormatVersion(version)) {
+    Fail("unsupported transfer document_format_version");
+  }
+}
 
 auto              RequireObject(const nlohmann::json& json, std::string_view context) -> void {
   if (!json.is_object()) {
@@ -318,9 +327,7 @@ void ValidateDocumentTransfer(const AdjustmentTransferPackage& package) {
   if (package.schema_ != kAdjustmentTransferSchema) {
     Fail("unsupported adjustment package schema");
   }
-  if (package.document_format_version_ != kPipelineDocumentFormatVersion) {
-    Fail("unsupported transfer document_format_version");
-  }
+  RequireSupportedTransferDocumentVersion(package.document_format_version_);
   if (package.Empty()) {
     Fail("transfer package requires at least one selected item");
   }
@@ -431,7 +438,9 @@ auto ImportDocumentTransfer(const nlohmann::json& json) -> AdjustmentTransferPac
       !json.at("document_format_version").is_number_unsigned()) {
     Fail("transfer package requires document_format_version");
   }
-  package.document_format_version_ = json.at("document_format_version").get<std::uint32_t>();
+  const auto document_format_version = json.at("document_format_version").get<std::uint64_t>();
+  RequireSupportedTransferDocumentVersion(document_format_version);
+  package.document_format_version_ = static_cast<std::uint32_t>(document_format_version);
   if (!json.contains("default_grade_id") ||
       (!json.at("default_grade_id").is_null() &&
        (!json.at("default_grade_id").is_string() ||

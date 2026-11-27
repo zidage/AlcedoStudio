@@ -157,7 +157,16 @@ class PipelineDocument {
                         std::unique_ptr<IOperatorModel> model);
 
   [[nodiscard]] auto ToJson() const -> nlohmann::json;
-  static auto        FromJson(const nlohmann::json& json) -> PipelineDocument;
+  /**
+   * @brief Read a document in its stored format without upgrading it.
+   * @param json Stored document JSON.
+   * @param declared_format_version Revision from the enclosing record, if it declares one.
+   * @throws std::runtime_error if the revision is unsupported, disagrees with the enclosing
+   *         record, or the document shape is invalid.
+   */
+  static auto        FromJson(const nlohmann::json&        json,
+                              std::optional<std::uint32_t> declared_format_version = std::nullopt)
+      -> PipelineDocument;
 
  private:
   /// Develop node of @p current after the checks of @ref UseSensorSettingsFrom; writes nothing.

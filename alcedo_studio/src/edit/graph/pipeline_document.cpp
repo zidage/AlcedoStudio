@@ -71,14 +71,40 @@ void ValidateFiniteNumbers(const nlohmann::json& value, const std::string& path)
   }
 }
 
-void ValidateDocumentShape(const nlohmann::json& json) {
+/// Read the stored revision before decoding any fields that depend on it.
+auto ReadDocumentFormatVersion(const nlohmann::json&        json,
+                               std::optional<std::uint32_t> declared_format_version)
+    -> std::uint32_t {
   if (!json.is_object()) {
     throw std::runtime_error("Pipeline document must be an object");
   }
-  if (!json.contains("format_version") || !json["format_version"].is_number_integer() ||
-      json["format_version"].get<std::uint32_t>() != kPipelineDocumentFormatVersion) {
+  const auto version = json.find("format_version");
+  if (version == json.end() || !version->is_number_integer()) {
     throw std::runtime_error("Unsupported pipeline document format_version");
   }
+  const auto format_version = version->get<std::uint64_t>();
+  if (declared_format_version.has_value() && format_version != *declared_format_version) {
+    throw std::runtime_error(
+        "Nested pipeline document format_version does not match the enclosing record");
+  }
+  if (!IsSupportedPipelineDocumentFormatVersion(format_version)) {
+    throw std::runtime_error("Unsupported pipeline document format_version");
+  }
+  return static_cast<std::uint32_t>(format_version);
+}
+
+/// Decode geometry with the field rules of the stored document revision.
+auto ReadDocumentGeometry(const nlohmann::json& json, std::uint32_t format_version)
+    -> ImageGeometryModel {
+  switch (format_version) {
+    case kCropRotateDocumentFormatVersion:
+      return ImageGeometryModel::FromJson(json);
+    default:
+      throw std::runtime_error("Unsupported pipeline document geometry format_version");
+  }
+}
+
+void ValidateDocumentShape(const nlohmann::json& json) {
   if (!json.contains("geometry") || !json["geometry"].is_object()) {
     throw std::runtime_error("Pipeline document is missing an object geometry");
   }
@@ -361,12 +387,15 @@ auto PipelineDocument::ToJson() const -> nlohmann::json {
           {"edges", std::move(edges)}};
 }
 
-auto PipelineDocument::FromJson(const nlohmann::json& json) -> PipelineDocument {
+auto PipelineDocument::FromJson(const nlohmann::json&        json,
+                                std::optional<std::uint32_t> declared_format_version)
+    -> PipelineDocument {
+  const auto format_version = ReadDocumentFormatVersion(json, declared_format_version);
   ValidateDocumentShape(json);
   PipelineDocument document;
-  document.format_version_ = kPipelineDocumentFormatVersion;
+  document.format_version_ = format_version;
   document.SetNextColorGradeNameNumber(json["next_color_grade_name_number"].get<std::uint64_t>());
-  document.geometry_ = ImageGeometryModel::FromJson(json["geometry"]);
+  document.geometry_ = ReadDocumentGeometry(json.at("geometry"), format_version);
   for (const auto& node_json : json["nodes"]) {
     document.graph_.AddNode(NodeFromJson(node_json));
   }

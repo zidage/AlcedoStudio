@@ -61,8 +61,7 @@ struct PipelineDocumentCheckpoint {
  * @brief Encode the immutable root serialized pipeline state.
  *
  * Writes every required field, including an explicit JSON null for a missing
- * raw-color context. Rejects a document whose format version is not
- * @ref kPipelineDocumentFormatVersion.
+ * raw-color context. Records the supported format version of @p document.
  *
  * @throws std::runtime_error when the document cannot be validated.
  */
@@ -74,12 +73,16 @@ struct PipelineDocumentCheckpoint {
 /**
  * @brief Parse and require canonical root serialized pipeline state.
  *
- * Unknown keys, wrong format versions, a mismatched nested document dump, and
- * a mismatched `element_id` type are rejected. Does not convert older root JSON.
+ * Rejects unknown keys, incompatible versions, a noncanonical nested document, and an invalid
+ * `element_id`. The nested document version must match the record's declared version.
  *
- * @throws std::runtime_error when @p json is not canonical root serialized state.
+ * @param json Stored root record.
+ * @param expected_root_id Root ID to verify against the canonical content, if supplied.
+ * @throws std::runtime_error for invalid data or a mismatch with @p expected_root_id.
  */
-[[nodiscard]] auto DecodePipelineRootState(const nlohmann::json& json) -> PipelineRootState;
+[[nodiscard]] auto DecodePipelineRootState(const nlohmann::json&    json,
+                                           std::optional<root_id_t> expected_root_id = std::nullopt)
+    -> PipelineRootState;
 
 /**
  * @brief Encode one checkpoint document with its history labels.
@@ -98,8 +101,8 @@ struct PipelineDocumentCheckpoint {
 /**
  * @brief Parse and require canonical checkpoint serialized pipeline state.
  *
- * Unknown keys, wrong format versions, and a mismatched nested document dump
- * are rejected. Does not convert older `pipeline_params` checkpoints.
+ * Rejects unknown keys, incompatible versions, and a noncanonical nested document. The nested
+ * document version must match the record's declared version.
  *
  * @throws std::runtime_error when @p json is not a canonical checkpoint.
  */
