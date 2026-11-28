@@ -122,7 +122,8 @@ struct GradeImages {
 };
 
 /// Develop, GeometryResample, CameraToAp1, then @p grade on @p device. With @p mask, the mask
-/// output of the first Grade is that R8 image (the MaskEvaluate pass of Vulkan is phase VK11).
+/// output of the first Grade is that R8 image, the same on both backends (VulkanMaskTest compares
+/// MaskEvaluate).
 template <class Device, class Grade>
 auto RenderGrades(Device& device, const ExecutionPlan& plan, const PreparedRawInput& input,
                   const PipelineDocument& document, Grade grade,

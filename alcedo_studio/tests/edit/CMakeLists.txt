@@ -309,6 +309,26 @@ if(ALCEDO_VULKAN_ENABLED AND (ALCEDO_OPENCL_ENABLED OR ALCEDO_METAL_ENABLED))
     DISCOVERY_TIMEOUT 60
     PROPERTIES LABELS "gpu;edit;runtime;vulkan;grade")
   alcedo_register_test_target(VulkanLocalToneTest gpu)
+
+  # MaskEvaluate, MaskUnion, the AI Mask Feather and Expand, and the coverage displays on Vulkan
+  # against the reference backend and the shared independent references (#1036, phase VK11).
+  add_executable(VulkanMaskTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_mask_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_mask_harness_test.cpp)
+  target_include_directories(VulkanMaskTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  target_link_libraries(VulkanMaskTest PRIVATE
+    GTest::gtest_main EditRuntimeVulkanPasses EditInput EditGraph)
+  if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(VulkanMaskTest PRIVATE EditRuntimeOpenCl OpenClProgramLibrary)
+  else()
+    target_link_libraries(VulkanMaskTest PRIVATE EditRuntimeMetal EditRuntimeLens RawProcessorOp)
+    add_dependencies(VulkanMaskTest GpuDagMetalShaders RawProcessorOpMetalShaders)
+  endif()
+  add_dependencies(VulkanMaskTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanMaskTest TEST_PREFIX "VulkanMaskTest."
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan;mask")
+  alcedo_register_test_target(VulkanMaskTest gpu)
 endif()
 
 # Vulkan against OpenCL on the same GPU (#1036, phase VK3, decision B9): the shared color math

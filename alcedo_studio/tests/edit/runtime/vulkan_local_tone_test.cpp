@@ -157,8 +157,8 @@ void RemoveColorAdjustments(PipelineDocument& document) {
   }
 }
 
-/// Adds a radial mask to the primary Grade; the render gives its output as an R8 image (the
-/// MaskEvaluate pass of Vulkan is phase VK11).
+/// Adds a radial mask to the primary Grade; the render gives its output as an R8 image, so the
+/// comparison holds the mask the same on both backends (VulkanMaskTest compares MaskEvaluate).
 void AddMask(PipelineDocument& document) {
   MaskModel mask;
   mask.id     = MaskId{"mask.radial"};

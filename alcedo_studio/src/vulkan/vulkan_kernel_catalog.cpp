@@ -4,6 +4,7 @@
 
 #include "vulkan/vulkan_kernel_catalog.hpp"
 
+#include "vulkan/vulkan_ai_mask_coverage_kernels.hpp"
 #include "vulkan/vulkan_color_math_check_kernels.hpp"
 #include "vulkan/vulkan_debayer_rcd_kernels.hpp"
 #include "vulkan/vulkan_display_to_ap1_kernels.hpp"
@@ -13,6 +14,7 @@
 #include "vulkan/vulkan_highlight_kernels.hpp"
 #include "vulkan/vulkan_lens_calib_kernels.hpp"
 #include "vulkan/vulkan_local_tone_kernels.hpp"
+#include "vulkan/vulkan_mask_kernels.hpp"
 #include "vulkan/vulkan_primary_grade_kernels.hpp"
 #include "vulkan/vulkan_primary_grade_neighbor_kernels.hpp"
 #include "vulkan/vulkan_raw_core_kernels.hpp"
@@ -51,6 +53,12 @@ auto VulkanKernelCatalog() -> std::vector<VulkanKernelDescriptor> {
       primary_grade_neighbor_kernels::ApplyDescriptor(),
   };
   for (auto& kernel : local_tone_kernels::AllDescriptors()) {
+    catalog.push_back(std::move(kernel));
+  }
+  for (auto& kernel : mask_kernels::AllDescriptors()) {
+    catalog.push_back(std::move(kernel));
+  }
+  for (auto& kernel : ai_mask_coverage_kernels::AllDescriptors()) {
     catalog.push_back(std::move(kernel));
   }
   for (const auto kernel : debayer_rcd_kernels::kRcdKernels) {
