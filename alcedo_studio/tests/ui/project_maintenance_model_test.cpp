@@ -16,7 +16,7 @@ TEST_F(ProjectMaintenanceModelTest, ReviewCannotSelectRatedOrEditedRows) {
   Execute(
       "UPDATE Image SET rating=2,metadata='{\"Rating\":2}' WHERE id=2;"
       "UPDATE VersionRef SET display_name='Edited copy' WHERE element_id=3");
-  ASSERT_TRUE(service_.Scan(*database_));
+  ASSERT_TRUE(service_.Scan(*store_));
   ProjectMaintenanceModel model(service_);
   model.Refresh();
   EXPECT_FALSE(model.SetSelected(2, true));
@@ -28,7 +28,7 @@ TEST_F(ProjectMaintenanceModelTest, ReviewCannotSelectRatedOrEditedRows) {
 }
 TEST_F(ProjectMaintenanceModelTest, HiddenSelectedRowsRemainInConfirmationCount) {
   for (sl_element_id_t id = 1; id <= 105; ++id) Add(id);
-  ASSERT_TRUE(service_.Scan(*database_));
+  ASSERT_TRUE(service_.Scan(*store_));
   ProjectMaintenanceModel model(service_);
   model.Refresh();
   EXPECT_EQ(model.rowCount(), 100);
@@ -48,7 +48,7 @@ TEST_F(ProjectMaintenanceModelTest, HiddenSelectedRowsRemainInConfirmationCount)
 TEST_F(ProjectMaintenanceModelTest, IncompleteScanHasNoSelectableRows) {
   Add(1);
   Add(2);
-  EXPECT_FALSE(service_.Scan(*database_, {}, {}, [] { return true; }));
+  EXPECT_FALSE(service_.Scan(*store_, {}, {}, [] { return true; }));
   ProjectMaintenanceModel model(service_);
   model.Refresh();
   EXPECT_EQ(model.rowCount(), 0);
@@ -57,7 +57,7 @@ TEST_F(ProjectMaintenanceModelTest, IncompleteScanHasNoSelectableRows) {
 TEST_F(ProjectMaintenanceModelTest, ReviewPreservesUnsigned32BitEntryIds) {
   Add(1);
   Add(4294967295U);
-  ASSERT_TRUE(service_.Scan(*database_));
+  ASSERT_TRUE(service_.Scan(*store_));
   ProjectMaintenanceModel model(service_);
   model.Refresh();
   ASSERT_EQ(model.rowCount(), 2);
@@ -69,7 +69,7 @@ TEST_F(ProjectMaintenanceModelTest, ReviewPreservesUnsigned32BitEntryIds) {
 }
 TEST_F(ProjectMaintenanceModelTest, CommandPagesDoNotChangeVisibleReviewOrSelection) {
   for (sl_element_id_t id = 1; id <= 105; ++id) Add(id);
-  ASSERT_TRUE(service_.Scan(*database_));
+  ASSERT_TRUE(service_.Scan(*store_));
   ProjectMaintenanceModel model(service_);
   model.Refresh();
   model.SelectKind(0);

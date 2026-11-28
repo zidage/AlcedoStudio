@@ -769,7 +769,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     library->RequestLibraryContentRefresh();
     folders->RefreshImageCounts();
   };
-  mount_scan_dependencies.on_scan_ended = [library = library_.get(), folders = folders_.get()](
+  mount_scan_dependencies.on_scan_ended = [library = library_.get(), folders = folders_.get(),
+                                           maintenance = maintenance_.get()](
                                               mount_id_t, const MountScanResult& result) {
     const bool folders_changed = result.folders_added_count + result.folders_removed_count > 0;
     if (folders_changed) {
@@ -777,6 +778,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
     if (folders_changed || MountScanChangedPhotos(result)) {
       library->RequestLibraryContentRefresh();
+    }
+    if (result.adopted_count > 0 || result.status == MountScanStatus::kStorageFailure) {
+      maintenance->RefreshSourceChangedEntries();
     }
     // The count read also reads the mount states: an offline or relocated mount changes its
     // rows with no photo change.

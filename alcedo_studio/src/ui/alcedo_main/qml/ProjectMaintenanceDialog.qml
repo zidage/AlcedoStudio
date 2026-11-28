@@ -112,8 +112,17 @@ Dialog {
                 onClicked: {
                     root.confirming = false
                     if (root.controller.scanning) root.controller.CancelScan()
-                    else root.controller.Scan()
+                    else root.controller.Scan(markChangedSources.checked)
                 }
+            }
+            ThemeCheckBox {
+                id: markChangedSources
+                objectName: "maintenanceMarkChangedSources"
+                Layout.fillWidth: true
+                text: qsTr("Mark changed sources in the Library")
+                checked: true
+                enabled: root.controller && root.controller.available && !root.controller.busy
+                         && !root.confirming
             }
             Caption {
                 Layout.fillWidth: true
@@ -148,7 +157,8 @@ Dialog {
                         readonly property var entries: [
                             {label: qsTr("All findings")}, {label: qsTr("Duplicates")},
                             {label: qsTr("Missing sources")}, {label: qsTr("Source problems")},
-                            {label: qsTr("Project problems")}
+                            {label: qsTr("Project problems")}, {label: qsTr("Changed sources")},
+                            {label: qsTr("Unverified source history")}
                         ]
                         function selectIndex(index) {
                             if (root.findings) root.findings.filter = index - 1

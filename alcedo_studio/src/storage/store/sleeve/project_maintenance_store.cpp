@@ -10,6 +10,7 @@
 #include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/mask/ai_mask_asset_references.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "storage/mapper/image/source_file_mapper.hpp"
 #include "storage/mapper/pipeline/pipeline_mapper.hpp"
 #include "storage/mapper/sleeve/element/element_mapper.hpp"
 #include "storage/mapper/sleeve/element/file_mapper.hpp"
@@ -51,8 +52,10 @@ auto ProjectMaintenanceStore::ListEntryIds(sl_element_id_t after) -> std::vector
                "FROM PipelineParam WHERE NOT EXISTS (SELECT 1 FROM Element WHERE id=file_id AND "
                "type=0) "
                "UNION SELECT element_id FROM FolderContent WHERE NOT EXISTS "
-               "(SELECT 1 FROM Element WHERE id=element_id)) "
-               "WHERE id>{} ORDER BY id LIMIT 64",
+               "(SELECT 1 FROM Element WHERE id=element_id)) candidates "
+               "WHERE id>{} AND NOT EXISTS (SELECT 1 FROM Element mounted "
+               "WHERE mounted.id=candidates.id AND mounted.mount_id IS NOT NULL) "
+               "ORDER BY id LIMIT 64",
                after))) {
     result.push_back(row.at("id").get<sl_element_id_t>());
   }
@@ -85,19 +88,32 @@ auto ProjectMaintenanceStore::Inspect(sl_element_id_t id) -> MaintenanceEntryEvi
   try {
     const auto rows = ReadRows(
         guard.conn_,
-        std::format("SELECT e.id,e.type,epoch_us(e.added_time) AS added_time,i.image_path,i.rating,"
+        std::format("SELECT e.id,e.type,e.mount_id,epoch_us(e.added_time) AS "
+                    "added_time,i.image_path,i.rating,"
                     "i.metadata,i.color_labels,i.delete_mark,"
+                    "EXISTS(SELECT 1 FROM SourceFileChanged c WHERE c.element_id=requested.id) "
+                    "AS source_changed,"
                     "(SELECT count(*) FROM FileImage f WHERE f.image_id=i.id) AS bindings "
                     "FROM (SELECT {} AS id) requested LEFT JOIN Element e ON e.id=requested.id "
                     "LEFT JOIN FileImage fi ON fi.file_id=requested.id LEFT JOIN Image i ON "
                     "i.id=fi.image_id",
                     id));
+    if (rows.size() == 1 && !rows[0]["mount_id"].is_null()) {
+      result.mounted = true;
+      result.protection_reasons.emplace_back("Mounted entry");
+      return result;
+    }
     if (rows.size() != 1 || rows[0]["id"].is_null() || rows[0]["type"] != 0 ||
         rows[0]["image_path"].is_null()) {
       throw std::runtime_error("Missing or ambiguous Element, FileImage, or Image reference");
     }
     const auto& row    = rows[0];
     result.source_path = std::filesystem::u8path(row.at("image_path").get<std::string>());
+    result.source_changed = row.at("source_changed").get<bool>();
+    if (const auto source = SourceFileStore(database_).ReadSourceFile(id)) {
+      result.recorded_fingerprint =
+          SourceFileFingerprint{source->fingerprint, source->fingerprint_version};
+    }
     if (!row["added_time"].is_null()) result.added_time = row["added_time"].get<int64_t>();
     result.rating = row.at("rating").get<int>();
     if (row["metadata"].is_null() || !row["metadata"].is_object() ||
@@ -182,18 +198,32 @@ auto ProjectMaintenanceStore::Inspect(sl_element_id_t id) -> MaintenanceEntryEvi
   return result;
 }
 
+auto ProjectMaintenanceStore::UpdateSourceChangeMarks(std::span<const SourceChangeMark> changes)
+    -> bool {
+  return SourceFileStore(database_).UpdateChangeMarks(changes);
+}
+
 auto ProjectMaintenanceStore::RemovePristineProjectEntries(
     std::span<const MaintenanceRemoval>        removals,
     const std::function<void(size_t, size_t)>& progress) -> std::vector<sl_element_id_t> {
   if (removals.empty()) throw std::invalid_argument("Explicit removal IDs are required");
   // File I/O precedes the transaction and does not hold the database lock. The staged
   // database has one writer; the locked preservation pass below still rereads every entry.
+  std::map<image_path_t::string_type, std::optional<SourceFileFingerprint>> fingerprints;
   for (const auto& removal : removals) {
     const auto entry  = Inspect(removal.entry_id);
+    if (entry.mounted) throw std::invalid_argument("Maintenance excludes mounted entries");
     const auto source = CheckSourceImageStatus(entry.source_path);
     if (removal.retained_id ? source.status != SourceImageStatus::Readable
                             : source.status != SourceImageStatus::Missing) {
       throw std::runtime_error("Selected source status changed: " + source.reason);
+    }
+    if (removal.retained_id) {
+      auto [current, inserted] = fingerprints.try_emplace(SourcePathKey(entry.source_path));
+      if (inserted) current->second = ReadMaintenanceFingerprint(entry.source_path);
+      if (!current->second || current->second != entry.recorded_fingerprint) {
+        throw std::runtime_error("Selected source fingerprint changed or is unknown");
+      }
     }
   }
   auto                                guard = database_.GetConnectionGuard();
@@ -217,10 +247,13 @@ auto ProjectMaintenanceStore::RemovePristineProjectEntries(
         throw std::invalid_argument("A retained entry cannot be in the removal set");
       }
       const auto retained = Inspect(*removal.retained_id);
-      if (!retained.valid_references || retained.source_path.empty() ||
-          SourcePathKey(evidence.source_path) !=
-              SourcePathKey(retained.source_path)) {
-        throw std::invalid_argument("Duplicate pair does not share a full source path");
+      const auto key      = SourcePathKey(evidence.source_path);
+      const auto current  = fingerprints.find(key);
+      if (retained.mounted || !retained.valid_references || retained.source_path.empty() ||
+          key != SourcePathKey(retained.source_path) || current == fingerprints.end() ||
+          current->second != evidence.recorded_fingerprint ||
+          current->second != retained.recorded_fingerprint) {
+        throw std::invalid_argument("Duplicate pair lacks a verified common source");
       }
     }
   }
@@ -262,6 +295,7 @@ auto ProjectMaintenanceStore::RemovePristineProjectEntries(
   // The annotation owner rebuilds its full-text index. Rebuild once for the batch: dropping
   // and recreating its stopword table twice in one DuckDB transaction cannot commit.
   DeleteAiAnnotationRowsForFiles(guard.conn_, removed);
+  SourceFileMapper(guard.conn_).RemoveByIds(removed);
   ImageStore::RemoveUnreferencedImagesInTransaction(guard.conn_, images);
   transaction.commit();
   return removed;
@@ -327,7 +361,8 @@ auto ProjectMaintenanceStore::RetainedRowDigests(std::span<const MaintenanceRemo
     else if (table == "FileImage" || table == "PipelineParam" ||
              table.starts_with("SemanticImage") || table.starts_with("AiImage"))
       query += " WHERE file_id NOT IN (" + ids + ")";
-    else if (table == "PipelineRoot" || table == "VersionRef" || table == "ImageEditState") {
+    else if (table == "PipelineRoot" || table == "VersionRef" || table == "ImageEditState" ||
+             table == "SourceFile" || table == "SourceFileChanged") {
       query += " WHERE element_id NOT IN (" + ids + ")";
     }
     result[table] =

@@ -10566,6 +10566,18 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Entries processed</source>
         <translation>已处理条目</translation>
     </message>
+    <message>
+        <source>Mark changed sources in the Library</source>
+        <translation>在资料库中标记已更改的源文件</translation>
+    </message>
+    <message>
+        <source>Changed sources</source>
+        <translation>已更改的源文件</translation>
+    </message>
+    <message>
+        <source>Unverified source history</source>
+        <translation>未验证的源文件历史</translation>
+    </message>
 </context>
 <context>
     <name>alcedo::ui::ProjectMaintenanceController</name>
@@ -10663,12 +10675,24 @@ The verified backup was restored and reopened.</source>
         <source>Entry IDs must be nonzero 32-bit integers.</source>
         <translation>条目 ID 必须是非零的 32 位整数。</translation>
     </message>
+    <message>
+        <source>Scanning ordinary photos</source>
+        <translation>正在扫描普通照片</translation>
+    </message>
+    <message>
+        <source>Could not save source-change marks</source>
+        <translation>无法保存源文件更改标记</translation>
+    </message>
 </context>
 <context>
     <name>alcedo::ui::ProjectMaintenanceModel</name>
     <message>
         <source>%1 commits; %2 Versions</source>
         <translation>%1 个提交；%2 个版本</translation>
+    </message>
+    <message>
+        <source>Source changed since import</source>
+        <translation>源文件在导入后已更改</translation>
     </message>
 </context>
 <context>
@@ -11029,6 +11053,13 @@ The verified backup was restored and reopened.</source>
     <message>
         <source>Select Folder to Import</source>
         <translation>选择要导入的文件夹</translation>
+    </message>
+</context>
+<context>
+    <name>SourceChangedThumbnailIcon</name>
+    <message>
+        <source>Source changed since import</source>
+        <translation>源文件在导入后已更改</translation>
     </message>
 </context>
 </TS>

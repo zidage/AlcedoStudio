@@ -63,7 +63,7 @@ auto RegisterAutomationMaintenanceCommands(AutomationCommandRegistry& registry,
   AutomationCommandSpec scan;
   scan.method      = QStringLiteral("project.maintenance.scan");
   scan.description = QStringLiteral(
-      "Scans the complete loaded project without changing project rows. Returns the first bounded "
+      "Scans ordinary photos in the loaded project. Returns the first bounded "
       "findings page after completion.");
   scan.params_schema = AutomationClosedParamsSchema();
   scan.result_schema = SummarySchema();
@@ -90,7 +90,7 @@ auto RegisterAutomationMaintenanceCommands(AutomationCommandRegistry& registry,
       "Reads a bounded review page. Filters never change the explicit selected IDs.");
   findings.params_schema = AutomationClosedParamsSchema(
       {{"page", QJsonObject{{"type", "integer"}, {"minimum", 0}}},
-       {"filter", QJsonObject{{"type", "integer"}, {"minimum", -1}, {"maximum", 3}}},
+       {"filter", QJsonObject{{"type", "integer"}, {"minimum", -1}, {"maximum", 5}}},
        {"search", QJsonObject{{"type", "string"}}}});
   findings.result_schema = SummarySchema();
   findings.handler       = [controller](const QJsonObject& params, AutomationReply reply) {

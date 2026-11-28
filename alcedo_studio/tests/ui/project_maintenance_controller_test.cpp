@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <QSignalSpy>
 #include <chrono>
+#include <fstream>
 #include <future>
 
 #include "../automation/automation_in_process_session.hpp"
 #include "../support/project_maintenance_fixture.hpp"
+#include "app/project_package_service.hpp"
+#include "sleeve/storage.hpp"
 #include "storage/mapper/sleeve/element/file_mapper.hpp"
 #include "support/storage_test_access.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
@@ -34,10 +37,11 @@ class ProjectMaintenanceControllerTest : public ::testing::Test {
     auto job          = std::make_shared<ImportJob>();
     job->on_finished_ = [completion](const auto& result) { completion->set_value(result); };
     ImportOptions options;
-    options.skip_duplicates_ = false;
+    options.skip_duplicates = false;
     host.project()->handler().import_service()->ImportToFolder({source, source}, {}, options, job);
     ASSERT_EQ(future.wait_for(std::chrono::seconds(90)), std::future_status::ready);
     ASSERT_EQ(future.get().imported_, 2);
+    host.project()->handler().import_service()->SyncImports(job->import_log_->Snapshot(), L"");
     ASSERT_TRUE(job->IsCancelationAcked());
   }
   auto ScanAndSelect(ApplicationModuleHost& host) -> uint {
@@ -60,6 +64,41 @@ TEST_F(ProjectMaintenanceControllerTest, NoLoadedProjectDisablesScanAndApply) {
   EXPECT_TRUE(host.maintenance()->ProjectPath().isEmpty());
   EXPECT_FALSE(host.maintenance()->Scan());
   EXPECT_FALSE(host.maintenance()->ApplyIds({1}));
+}
+TEST_F(ProjectMaintenanceControllerTest, EnabledScanPackagesMarksAndReviewOnlyKeepsThem) {
+  ApplicationModuleHost host;
+  Open(host);
+  ImportDuplicates(host);
+  const auto directory = std::filesystem::path(directory_.path().toStdWString());
+  const auto source    = directory / "photo.jpg";
+  const auto original  = directory / "original.jpg";
+  std::filesystem::copy_file(source, original);
+  std::ofstream(source, std::ios::binary) << "replacement source";
+  auto*      maintenance = host.maintenance();
+  QSignalSpy scanned(maintenance, &ProjectMaintenanceController::ScanFinished);
+  ASSERT_TRUE(maintenance->Scan(true));
+  ASSERT_TRUE(scanned.wait(15000));
+  ASSERT_TRUE(scanned.takeFirst().front().toBool()) << maintenance->Error().toStdString();
+  EXPECT_EQ(maintenance->SourceChangedEntries().size(), 2);
+
+  ProjectPackageService packages;
+  std::filesystem::path db, meta;
+  QString               error;
+  ASSERT_TRUE(packages.UnpackProjectToWorkspace(host.project()->handler().package_path(), directory,
+                                                QStringLiteral("marked"), &db, &meta, &error))
+      << error.toStdString();
+  Storage saved(db);
+  EXPECT_EQ(saved.GetSourceFileStore().ReadChangedEntryIds().size(), 2);
+
+  std::filesystem::copy_file(original, source, std::filesystem::copy_options::overwrite_existing);
+  ASSERT_TRUE(maintenance->Scan(false));
+  ASSERT_TRUE(scanned.wait(15000));
+  ASSERT_TRUE(scanned.takeFirst().front().toBool()) << maintenance->Error().toStdString();
+  EXPECT_EQ(maintenance->SourceChangedEntries().size(), 2);
+  ASSERT_TRUE(maintenance->Scan(true));
+  ASSERT_TRUE(scanned.wait(15000));
+  ASSERT_TRUE(scanned.takeFirst().front().toBool()) << maintenance->Error().toStdString();
+  EXPECT_TRUE(maintenance->SourceChangedEntries().isEmpty());
 }
 TEST_F(ProjectMaintenanceControllerTest, DialogReopenShowsCurrentScan) {
   ApplicationModuleHost host;

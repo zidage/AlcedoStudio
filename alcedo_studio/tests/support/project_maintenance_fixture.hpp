@@ -49,24 +49,35 @@ class MaintenanceStorageFixture : public ::testing::Test {
                                                table + " ORDER BY ALL) t"))
         .value_or("");
   }
-  void Add(sl_element_id_t id, const image_path_t& path = {}) {
+  void Add(sl_element_id_t id, const image_path_t& path = {}, bool record_source = true) {
+    const auto& image_path = path.empty() ? source_ : path;
     auto guard = database_->GetConnectionGuard();
     auto lock  = guard.Lock();
     auto query = duckorm::expr::raw("INSERT INTO Image(id,image_path,metadata) VALUES (");
     query.append(duckorm::expr::param(static_cast<int64_t>(id)));
     query.append(duckorm::expr::raw(","));
-    query.append(duckorm::expr::param((path.empty() ? source_ : path).generic_string()));
+    query.append(duckorm::expr::param(image_path.generic_string()));
     query.append(duckorm::expr::raw(",'{\"Rating\":0}')"));
     duckorm::execute(guard.conn_, query);
     duckorm::execute(guard.conn_,
                      duckorm::expr::raw(std::format(
-                         "INSERT INTO Element VALUES ({0},0,'photo',TIMESTAMP '2026-01-01',NULL,0);"
+                         "INSERT INTO Element(id,type,element_name,added_time,ref_count) "
+                         "VALUES ({0},0,'photo',TIMESTAMP '2026-01-01',0);"
                          "INSERT INTO FileImage VALUES ({0},{0})",
                          id)));
     const auto document = CreateDefaultPipelineDocument();
     CommitGraphStore(guard.conn_).CreateRootPipelinePersisted(id, document);
     PipelineMapper(guard.conn_)
         .InsertParams({id, std::make_unique<std::string>(document.ToJson().dump())});
+    if (record_source && std::filesystem::is_regular_file(image_path)) {
+      const auto fingerprint = ComputeSourceFileFingerprint(image_path);
+      ASSERT_TRUE(fingerprint.HasFingerprint());
+      const SourceFileRecord source{.element_id          = id,
+                                    .byte_size           = std::filesystem::file_size(image_path),
+                                    .fingerprint         = fingerprint.fingerprint.hash,
+                                    .fingerprint_version = fingerprint.fingerprint.version};
+      SourceFileStore(*database_).UpsertSourceFiles(std::span(&source, 1));
+    }
   }
   auto Find(sl_element_id_t id) -> const MaintenanceFinding& {
     for (const auto& finding : service_.Findings()) {

@@ -4,6 +4,7 @@
 
 #include <QObject>
 #include <QTimer>
+#include <QVariantMap>
 #include <atomic>
 #include <filesystem>
 #include <functional>
@@ -43,6 +44,8 @@ class ProjectMaintenanceController final : public QObject {
   Q_PROPERTY(int processedEntries READ ProcessedEntries NOTIFY Changed)
   Q_PROPERTY(int totalEntries READ TotalEntries NOTIFY Changed)
   Q_PROPERTY(bool progressDeterminate READ ProgressDeterminate NOTIFY Changed)
+  Q_PROPERTY(
+      QVariantMap sourceChangedEntries READ SourceChangedEntries NOTIFY SourceChangedEntriesChanged)
  public:
   ProjectMaintenanceController(ProjectMaintenanceService& service, ProjectModule& project,
                                ProjectLaunchCoordinator& launch, EditorSessionController& editor,
@@ -66,8 +69,12 @@ class ProjectMaintenanceController final : public QObject {
   int                      ProcessedEntries() const { return processed_entries_; }
   int                      TotalEntries() const { return static_cast<int>(removals_.size()); }
   bool                     ProgressDeterminate() const { return progress_determinate_; }
-  /// Starts a read-only scan; hides/reopens retain the same task and findings.
-  Q_INVOKABLE bool         Scan();
+  /// Starts a scan. The review panel explicitly enables saved Library marks.
+  Q_INVOKABLE bool         Scan(bool mark_changed_sources = false);
+  /// Saved source-change marks projected into the Library by decimal element ID.
+  auto SourceChangedEntries() const -> QVariantMap { return source_changed_entries_; }
+  /// Refresh the Library projection after opening a project or changing entry ownership.
+  void RefreshSourceChangedEntries();
   Q_INVOKABLE void         CancelScan();
   /// UI calls only after explicit confirmation. Refuses when another agent holds control.
   Q_INVOKABLE bool         ApplySelected(const QString& backup_directory = {});
@@ -85,6 +92,7 @@ class ProjectMaintenanceController final : public QObject {
  signals:
   void Changed();
   void ScanFinished(bool complete);
+  void SourceChangedEntriesChanged();
   void Finished(bool success);
 
  private:
@@ -116,6 +124,7 @@ class ProjectMaintenanceController final : public QObject {
   BackgroundTaskController&                  tasks_;
   InteractionPolicyController&               policy_;
   ProjectMaintenanceModel                    model_;
+  QVariantMap                                source_changed_entries_;
   QTimer                                     preparation_timer_;
   std::thread                                worker_;
   std::atomic<bool>                          canceled_{false};

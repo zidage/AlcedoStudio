@@ -40,7 +40,9 @@ auto ProjectMaintenanceModel::Value(const MaintenanceFinding& finding, int role)
     case Finding:
       return static_cast<int>(finding.kind);
     case Reason: {
-      QStringList reasons{QString::fromStdString(finding.reason)};
+      QStringList reasons{finding.kind == MaintenanceFindingKind::SourceChanged
+                              ? tr("Source changed since import")
+                              : QString::fromStdString(finding.reason)};
       for (const auto& reason : entry.protection_reasons) reasons << QString::fromStdString(reason);
       return reasons.join(QStringLiteral("\n"));
     }
@@ -101,7 +103,9 @@ void ProjectMaintenanceModel::SetSearch(const QString& search) {
   Rebuild();
 }
 void ProjectMaintenanceModel::SetFilter(int filter) {
-  if (filter_ == filter || filter < -1 || filter > 3) return;
+  if (filter_ == filter || filter < -1 ||
+      filter > static_cast<int>(MaintenanceFindingKind::SourceHistoryUnknown))
+    return;
   filter_ = filter;
   page_   = 0;
   Rebuild();
@@ -170,7 +174,8 @@ bool ProjectMaintenanceModel::Matches(const MaintenanceFinding& finding, int fil
 }
 auto ProjectMaintenanceModel::ReadFindingsPage(int page, int filter, const QString& search,
                                                int& matching_count) const -> QVariantList {
-  if (page < 0 || filter < -1 || filter > 3)
+  if (page < 0 || filter < -1 ||
+      filter > static_cast<int>(MaintenanceFindingKind::SourceHistoryUnknown))
     throw std::out_of_range("Invalid maintenance page or filter.");
   QVariantList rows;
   matching_count = 0;

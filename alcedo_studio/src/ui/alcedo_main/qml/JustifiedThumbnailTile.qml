@@ -232,6 +232,12 @@ Item {
             compact: tile.view.columns >= 8
         }
 
+        SourceChangedThumbnailIcon {
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.margins: appTheme.spaceXs
+            visible: tile.view.sourceChangedEntries[String(tile.elementId >>> 0)] === true
+        }
         // Edit mark: a chip on the top-right corner of the photo.
         ThumbnailEditMark {
             id: editMark

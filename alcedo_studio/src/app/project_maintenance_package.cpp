@@ -44,12 +44,24 @@ auto ProjectMaintenancePackage::Digest(const std::filesystem::path& path) -> std
   if (!hash.addData(&file)) throw std::runtime_error("Package digest read failed");
   return hash.result().toHex().toStdString();
 }
-void ProjectMaintenancePackage::Replace(const std::filesystem::path& replacement,
-                                        const std::filesystem::path& target) {
+void ProjectMaintenancePackage::Replace(const std::filesystem::path&        replacement,
+                                        const std::filesystem::path&        target,
+                                        [[maybe_unused]] const std::string& expected_replacement,
+                                        [[maybe_unused]] const std::string& expected_target) {
 #ifdef _WIN32
-  if (!ReplaceFileW(target.c_str(), replacement.c_str(), nullptr, 0, nullptr, nullptr)) {
-    throw std::system_error(static_cast<int>(GetLastError()), std::system_category(),
-                            "Atomic package replacement");
+  constexpr int kRetryLimit = 3;
+  for (int retries = 0;; ++retries) {
+    if (ReplaceFileW(target.c_str(), replacement.c_str(), nullptr, 0, nullptr, nullptr)) return;
+    const auto error = GetLastError();
+    // This error preserves both names. Check both files before retrying the same operation.
+    if (error != ERROR_UNABLE_TO_REMOVE_REPLACED || retries == kRetryLimit) {
+      throw std::system_error(static_cast<int>(error), std::system_category(),
+                              "Atomic package replacement");
+    }
+    Sleep(100);
+    if (Digest(target) != expected_target || Digest(replacement) != expected_replacement) {
+      throw std::runtime_error("Package files changed during replacement");
+    }
   }
 #else
   std::filesystem::rename(replacement, target);
@@ -178,7 +190,7 @@ void ProjectMaintenancePackage::Apply(const std::shared_ptr<ProjectService>& pro
     throw std::runtime_error(
         "Saved baseline changed before publication; current package was left untouched");
   try {
-    Replace(publication, original_);
+    Replace(publication, original_, installed_digest_, baseline_digest_);
   } catch (...) {
     // A failed OS replacement can have an uncertain outcome. Observe actual bytes before
     // deciding whether restoration is permitted; never assume that failure means no write.
@@ -214,7 +226,7 @@ void ProjectMaintenancePackage::Restore() {
   }
   if (Digest(original_) != installed_digest_)
     throw std::runtime_error("Published package changed before restoration; recovery required");
-  Replace(restore, original_);
+  Replace(restore, original_, baseline_digest_, installed_digest_);
   if (Digest(original_) != baseline_digest_)
     throw std::runtime_error("Restored package digest differs from backup");
   installed_ = false;

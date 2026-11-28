@@ -4,7 +4,17 @@
 
 #include <fstream>
 
+#include "utils/file/source_file.hpp"
+
 namespace alcedo {
+auto ReadMaintenanceFingerprint(const image_path_t& path) -> std::optional<SourceFileFingerprint> {
+  const auto before = ReadSourceFileAttributes(path);
+  if (!before) return std::nullopt;
+  const auto result = ComputeSourceFileFingerprint(path);
+  if (!result.HasFingerprint() || before != ReadSourceFileAttributes(path)) return std::nullopt;
+  return result.fingerprint;
+}
+
 auto CheckSourceImageStatus(const image_path_t& path) -> SourceImageStatusResult {
   std::error_code error;
   if (!path.is_absolute()) return {SourceImageStatus::Error, "Source path is not absolute"};

@@ -7,8 +7,22 @@
 #include <QUrl>
 #include <cmath>
 #include <limits>
+#include <optional>
+#include <stdexcept>
 
 namespace alcedo::ui {
+namespace {
+
+auto ReadSourceChangedEntries(const ProjectService& project) -> QVariantMap {
+  QVariantMap result;
+  for (const auto id : project.GetStorage()->GetSourceFileStore().ReadChangedEntryIds()) {
+    result.insert(QString::number(id), true);
+  }
+  return result;
+}
+
+}  // namespace
+
 ProjectMaintenanceController::ProjectMaintenanceController(
     ProjectMaintenanceService& service, ProjectModule& project, ProjectLaunchCoordinator& launch,
     EditorSessionController& editor, BackgroundTaskController& tasks,
@@ -43,6 +57,7 @@ ProjectMaintenanceController::ProjectMaintenanceController(
       operation_.reset();
     }
     closing_requested_ = false;
+    RefreshSourceChangedEntries();
     emit Changed();
   });
   connect(&project_, &ProjectModule::ProjectLoadStateChanged, this, [this] {
@@ -76,8 +91,30 @@ QString ProjectMaintenanceController::BackupPath() const { return backup_path_; 
 QString ProjectMaintenanceController::ProjectPath() const {
   return QString::fromStdWString(project_.handler().package_path().wstring());
 }
-bool ProjectMaintenanceController::Scan() {
+void ProjectMaintenanceController::RefreshSourceChangedEntries() {
+  QVariantMap marks;
+  try {
+    if (const auto project = project_.handler().project()) {
+      marks = ReadSourceChangedEntries(*project);
+    }
+  } catch (const std::exception& error) {
+    error_ = QString::fromUtf8(error.what());
+    emit Changed();
+  }
+  if (marks != source_changed_entries_) {
+    source_changed_entries_ = std::move(marks);
+    emit SourceChangedEntriesChanged();
+  }
+}
+bool ProjectMaintenanceController::Scan(bool mark_changed_sources) {
   if (busy_ || !Available()) return false;
+  if (mark_changed_sources) {
+    if (const auto reason = UserStateChangeRefusal(&policy_); !reason.isEmpty()) {
+      error_ = reason;
+      emit Changed();
+      return false;
+    }
+  }
   JoinWorker();
   model_.Clear();
   service_.Clear();
@@ -92,7 +129,7 @@ bool ProjectMaintenanceController::Scan() {
   processed_entries_               = 0;
   progress_determinate_            = false;
   removals_.clear();
-  message_ = tr("Scanning the complete project");
+  message_ = tr("Scanning ordinary photos");
   BackgroundTaskSnapshot task;
   task.kind_             = BackgroundTaskKind::MaintenanceScan;
   task.state_            = BackgroundTaskState::Running;
@@ -105,9 +142,12 @@ bool ProjectMaintenanceController::Scan() {
   const auto journal     = project_.handler().editor_journal_directory();
   const auto active =
       editor_.has_image() ? std::optional<sl_element_id_t>(editor_.element_id()) : std::nullopt;
-  worker_ = std::thread([this, project, journal, active] {
+  auto save = mark_changed_sources ? project_.handler().MakeSaveAndPackageJob()
+                                   : std::function<bool(QString*)>{};
+  worker_   = std::thread([this, project, journal, active, save = std::move(save)] {
     bool    complete = false;
     QString failure;
+    bool    refresh_marks = false;
     try {
       complete = service_.Scan(
           project->GetStorage()->GetProjectMaintenanceStore(), journal, active,
@@ -122,16 +162,29 @@ bool ProjectMaintenanceController::Scan() {
                     emit Changed();
                   },
                   Qt::QueuedConnection);
-          });
+          },
+          {}, static_cast<bool>(save));
+      if (complete && service_.ChangedMarksWritten()) {
+        refresh_marks = true;
+        QString save_error;
+        if (!save(&save_error)) {
+          throw std::runtime_error(save_error.isEmpty()
+                                       ? tr("Could not save source-change marks").toStdString()
+                                       : save_error.toStdString());
+        }
+      }
     } catch (const std::exception& error) {
       failure = QString::fromUtf8(error.what());
+      service_.Clear();
+      complete = false;
     }
     QMetaObject::invokeMethod(
         this,
-        [this, complete, failure] {
+        [this, complete, failure, refresh_marks] {
           JoinWorker();
           busy_  = false;
           error_ = failure;
+          if (refresh_marks) RefreshSourceChangedEntries();
           state_ = failure.isEmpty()
                        ? (complete ? QStringLiteral("review") : QStringLiteral("canceled"))
                        : QStringLiteral("failed");
@@ -140,7 +193,7 @@ bool ProjectMaintenanceController::Scan() {
               complete ? (service_.Findings().empty() ? tr("No duplicate or invalid entries found")
                                                       : tr("%1 findings. Select entries to remove.")
                                                             .arg(service_.Findings().size()))
-                       : tr("Scan canceled");
+                       : (failure.isEmpty() ? tr("Scan canceled") : QString{});
           tasks_.FinishTask(task_id_,
                             !failure.isEmpty() ? BackgroundTaskState::Failed
                             : complete         ? BackgroundTaskState::Succeeded

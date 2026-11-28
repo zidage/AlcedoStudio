@@ -16,6 +16,7 @@ auto ProjectMaintenanceService::CheckSource(const image_path_t& path) -> Mainten
 
 void ProjectMaintenanceService::Clear() {
   complete_ = false;
+  changed_marks_written_ = false;
   findings_.clear();
 }
 
@@ -24,7 +25,7 @@ auto ProjectMaintenanceService::Scan(ProjectMaintenanceStore&           store,
                                      std::optional<sl_element_id_t>     active_entry,
                                      const std::function<bool()>&       canceled,
                                      const std::function<void(size_t)>& progress,
-                                     SourceChecker                      checker) -> bool {
+                                     SourceChecker checker, bool mark_changed_sources) -> bool {
   Clear();
   if (!checker) checker = CheckSource;
   std::map<image_path_t::string_type, std::vector<MaintenanceEntryEvidence>> groups;
@@ -37,6 +38,8 @@ auto ProjectMaintenanceService::Scan(ProjectMaintenanceStore&           store,
     for (auto id : ids) {
       if (canceled && canceled()) return false;
       auto evidence = store.Inspect(id);
+      after         = id;
+      if (evidence.mounted) continue;
       if (active_entry == id) evidence.protection_reasons.emplace_back("Open editor entry");
       if (!journal_directory.empty()) {
         const auto journal = journal_directory / ("image-" + std::to_string(id) + ".mini-git.wal");
@@ -54,13 +57,24 @@ auto ProjectMaintenanceService::Scan(ProjectMaintenanceStore&           store,
         findings_.push_back(
             {std::move(evidence), MaintenanceFindingKind::ProjectProblem, error.what(), {}, false});
       }
-      after = id;
       if (progress) progress(++inspected);
     }
   }
+  std::vector<SourceChangeMark> marks;
   for (auto& [path, entries] : groups) {
     if (canceled && canceled()) return false;
     const auto source = checker(entries.front().source_path);
+    const bool repeated = entries.size() > 1;
+    const bool check_fingerprint =
+        repeated || std::any_of(entries.begin(), entries.end(),
+                                [](const auto& entry) { return entry.source_changed; });
+    const auto current = source.status == MaintenanceSourceStatus::Readable && check_fingerprint
+                             ? ReadMaintenanceFingerprint(entries.front().source_path)
+                             : std::nullopt;
+    const bool verified_duplicates =
+        repeated && current && std::all_of(entries.begin(), entries.end(), [&](const auto& entry) {
+          return entry.recorded_fingerprint == current;
+        });
     std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
       if (left.added_time != right.added_time) {
         if (!left.added_time) return false;
@@ -77,26 +91,37 @@ auto ProjectMaintenanceService::Scan(ProjectMaintenanceStore&           store,
                               [](const auto& entry) { return entry.valid_references; });
     const auto retained = survivor == entries.end() ? entries.front().entry_id : survivor->entry_id;
     for (auto& entry : entries) {
-      if (source.status == MaintenanceSourceStatus::Readable && entries.size() == 1 &&
-          entry.valid_references)
-        continue;
-      MaintenanceFinding finding;
-      finding.kind =
-          source.status == MaintenanceSourceStatus::Missing ? MaintenanceFindingKind::MissingSource
-          : source.status == MaintenanceSourceStatus::Error ? MaintenanceFindingKind::SourceProblem
-          : entries.size() > 1 ? MaintenanceFindingKind::Duplicate
-                               : MaintenanceFindingKind::ProjectProblem;
-      finding.reason = source.reason;
-      if (finding.kind == MaintenanceFindingKind::Duplicate) {
-        finding.reason      = "Repeated full source path";
-        finding.retained_id = retained;
+      const bool comparable = current && entry.recorded_fingerprint &&
+                              current->version == entry.recorded_fingerprint->version;
+      const bool changed    = comparable && *current != *entry.recorded_fingerprint;
+      if (mark_changed_sources && comparable && changed != entry.source_changed) {
+        marks.push_back({entry.entry_id, *entry.recorded_fingerprint, changed});
       }
-      finding.removable =
-          entry.protection_reasons.empty() &&
-          (finding.kind == MaintenanceFindingKind::MissingSource ||
-           (finding.kind == MaintenanceFindingKind::Duplicate && entry.entry_id != retained));
-      if (finding.kind == MaintenanceFindingKind::Duplicate && entry.entry_id == retained) {
-        finding.reason += "; designated retained entry";
+      MaintenanceFinding finding;
+      finding.reason = source.reason;
+      if (!entry.valid_references) {
+        finding.kind   = MaintenanceFindingKind::ProjectProblem;
+        finding.reason = "Project references or history need review";
+      } else if (source.status == MaintenanceSourceStatus::Missing) {
+        finding.kind      = MaintenanceFindingKind::MissingSource;
+        finding.removable = entry.protection_reasons.empty();
+      } else if (source.status == MaintenanceSourceStatus::Error) {
+        finding.kind = MaintenanceFindingKind::SourceProblem;
+      } else if (verified_duplicates) {
+        finding.kind        = MaintenanceFindingKind::Duplicate;
+        finding.reason      = "Same path and recorded fingerprint match the current file";
+        finding.retained_id = retained;
+        finding.removable   = entry.protection_reasons.empty() && entry.entry_id != retained;
+        if (entry.entry_id == retained) finding.reason += ". Retained entry";
+      } else if (changed) {
+        finding.kind   = MaintenanceFindingKind::SourceChanged;
+        finding.reason = "Source changed since import";
+      } else if (repeated || (entry.source_changed && !comparable)) {
+        finding.kind   = MaintenanceFindingKind::SourceHistoryUnknown;
+        finding.reason = comparable ? "Matches current file. Another entry needs review"
+                                    : "Source history could not be verified";
+      } else {
+        continue;
       }
       finding.evidence = std::move(entry);
       findings_.push_back(std::move(finding));
@@ -118,6 +143,7 @@ auto ProjectMaintenanceService::Scan(ProjectMaintenanceStore&           store,
     }
   }
   if (canceled && canceled()) return false;
+  changed_marks_written_ = store.UpdateSourceChangeMarks(marks);
   complete_ = true;
   return true;
 }

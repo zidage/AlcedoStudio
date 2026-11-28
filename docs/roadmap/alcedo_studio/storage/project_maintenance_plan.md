@@ -2,9 +2,11 @@
 
 Date: 2026-11-09
 
-Updated: 2026-11-10. Color-label and deletion-mark preservation now apply to scan and removal.
+Updated: 2026-11-27. Ordinary-entry review uses the source records from PR #798.
+Source-change marks persist in the project.
 
-Status: PM1-PM5 are implemented and qualified on Windows. Platform and native review limits are recorded in section 11.
+Status: Sections 4–12 record PM1–PM5 and their Windows qualification on the previous base.
+Section 13 specifies and tracks the current revision.
 
 Source audit: `7bcac45d`.
 
@@ -18,9 +20,18 @@ Users review existing project entries before any removal.
 
 - Add a **Project Maintenance** text button immediately below **Background Tasks** in the top-left
   Collections sidebar. Use one shared dialog and controller. The user-approved UI revision adds the Tabler database-cog icon in the same utility-row layout as Search and Background Tasks.
-- Scan the entire loaded project, regardless of the selected album, filters, or search.
-- Identify repeated imports by normalized full source path. Preserve every folder component.
-  Equal names or equal bytes under different full paths do not make maintenance duplicates.
+- Inspect every ordinary photo entry once, including photos with no collection. Use the element's
+  empty mount ID. An ordinary collection can link to a mounted photo. The mount owns that photo.
+- Offer duplicate removal only when the ordinary entries share a normalized path and their
+  recorded fingerprints match the current source. Leave entries with an unknown or changed
+  source history for manual review.
+- Check the current fingerprint once for each path that has multiple ordinary entries or at
+  least one saved source-change mark.
+- The review panel has a default-on **Mark changed sources in the Library** checkbox. A completed
+  scan with marking enabled saves confirmed changes. A verified match clears its mark.
+- Use the crossed-photo icon on the Library thumbnail and the tooltip **Source changed since
+  import**. Show the thumbnail and the icon together. Show saved icons when the project reopens.
+- A scan with marking disabled shows the findings. It leaves the saved icons visible.
 - Keep every rated or edited entry. This includes inactive Versions, undone history, and additional
   or renamed Versions. A missing source does not remove this protection.
 - Identify missing sources separately from permission errors, unreadable paths, and broken project
@@ -57,9 +68,10 @@ Project Maintenance                                      X
 Current project name
 
 Scan project
+[x] Mark changed sources in the Library
 Scan progress and current phase, when running
 
-Findings: All / Duplicates / Missing sources / Other problems
+Findings: All / Duplicates / Missing sources / Source problems / Project problems
 Search full source path or entry ID
 
 Select  Full source path  Entry ID  Rating  Editing work  Finding  Action/reason
@@ -103,7 +115,7 @@ Start every completed scan with no entries selected. The two explicit selection 
 currently eligible findings. Users can clear individual rows or all rows. The service revalidates
 selection before mutation. The UI cannot override a rated, edited, or uncertain entry's protection.
 
-For a readable duplicate group, retain every protected entry. When no entry is protected, retain
+For a verified duplicate group, retain every protected entry. When no entry is protected, retain
 the earliest import by `Element.added_time`, then the lowest element ID. Show the retained entry
 beside removable extras. That retained entry cannot be selected as a removal target. A user can
 leave additional extras by clearing their selection. Multiple edited copies stay separate.
@@ -146,32 +158,23 @@ the normal project-open workflow. A successful removal does not remove that back
 
 ### 3.1 Identity and first-release scan scope
 
-Reuse the proposed neutral `NormalizeSourceImagePath(const image_path_t&)` operation in
-`src/include/utils/file/source_image_path.hpp` and `src/utils/file/source_image_path.cpp`.
-It normalizes absolute path spelling, directory separators, and dot segments. On Windows it uses
-case-insensitive comparison. On macOS this feature preserves case and performs no filesystem case
-probe. Never merge distinct visible paths by resolving symlinks,
-hard links, filenames, capture times, EXIF, or content hashes.
-
-This utility can be introduced by either feature's first phase. The other feature reuses it.
-Project Maintenance does not depend on the import source-size table, the import preference, or the
-import admission changes. It works when those changes have not shipped.
-
-The first release checks these concrete findings:
+Use `SourcePathKey` from the source-file utility. Group ordinary entries by their normalized
+absolute source path. Use `SourceFile` for the recorded fingerprint and fingerprint version.
+Compare these values with the fingerprint of the current file. Size is part of the fingerprint.
+A different path gives an independent group.
 
 | Finding | Evidence | Removal eligibility |
 | --- | --- | --- |
-| Repeated full source path | Several live project entries have the same normalized path | Unrated pristine extras only; retain designated survivors |
-| Missing source | A source status/read reports file-not-found after checking the containing volume | Unrated pristine entries only |
-| Source access error | Permission, volume, sharing, or other read failure | Report only; no automatic missing classification |
-| Source is not a regular file | Path names a directory or another unsupported filesystem object | Report only |
-| Broken project reference | Missing Image, Element, root, state, Version, pipeline, or referenced asset | Report and protect; ownership is uncertain |
-| Invalid stored history | Invalid JSON, inconsistent ownership/labels, dangling commit parents, or invalid graph | Report and protect |
+| Duplicate | Multiple ordinary entries have the same path and each recorded fingerprint matches the current file | Pristine extras only. Keep the designated survivor and protected entries. |
+| Source changed | The current fingerprint differs from a comparable recorded fingerprint | Review only. Show each verified mismatch. |
+| Source history unknown | A repeated path has an entry without a comparable record, or the fingerprint read failed | Review only. Show what the scan can verify. |
+| Missing source | The path is absent on a reachable source volume | Pristine entries only. Recheck the path during removal. |
+| Source problem | Access error, unavailable volume, or a path to an unsupported filesystem object | Review only. |
+| Project problem | Broken catalog reference or invalid stored history | Review only. |
 
-Do not fully decode every RAW file to perform this scan. Do not claim that a successful filesystem
-check proves that every source pixel can decode. Decoder diagnostics remain with their existing
-import/render owners. Maintenance distinguishes a verified missing source from an unavailable drive
-before offering removal; it does not preselect every path on a disconnected volume.
+When a path has several recorded fingerprints, protect the whole group from duplicate removal.
+Show the matching row and every changed row. If the file differs from all comparable records,
+mark all those entries. A canceled scan and a failed source read give no new evidence for marks.
 
 ### 3.2 Proof that an entry has no editing work
 
@@ -1079,3 +1082,71 @@ All 53 selected maintenance cases passed: service 13, storage 12, package 11, mo
 The Release app rebuilt successfully. Shared import/rendering checks and exact commands are in
 [ordinary import verification in PR #798](https://github.com/zidage/AlcedoStudio/pull/798).
 The full suite and macOS execution were not run. No PR or commit was created for this revision.
+
+## 13. Ordinary entries and saved source-change marks
+
+**Prerequisites.** Merge upstream main and PR #798. Read `AGENTS.md` and the plan, QML, and
+Windows build skills before implementation. Audit base `f758bf5a7`.
+
+**Source audit.** The original maintenance service grouped entries by path and checked whether
+the path was readable. It held findings in memory. The mounted-folder scan now owns mounted
+reachability and the stored missing state. PR #798 supplies the shared source measurements and
+the path normalization utility. The Library already draws the crossed-photo icon for a missing
+thumbnail source.
+
+**PM6A. Ordinary-entry classification and checked removal.** Estimate 850 changed lines.
+
+1. Restrict enumeration and removal to ordinary entries in `ProjectMaintenanceStore`. Keep
+   report-only diagnostics for broken catalog references. Reject a mounted entry at apply.
+2. Read the recorded fingerprint from the source owner. Measure each qualifying path once
+   through `ComputeSourceFileFingerprint`. Keep access errors and missing paths distinct.
+3. Use the match rules in section 3.1. Pass only explicit IDs into staged removal. Recheck the
+   path, comparable fingerprints, survivor, and preservation evidence before deletion.
+4. Remove the source row and its saved mark in the deletion transaction. Include them in the
+   retained-row verification.
+
+**PM6B. Save and display source-change marks.** Estimate 750 changed lines.
+
+1. Store the mark as project data keyed by the ordinary element ID. Keep the source measurement
+   and the mounted missing state in `SourceFile`. A project without saved marks starts empty.
+2. The maintenance worker collects verified mark updates during the scan. Publish one storage
+   operation after a complete, enabled scan. Use the existing project save and package operation.
+   Report a storage or package failure. Show the saved marks after the project opens.
+3. Use `ThemeCheckBox` in the review panel. The Library uses the existing crossed-photo asset
+   with a distinct tooltip and accessible description. The thumbnail stays visible. A disabled
+   scan still computes the review findings.
+4. Refresh the Library marks after the storage operation. The update keeps the existing
+   thumbnail request path.
+
+**Call chains.** Scan action → controller worker → maintenance service → ordinary entry query,
+source checks, fingerprint read → findings → optional mark update → project save → Library
+refresh. Remove selected → verified backup → staged storage validation → deletion and retained
+row verification → package activation. A canceled scan emits no mark updates. A failed apply
+uses the existing restore path.
+
+**Verification.** Exercise ordinary scope, mounted refusal, matching and unknown histories,
+different fingerprints at one path, a replaced source shared by two entries, and removal after
+a source changes. Verify mark persistence across reopen, review-only scans, and mark clearing
+after recheck of a single marked entry. Build the five Project Maintenance test targets and
+the Windows Release app with `scripts/msvc_env.cmd --build --preset win_release`. Run the
+targeted Maintenance, import classification, and mount service cases. Record results and
+manual verification separately.
+
+**Completion record (2026-11-27).** Merged upstream main at `728947418` and PR #798 at
+`65127f0ac` before implementation. The `SourceFileChanged` table stores only element IDs.
+`SourceFileStore` checks the baseline and ordinary ownership before it writes a mark. It
+removes marks when it replaces or deletes the baseline. The controller saves the project
+when an enabled scan changes a mark. The Library reads the saved IDs when the project opens
+and when verified results change. The automation scan remains a read-only review.
+
+The Windows Release app built successfully. All 110 targeted tests passed. The suites were
+`ProjectMaintenanceServiceTest` (19), `ProjectMaintenanceStorageTest` (13),
+`ProjectMaintenanceApplyTest` (11), `ProjectMaintenanceModelTest` (5),
+`ProjectMaintenanceControllerTest` (13), `ImportContentClassificationTest` (20), and
+`MountServiceTest` (29). The controller test verified the marks in the saved package,
+review-only behavior, and clearing a mark after a verified match. The storage boundary and
+C++ thread API checks passed. Native visual verification remains pending.
+
+The Windows recovery test exposed an intermittent replacement error. The same atomic operation
+now retries that error after it verifies both file digests. The restore case passed six
+consecutive reruns. [Restore issue](https://github.com/ClearSights/AlcedoStudio/issues/7)

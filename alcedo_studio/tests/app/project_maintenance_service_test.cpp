@@ -33,6 +33,85 @@ TEST_F(ProjectMaintenanceServiceTest, DuplicateSelectionRetainsEarliestEntryWith
   const sl_element_id_t id = 2;
   ASSERT_EQ(service_.Selection(std::span(&id, 1)).size(), 1);
 }
+TEST_F(ProjectMaintenanceServiceTest, MountedEntryDoesNotParticipateInOrdinaryDuplicateReview) {
+  Add(1);
+  Add(2);
+  Execute("UPDATE Element SET mount_id=9 WHERE id=2");
+  ASSERT_TRUE(service_.Scan(*store_));
+  EXPECT_TRUE(service_.Findings().empty());
+}
+TEST_F(ProjectMaintenanceServiceTest, LegacySamePathEntriesAreReviewOnly) {
+  Add(1, {}, false);
+  Add(2);
+  ASSERT_TRUE(service_.Scan(*store_));
+  ASSERT_EQ(service_.Findings().size(), 2);
+  for (const auto& finding : service_.Findings()) {
+    EXPECT_EQ(finding.kind, MaintenanceFindingKind::SourceHistoryUnknown);
+    EXPECT_FALSE(finding.removable);
+  }
+}
+TEST_F(ProjectMaintenanceServiceTest, DifferentRecordedSourcesAreProtectedAndOnlyMismatchIsMarked) {
+  Add(1);
+  std::ofstream(source_) << "replacement photo";
+  Add(2);
+  ASSERT_TRUE(service_.Scan(*store_, {}, {}, {}, {}, {}, true));
+  ASSERT_EQ(service_.Findings().size(), 2);
+  EXPECT_EQ(Find(1).kind, MaintenanceFindingKind::SourceChanged);
+  EXPECT_FALSE(Find(1).removable);
+  EXPECT_FALSE(Find(2).removable);
+  EXPECT_EQ(SourceFileStore(*database_).ReadChangedEntryIds(), (std::vector<sl_element_id_t>{1}));
+}
+TEST_F(ProjectMaintenanceServiceTest, ReviewOnlyScanKeepsMarksAndEnabledScanMarksBothMismatches) {
+  Add(1);
+  Add(2);
+  std::ofstream(source_) << "replacement photo";
+  ASSERT_TRUE(service_.Scan(*store_));
+  EXPECT_EQ(Find(1).kind, MaintenanceFindingKind::SourceChanged);
+  EXPECT_EQ(Find(2).kind, MaintenanceFindingKind::SourceChanged);
+  EXPECT_TRUE(SourceFileStore(*database_).ReadChangedEntryIds().empty());
+  ASSERT_TRUE(service_.Scan(*store_, {}, {}, {}, {}, {}, true));
+  EXPECT_TRUE(service_.ChangedMarksWritten());
+  EXPECT_EQ(SourceFileStore(*database_).ReadChangedEntryIds(),
+            (std::vector<sl_element_id_t>{1, 2}));
+  EXPECT_FALSE(Find(1).removable);
+  EXPECT_FALSE(Find(2).removable);
+  std::ofstream(source_) << "source bytes";
+  ASSERT_TRUE(service_.Scan(*store_));
+  EXPECT_FALSE(service_.ChangedMarksWritten());
+  EXPECT_EQ(SourceFileStore(*database_).ReadChangedEntryIds(),
+            (std::vector<sl_element_id_t>{1, 2}));
+}
+TEST_F(ProjectMaintenanceServiceTest, SavedSingletonMarkReopensAndClearsOnVerifiedMatch) {
+  Add(1);
+  const auto             original = *ReadMaintenanceFingerprint(source_);
+  const SourceChangeMark mark{1, original, true};
+  ASSERT_TRUE(SourceFileStore(*database_).UpdateChangeMarks(std::span(&mark, 1)));
+  store_.reset();
+  database_.reset();
+  database_ = std::make_unique<Database>(database_path_);
+  store_    = std::make_unique<ProjectMaintenanceStore>(*database_);
+  EXPECT_EQ(SourceFileStore(*database_).ReadChangedEntryIds(), (std::vector<sl_element_id_t>{1}));
+  bool canceled = false;
+  EXPECT_FALSE(service_.Scan(
+      *store_, {}, {}, [&] { return canceled; }, {},
+      [&](const auto& path) {
+        canceled = true;
+        return ProjectMaintenanceService::CheckSource(path);
+      },
+      true));
+  EXPECT_EQ(SourceFileStore(*database_).ReadChangedEntryIds(), (std::vector<sl_element_id_t>{1}));
+  ASSERT_TRUE(service_.Scan(*store_, {}, {}, {}, {}, {}, true));
+  EXPECT_TRUE(service_.ChangedMarksWritten());
+  EXPECT_TRUE(service_.Findings().empty());
+  EXPECT_TRUE(SourceFileStore(*database_).ReadChangedEntryIds().empty());
+}
+TEST_F(ProjectMaintenanceServiceTest, UnmarkedSingletonDoesNotGetFingerprinted) {
+  Add(1);
+  std::ofstream(source_) << "replacement photo";
+  ASSERT_TRUE(service_.Scan(*store_, {}, {}, {}, {}, {}, true));
+  EXPECT_TRUE(service_.Findings().empty());
+  EXPECT_TRUE(SourceFileStore(*database_).ReadChangedEntryIds().empty());
+}
 TEST_F(ProjectMaintenanceServiceTest, DifferentFoldersWithEqualNamesRemainSeparate) {
   Add(1);
   std::filesystem::create_directory(root_ / "other");

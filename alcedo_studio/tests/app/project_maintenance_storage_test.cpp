@@ -23,6 +23,18 @@ TEST_F(ProjectMaintenanceStorageTest, RemovalProgressCountsProcessedEntriesAndKe
   EXPECT_EQ(removed, (std::vector<sl_element_id_t>{2, 3}));
   EXPECT_EQ(Rows("FileImage"), "[{\"file_id\":1,\"image_id\":1}]");
   EXPECT_TRUE(std::filesystem::exists(source_));
+  EXPECT_FALSE(SourceFileStore(*database_).ReadSourceFile(2));
+}
+TEST_F(ProjectMaintenanceStorageTest, MountedSelectionAndChangedFingerprintRejectRemoval) {
+  Add(1);
+  Add(2);
+  const std::vector<MaintenanceRemoval> removals{{2, 1}};
+  Execute("UPDATE Element SET mount_id=9 WHERE id=2");
+  EXPECT_THROW(store_->RemovePristineProjectEntries(removals), std::invalid_argument);
+  Execute("UPDATE Element SET mount_id=NULL WHERE id=2");
+  std::ofstream(source_) << "replacement photo";
+  EXPECT_THROW(store_->RemovePristineProjectEntries(removals), std::runtime_error);
+  EXPECT_TRUE(SourceFileStore(*database_).ReadSourceFile(2));
 }
 TEST_F(ProjectMaintenanceStorageTest, ProgressObserverFailureRollsBackProcessedEntries) {
   Add(1);
@@ -47,7 +59,8 @@ TEST_F(ProjectMaintenanceStorageTest, SelectedAlbumDoesNotLimitProjectRemoval) {
   Add(2);
   Add(3, root_ / "missing.raw");
   Execute(
-      "INSERT INTO Element VALUES (100,1,'album',NULL,NULL,0);"
+      "INSERT INTO Element(id,type,element_name,added_time,modified_time,ref_count) VALUES "
+      "(100,1,'album',NULL,NULL,0);"
       "INSERT INTO FolderContent VALUES (100,2)");
   const std::vector<MaintenanceRemoval> removals{{2, 1}, {3, {}}};
   const auto removed = ProjectMaintenanceStore(*database_).RemovePristineProjectEntries(removals);
@@ -60,7 +73,8 @@ TEST_F(ProjectMaintenanceStorageTest, DuplicateRemovalTransfersMembershipsWithou
   Add(1);
   Add(2);
   Execute(
-      "INSERT INTO Element VALUES (100,1,'first',NULL,NULL,0),(101,1,'second',NULL,NULL,0);"
+      "INSERT INTO Element(id,type,element_name,added_time,modified_time,ref_count) VALUES "
+      "(100,1,'first',NULL,NULL,0),(101,1,'second',NULL,NULL,0);"
       "INSERT INTO FolderContent VALUES (100,1),(100,2),(101,2)");
   ProjectMaintenanceStore               store(*database_);
   const std::vector<MaintenanceRemoval> removals{{2, 1}};
@@ -133,7 +147,8 @@ TEST_F(ProjectMaintenanceStorageTest, InjectedOwnerFailureRollsBackAllRelatedTab
   Add(1);
   Add(2);
   Execute(
-      "INSERT INTO Element VALUES (100,1,'album',NULL,NULL,0);"
+      "INSERT INTO Element(id,type,element_name,added_time,modified_time,ref_count) VALUES "
+      "(100,1,'album',NULL,NULL,0);"
       "INSERT INTO FolderContent VALUES(100,2);"
       "CREATE TABLE HeldEntry(id BIGINT REFERENCES Element(id)); INSERT INTO HeldEntry VALUES(2)");
   std::vector<std::string> tables{"Element",       "Image",      "FileImage",      "PipelineRoot",

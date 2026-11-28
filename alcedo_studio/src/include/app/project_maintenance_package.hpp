@@ -51,8 +51,8 @@ class ProjectMaintenancePackage {
   /// SHA-256 streamed in bounded chunks. Throws on any read failure.
   static auto Digest(const std::filesystem::path& path) -> std::string;
   /// Atomically replace an existing package, never remove it first. Same filesystem required.
-  static void Replace(const std::filesystem::path& replacement,
-                      const std::filesystem::path& target);
+  static void Replace(const std::filesystem::path& replacement, const std::filesystem::path& target,
+                      const std::string& expected_replacement, const std::string& expected_target);
 
  private:
   void                               Stage(MaintenancePackageStage stage);

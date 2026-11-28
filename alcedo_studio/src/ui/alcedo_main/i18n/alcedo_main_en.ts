@@ -7182,6 +7182,18 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Entries processed</source>
         <translation>Entries processed</translation>
     </message>
+    <message>
+        <source>Mark changed sources in the Library</source>
+        <translation>Mark changed sources in the Library</translation>
+    </message>
+    <message>
+        <source>Changed sources</source>
+        <translation>Changed sources</translation>
+    </message>
+    <message>
+        <source>Unverified source history</source>
+        <translation>Unverified source history</translation>
+    </message>
 </context>
 <context>
     <name>alcedo::ui::ProjectMaintenanceController</name>
@@ -7279,12 +7291,31 @@ The verified backup was restored and reopened.</translation>
         <source>Entry IDs must be nonzero 32-bit integers.</source>
         <translation>Entry IDs must be nonzero 32-bit integers.</translation>
     </message>
+    <message>
+        <source>Scanning ordinary photos</source>
+        <translation>Scanning ordinary photos</translation>
+    </message>
+    <message>
+        <source>Could not save source-change marks</source>
+        <translation>Could not save source-change marks</translation>
+    </message>
 </context>
 <context>
     <name>alcedo::ui::ProjectMaintenanceModel</name>
     <message>
         <source>%1 commits; %2 Versions</source>
         <translation>%1 commits; %2 Versions</translation>
+    </message>
+    <message>
+        <source>Source changed since import</source>
+        <translation>Source changed since import</translation>
+    </message>
+</context>
+<context>
+    <name>SourceChangedThumbnailIcon</name>
+    <message>
+        <source>Source changed since import</source>
+        <translation>Source changed since import</translation>
     </message>
 </context>
 </TS>

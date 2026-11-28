@@ -15,6 +15,7 @@
 #endif
 
 #include "app/import_service.hpp"
+#include "app/pipeline_service.hpp"
 #include "app/project_maintenance_package.hpp"
 #include "app/project_maintenance_service.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
@@ -46,10 +47,11 @@ class ProjectMaintenanceApplyTest : public ::testing::Test {
     auto                       future = completion.get_future();
     job->on_finished_ = [&completion](const auto& result) { completion.set_value(result); };
     ImportOptions options;
-    options.skip_duplicates_ = false;
+    options.skip_duplicates = false;
     importer.ImportToFolder({source_, source_}, {}, options, job);
     ASSERT_EQ(future.wait_for(std::chrono::seconds(90)), std::future_status::ready);
     ASSERT_EQ(future.get().imported_, 2);
+    importer.SyncImports(job->import_log_->Snapshot(), L"");
     ASSERT_TRUE(service_.Scan(project_->GetStorage()->GetProjectMaintenanceStore()));
     for (const auto& finding : service_.Findings())
       if (finding.removable) ids_.push_back(finding.evidence.entry_id);

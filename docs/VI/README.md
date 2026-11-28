@@ -8,6 +8,12 @@ surface must use those values.
 
 ## Project Maintenance
 
+- Put the default-on **Mark changed sources in the Library** checkbox below the scan action.
+  Use `ThemeCheckBox`. A review-only scan keeps the saved marks visible.
+- In the classic, justified, and grouped Library layouts, show the crossed-photo icon at the
+  top-left of the photo with the tooltip **Source changed since import**. Keep the thumbnail
+  visible. Use `SourceChangedThumbnailIcon.qml` and the existing thumbnail scrim and icon tokens.
+
 ### `CollectionsPanel.qml`
 
 - Put Project Maintenance directly below Background Tasks in the same utility-row delegate as Search and Background Tasks. All three share the icon slot, label edge, row height, and vertical centering.

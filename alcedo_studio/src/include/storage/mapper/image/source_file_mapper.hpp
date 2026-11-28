@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -56,6 +57,12 @@ class SourceFileMapper
   static auto ToParams(const SourceFileRecord& source) -> SourceFileMapperParams;
   /// @throws std::runtime_error when the stored row holds a value that no record can hold.
   static auto FromParams(SourceFileMapperParams&& param) -> SourceFileRecord;
+
+  /// Clear marks tied to measurements that the caller replaces or removes in its transaction.
+  void        ClearChangeMarks(std::span<const sl_element_id_t> element_ids);
+  /// Remove a batch of measurements and their marks in the caller's transaction.
+  void        RemoveByIds(std::span<const sl_element_id_t> element_ids);
+  void        RemoveById(const sl_element_id_t& element_id);
 
   friend struct FieldReflectable<SourceFileMapper>;
   using Mapper::Mapper;
