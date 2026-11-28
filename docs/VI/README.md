@@ -634,8 +634,8 @@ image root, star overlay, editing tile ink).
 ### `ImportProgressOverlay.qml`
 
 - Ring and large count measure photos imported out of photos expected
-  (`importTotal - importFailed`); rejected files leave the expected total, so
-  the total shrinks as the import runs.
+  (`importTotal - importFailed - importDuplicates`). Rejected files and
+  duplicates leave the expected total as the import runs.
 - The phase caption and the `ThemedProgressBar` below it measure files checked
   out of all files. Phases: `Preparing files... a of b`, `Reading photos... a of
   b files checked`, `Saving to the library...`.
@@ -705,3 +705,34 @@ natural-language search on; empty query with and without recent
 searches; a field query (loading frames, three previews, no matches, error); a
 natural-language query (hint, rejected Enter); hover and Up / Down highlight;
 a recommendation row, a recent search, and a photo click.
+
+## Viewport render alert (#1056)
+
+### `ViewportRenderAlert.qml`
+
+- The whole editor viewport blurs (`BlurredOverlay` with the viewport stage as
+  its source) and dims with `viewportAlertScrimColor`. A centered column of
+  `viewportAlertWidth` stands on it with no card: `photo-off.svg`, the title
+  in the empty-state headline style, one muted sentence, Show Details, and the
+  buttons. The user chose this direction from three mocks (quiet card, frosted
+  viewport, bottom bar) and asked for no red badge.
+- Show Details opens the detail well under the toggle: the raw error text in
+  `monoFontFamily`, selectable, eight lines, then an `AlcedoScrollBar` that
+  stays shown. Copy (`clipboard.svg`) at the top right copies the whole text
+  and its tooltip reads "Copied".
+- Buttons are `DialogActionButton`s of `viewportAlertButtonHeight`: the main
+  action `light` at the right, a second action `normal` at its left.
+
+### `EditorAiDenoiseErrorCard.qml`
+
+- Maps the AI Denoise error kind to the title and the message of
+  `ViewportRenderAlert` and passes the raw error text as the detail. Model not
+  installed: Manage (main) and Turn Off AI Denoise. Every other kind: Turn Off
+  AI Denoise.
+
+### Manual review
+
+In Alcedo and Classic themes, English and Chinese: each AI Denoise kind over a
+light and a dark photo, and over a viewport with no frame yet; the minimum
+window (960 x 640) and a wide window; Show Details closed and open with a long
+error (the well scrolls), Copy, and a narrow viewport where the title wraps.

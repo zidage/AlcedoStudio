@@ -11,6 +11,7 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QSignalSpy>
 #include <QThread>
 #include <QUrl>
 #include <QVariantList>
@@ -20,10 +21,16 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <string>
+#include <system_error>
 #include <vector>
 
 #include "app/mount_service.hpp"
+#include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
+#include "sleeve/storage.hpp"
+#include "storage/store/mount/mount_store.hpp"
+#include "utils/file/volume_identity.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
@@ -89,10 +96,9 @@ class FolderControllerMountTest : public ApplicationModuleHostTestFixture {
     return std::nullopt;
   }
 
-  /// The photo count of the library root row: the whole project.
-  auto ProjectPhotoCount() -> qint64 {
-    return Folders().Folders().front().toMap().value("imageCount").toLongLong();
-  }
+  /// All Photos: every photo of the project. The root row counts the Library row, which leaves
+  /// out the mount trees (#1076).
+  auto ProjectPhotoCount() -> qint64 { return Folders().AllPhotosCount(); }
 
   auto Summary() -> MountSummary {
     const auto summaries = Mounts().ListMounts();
@@ -104,8 +110,8 @@ class FolderControllerMountTest : public ApplicationModuleHostTestFixture {
   void MountTrip() {
     ASSERT_TRUE(CreateTestProject(backend_));
     ASSERT_TRUE(backend_.mount_scans()->IsStarted());
-    Folders().MountFolder(0, QUrl::fromLocalFile(PathToQString(disk_ / "Trip")));
-    // A row counts the photos of its own folder: the root row counts the project.
+    Folders().MountFolder(QUrl::fromLocalFile(PathToQString(disk_ / "Trip")));
+    // A row counts the photos of its own folder; All Photos counts the project.
     ASSERT_TRUE(WaitFor([this] {
       return RowNamed("Trip").has_value() && RowNamed("Day1").has_value() &&
              ProjectPhotoCount() == 2 && !backend_.mount_scans()->HasPendingScans();
@@ -131,6 +137,45 @@ class FolderControllerMountTest : public ApplicationModuleHostTestFixture {
   stdfs::path           disk_;
 };
 
+// Issue #1078: the Library row reads the photos directly in the library root and counts the root
+// and the ordinary collections, without the mount trees. All Photos reads and counts every photo.
+// A mounted row carries the volume of its mount for the Disk section.
+TEST_F(FolderControllerMountTest, LibraryRowLeavesOutTheMountedPhotosAndAllPhotosHasThem) {
+  ASSERT_NO_FATAL_FAILURE(MountTrip());
+
+  const auto root_row = Folders().Folders().front().toMap();
+  EXPECT_EQ(root_row.value("folderId").toUInt(), 0u);
+  EXPECT_EQ(root_row.value("imageCount").toLongLong(), 0);
+  EXPECT_EQ(Folders().AllPhotosCount(), 2);
+
+  Folders().SelectLibraryRoot();
+  EXPECT_TRUE(Folders().LibraryRootSelected());
+  EXPECT_EQ(Folders().CurrentFolderId(), 0u);
+  ASSERT_TRUE(WaitFor([this] {
+    return !backend_.library()->QueryReplacing() && backend_.library()->TotalCount() == 0;
+  }));
+  // The read of the scope has ended: the count stays.
+  ProcessEvents(500);
+  EXPECT_FALSE(backend_.library()->QueryReplacing());
+  EXPECT_EQ(backend_.library()->TotalCount(), 0);
+
+  Folders().SelectFolder(0);
+  EXPECT_FALSE(Folders().LibraryRootSelected());
+  ASSERT_TRUE(WaitFor([this] {
+    return !backend_.library()->QueryReplacing() && backend_.library()->TotalCount() == 2;
+  }));
+
+  // A folder other than the root is never the Library row.
+  Folders().SelectLibraryRoot();
+  const auto trip = RowNamed("Trip");
+  ASSERT_TRUE(trip.has_value());
+  Folders().SelectFolder(trip->value("folderId").toUInt());
+  EXPECT_FALSE(Folders().LibraryRootSelected());
+
+  EXPECT_FALSE(trip->value("mountVolumeKey").toString().isEmpty());
+  EXPECT_FALSE(trip->value("mountPoint").toString().isEmpty());
+  EXPECT_FALSE(trip->value("mountVolumeRoot").toString().isEmpty());
+}
 TEST_F(FolderControllerMountTest, MountedRowReportsMountedAndNotStructureEditable) {
   ASSERT_NO_FATAL_FAILURE(MountTrip());
 
@@ -157,12 +202,12 @@ TEST_F(FolderControllerMountTest, MountedRowReportsMountedAndNotStructureEditabl
   EXPECT_TRUE(Folders().CurrentFolderMounted());
 
   // Each mounted photo is present and stays in the library.
-  QVariantList ids;
-  for (const auto id : Summary().present_element_ids) {
-    ids.push_back(static_cast<qulonglong>(id));
+  const auto present_ids = Summary().present_element_ids;
+  EXPECT_EQ(present_ids.size(), 2u);
+  for (const auto id : present_ids) {
+    EXPECT_TRUE(Folders().IsMountedPhoto(static_cast<uint>(id)));
   }
-  EXPECT_EQ(ids.size(), 2);
-  EXPECT_TRUE(Folders().HoldsPresentMountedPhoto(ids));
+  EXPECT_FALSE(Folders().IsMountedPhoto(0));
 }
 
 TEST_F(FolderControllerMountTest, OfflineMountRowReportsOfflineUntilLocateFolder) {
@@ -195,6 +240,8 @@ TEST_F(FolderControllerMountTest, RemoveMissingPhotosRemovesTheMissingPhotoOfThe
   const auto missing_id = Summary().missing_element_ids.front();
   EXPECT_TRUE(Folders().IsMissingMountedPhoto(static_cast<uint>(missing_id)));
   EXPECT_TRUE(backend_.library()->thumbs().IsStoredMissingSource(missing_id));
+  // A missing mounted photo also keeps Delete disabled: it leaves only through Remove Missing.
+  EXPECT_TRUE(Folders().IsMountedPhoto(static_cast<uint>(missing_id)));
 
   Folders().RemoveMissingPhotos(RowNamed("Trip")->value("folderId").toUInt());
   ASSERT_TRUE(WaitFor([this] {
@@ -243,10 +290,53 @@ TEST_F(FolderControllerMountTest, UnmountLeavesOrdinaryRowsAndPhotos) {
   ASSERT_TRUE(WaitFor([this] { return ProjectPhotoCount() == 2; }));
 }
 
+// #1088: a scan that only stored a new volume name did not save the project file, so the next
+// open of the .alcd showed the old name.
+TEST_F(FolderControllerMountTest, ScanThatOnlyRenamesTheVolumeSavesTheProjectFile) {
+  ASSERT_NO_FATAL_FAILURE(MountTrip());
+  const auto& handler    = backend_.project()->handler();
+  const auto  mount_id   = Summary().record.id;
+  const auto  volume     = ReadVolumeLabel(disk_ / "Trip").name;
+  const auto  saved_name = [this, &handler]() -> std::optional<std::string> {
+    const auto workspace = temp_dir_ / "volume_name_unpack";
+    std::error_code ec;
+    stdfs::remove_all(workspace, ec);
+    stdfs::create_directories(workspace);
+    stdfs::path db_path;
+    stdfs::path meta_path;
+    if (!project_pack::UnpackProjectToWorkspace(handler.package_path(), workspace,
+                                                "volume_name_unpack", &db_path, &meta_path,
+                                                nullptr)) {
+      return std::nullopt;
+    }
+    std::optional<std::string> name;
+    {
+      ProjectService project(db_path, meta_path, ProjectOpenMode::kLoadExisting);
+      const auto     roots = project.GetStorage()->GetMountStore().ReadMountRoots();
+      if (roots.size() == 1) {
+        name = roots.front().volume_name;
+      }
+    }
+    stdfs::remove_all(workspace, ec);
+    return name;
+  };
+
+  // The volume had another name when the project file was last saved; nothing on the disk
+  // changed since.
+  const std::string old_name = volume + " (old)";
+  handler.project()->GetStorage()->GetMountStore().UpdateMountVolumeName(mount_id, old_name);
+  ASSERT_TRUE(handler.MakeSaveAndPackageJob()(nullptr));
+  ASSERT_EQ(saved_name(), old_name);
+
+  ASSERT_NO_FATAL_FAILURE(Synchronize());
+  EXPECT_EQ(Summary().record.volume_name, volume);
+  EXPECT_EQ(saved_name(), volume);
+}
+
 TEST_F(FolderControllerMountTest, MountInsideAMountedFolderIsRefusedWithNoRow) {
   ASSERT_NO_FATAL_FAILURE(MountTrip());
   const auto rows_before = Folders().Folders().size();
-  Folders().MountFolder(0, QUrl::fromLocalFile(PathToQString(disk_ / "Trip" / "Day1")));
+  Folders().MountFolder(QUrl::fromLocalFile(PathToQString(disk_ / "Trip" / "Day1")));
   ASSERT_TRUE(WaitFor([this] { return !backend_.mount_scans()->HasPendingScans(); }));
   ProcessEvents(300);
   EXPECT_EQ(Folders().Folders().size(), rows_before);
@@ -267,10 +357,41 @@ TEST_F(FolderControllerMountTest, UserImportOfAFileInAMountedFolderLeavesOneElem
     return !backend_.import_export()->ImportRunning() && !backend_.mount_scans()->HasPendingScans();
   }));
   EXPECT_EQ(backend_.import_export()->ImportCompleted(), 1);
+  // #1089: the Library snackbar of the finished import reports the file left to the mount.
+  EXPECT_EQ(backend_.import_export()->ImportLeftToMounts(), 1);
   ASSERT_TRUE(WaitFor([this] { return ProjectPhotoCount() == 3; }));
   ProcessEvents(300);
   EXPECT_EQ(ProjectPhotoCount(), 3);
   EXPECT_EQ(Summary().present_count, 2u);
+}
+
+TEST_F(FolderControllerMountTest, UserImportOfOnlyMountedFilesReportsThemAndRunsNoImport) {
+  // #1089: with every file in a mounted folder no import runs, so no import state change
+  // reports the result; the signal gives the Library snackbar the count.
+  ASSERT_NO_FATAL_FAILURE(MountTrip());
+  auto*      import_export = backend_.import_export();
+  QSignalSpy left_all(import_export, &ImportExportHandler::importLeftAllToMounts);
+
+  import_export->StartImport({PathToQString(disk_ / "Trip" / "a.jpg"),
+                              PathToQString(disk_ / "Trip" / "Day1" / "b.jpg")});
+  EXPECT_FALSE(import_export->ImportRunning());
+  ASSERT_EQ(left_all.size(), 1);
+  EXPECT_EQ(left_all.front().front().toInt(), 2);
+  EXPECT_EQ(import_export->ImportLeftToMounts(), 2);
+
+  ProcessEvents(300);
+  EXPECT_EQ(ProjectPhotoCount(), 2);
+  EXPECT_EQ(Summary().present_count, 2u);
+
+  // The next import with no mounted file clears the count, so its snackbar has no mount line.
+  WriteJpeg(temp_dir_ / "Other" / "c.jpg", 3);
+  import_export->StartImport({PathToQString(temp_dir_ / "Other" / "c.jpg")});
+  EXPECT_EQ(import_export->ImportLeftToMounts(), 0);
+  ASSERT_TRUE(WaitFor([&] {
+    return !import_export->ImportRunning() && !backend_.mount_scans()->HasPendingScans();
+  }));
+  EXPECT_EQ(left_all.size(), 1);
+  ASSERT_TRUE(WaitFor([this] { return ProjectPhotoCount() == 3; }));
 }
 
 TEST_F(FolderControllerMountTest, NoScanRunsFromTheStartToTheFinalizeOfAUserImport) {

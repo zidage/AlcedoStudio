@@ -5,6 +5,7 @@
 #include "app/editor_node_graph_draft.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_set>
@@ -30,7 +31,7 @@ auto MaxInsertedNameNumber(const std::map<NodeId, nlohmann::json>& inserted,
     }
     try {
       const auto number = std::stoull(name.substr(prefix.size()));
-      max_inserted      = std::max(max_inserted, number + 1);
+      max_inserted      = std::max<std::uint64_t>(max_inserted, number + 1);
     } catch (...) {
     }
   }

@@ -17,12 +17,15 @@ Item {
     property var imageActionsController: null
     property var selectionState: null
     property Item blurSource: null
+    // A Save as Preset of the Copy dialog waits for the write of its preset file.
+    property bool pendingDialogPresetSave: false
 
     property alias importDialog: importDialogObj
-    property alias importFolderDialog: importFolderDialogObj
+    property alias importFolderFlow: importFolderFlowObj
     property alias settingsDialog: settingsDialogObj
     property alias adjustmentTransferDialog: adjustmentTransferDialogObj
     property alias adjustmentTransferActions: adjustmentTransferActionsObj
+    property alias applyPresetDialog: applyPresetDialogObj
     property alias imageContextMenu: imageContextMenuObj
     property alias nikonHeRecoveryDialog: nikonHeRecoveryDialogObj
     property alias semanticGenerationDialog: semanticGenerationDialogObj
@@ -72,33 +75,25 @@ Item {
         }
     }
 
-    FolderDialog {
-        id: importFolderDialogObj
-        title: qsTr("Select Folder to Import")
-        onAccepted: folderImportConfirmDialogObj.openWith(selectedFolder.toString())
-    }
-
-    FolderImportConfirmDialog {
-        id: folderImportConfirmDialogObj
-        parent: Overlay.overlay
-        theme: host
-        host: root.host
+    // Import Folder (#1078): the system folder dialog, then the Import Folder dialog or the
+    // remembered choice.
+    ImportFolderFlow {
+        id: importFolderFlowObj
+        folders: appModules.folders
+        importExport: appModules.importExport
+        libraryBehavior: appModules.libraryBehavior
+        theme: root.host
         blurSource: root.blurSource
-        onConfirmed: {
-            if (dropTargetFolderId >= 0)
-                appModules.importExport.StartFolderImportToFolderAsUser(dropTargetFolderId)
-            else
-                appModules.importExport.StartFolderImportAsUser()
-        }
     }
 
     // Library file drop (issue #757): files only import at once, as Import Images does; a drop
-    // that holds a folder opens the folder dialog with every dropped item as a scan source.
-    function importDroppedUrls(urls, folderId, collectionName) {
+    // that holds a folder opens the Import Folder dialog with every dropped item as a scan
+    // source and the drop target as the destination.
+    function importDroppedUrls(urls, folderId) {
         if (!urls || urls.length === 0)
             return
         if (appModules.importExport.DropHoldsFolder(urls))
-            folderImportConfirmDialogObj.openWithSources(urls, folderId, collectionName)
+            importFolderFlowObj.beginDrop(urls, folderId)
         else
             appModules.importExport.StartImportToFolder(urls, folderId)
     }
@@ -107,6 +102,7 @@ Item {
         id: settingsDialogObj
         objectName: "settingsDialog"
         z: 30
+        windowHost: root.host
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius
         languageOptions: host.languageOptions
@@ -141,12 +137,50 @@ Item {
                 host.showSnackbar(result.message)
             }
         }
+        // The preset file is written later; a failure of the write is reported then.
+        onSaveAsPresetRequested: {
+            const result = appModules.presets.SaveDialogSelectionAsPreset()
+            if (result && result.success === true) {
+                root.pendingDialogPresetSave = true
+            } else if (result && result.message) {
+                host.showSnackbar(String(result.message))
+            }
+        }
         onPasteAccepted: function(strategy) {
             adjustmentTransferActionsObj.applyPaste(strategy)
             host.pendingAdjustmentPasteTargets = []
         }
         onPasteCanceled: {
             host.pendingAdjustmentPasteTargets = []
+        }
+    }
+
+    // Apply Preset... of the image menu (edit presets plan 2.3). A started apply reports its
+    // library targets through onPasteFinished below, as Paste Adjustments does.
+    ApplyPresetDialog {
+        id: applyPresetDialogObj
+        blurSource: root.blurSource
+        cornerRadius: host.windowCornerRadius
+        presets: appModules.presets
+        editorPreview: appModules.presetPreview
+        libraryPreview: appModules.presetDialogPreview
+        editorSession: appModules.editorSession
+        onMessageRequested: function(message) {
+            host.showSnackbar(message)
+        }
+        onClosed: host.pendingAdjustmentPasteTargets = []
+    }
+
+    // Save as Preset of the Copy dialog: the snackbar names the saved preset or the failure.
+    // The Versions panel reports its own preset operations.
+    Connections {
+        target: appModules.presets
+        function onOperationFinished(result) {
+            if (String(result.operation || "") !== "save" || !root.pendingDialogPresetSave)
+                return
+            root.pendingDialogPresetSave = false
+            host.showSnackbar(result.success === true ? qsTr("Preset saved.")
+                                                      : String(result.message || ""))
         }
     }
 
@@ -166,7 +200,7 @@ Item {
         adjustmentTransfer: appModules.adjustmentTransfer
         adjustmentTransferDialog: adjustmentTransferDialogObj
         interactionPolicy: appModules.interactionPolicy
-        pendingTargets: host.pendingAdjustmentPasteTargets
+        pendingTargets: root.imageActionsController.pendingAdjustmentPasteTargets
         onMessageRequested: function(message) {
             host.showSnackbar(message)
         }
@@ -207,8 +241,10 @@ Item {
     }
 
     // A mounted photo leaves the library only through Remove Missing Photos of its mount, and a
-    // mounted folder keeps its photos while their files are present.
-    function deleteKeepsMountedPhotos() {
+    // mounted folder keeps its photos while their files are present. The menu reads the clicked
+    // photo only (#1135): a delete of a selection deletes the other photos and keeps the
+    // mounted ones.
+    function clickedPhotoStaysMounted() {
         const folders = appModules.folders
         if (folders.currentFolderMounted === true) {
             return true
@@ -216,11 +252,7 @@ Item {
         if (Number(folders.currentFolderId) !== 0) {
             return false
         }
-        const ids = host.pendingDeleteTargets.map(function(target) {
-            return Number(target.elementId)
-        })
-        return folders.HoldsPresentMountedPhoto(ids)
-               || ids.some(function(id) { return folders.IsMissingMountedPhoto(id) })
+        return folders.IsMountedPhoto(Number(root.imageActionsController.menuClickedItem.elementId))
     }
 
     FileDialog {
@@ -241,7 +273,7 @@ Item {
         currentRating: Math.max(0, Math.min(5, Number(host.pendingRatingTarget.rating || 0)))
         collectionRows: appModules.folders.folders ? appModules.folders.folders : []
         currentCollectionId: Number(appModules.folders.currentFolderId)
-        addToEnabled: host.pendingDeleteTargets.length > 0
+        addToEnabled: Number(root.imageActionsController.menuClickedItem.elementId) > 0
         actions: root.filmstripDiscardActions().concat(root.mountedPhotoActions()).concat([
             {
                 id: "copy-adjustments",
@@ -252,17 +284,22 @@ Item {
                 id: "paste-adjustments",
                 label: qsTr("Paste Adjustments"),
                 enabled: appModules.adjustmentTransfer.packageAvailable
-                         && host.pendingAdjustmentPasteTargets.length > 0
+                         && Number(root.imageActionsController.menuClickedItem.elementId) > 0
+            },
+            {
+                id: "apply-preset",
+                label: qsTr("Apply Preset..."),
+                enabled: Number(root.imageActionsController.menuClickedItem.elementId) > 0
             },
             {
                 id: "delete",
                 label: Number(appModules.folders.currentFolderId) === 0 ? qsTr("Delete") : qsTr("Remove from Album"),
-                // Blocked while a running task holds a DeleteImages lock on the
-                // selected images. The reason is exposed on the policy controller
-                // as pendingDeleteReason.
-                enabled: host.pendingDeleteTargets.length > 0
-                          && appModules.interactionPolicy.canDeletePendingTargets
-                          && !root.deleteKeepsMountedPhotos()
+                // Blocked while a running task holds a DeleteImages lock on the clicked
+                // image (the focused image; the reason is focusedDeleteReason). The delete of
+                // a selection skips each other locked or mounted image.
+                enabled: Number(root.imageActionsController.menuClickedItem.elementId) > 0
+                          && appModules.interactionPolicy.canDeleteFocused
+                          && !root.clickedPhotoStaysMounted()
             }
         ])
         onRatingRequested: function(rating) {
@@ -291,7 +328,12 @@ Item {
                 return
             }
             if (actionId === "paste-adjustments") {
+                root.imageActionsController.preparePasteTargets()
                 adjustmentTransferActionsObj.requestPasteAdjustments()
+                return
+            }
+            if (actionId === "apply-preset") {
+                root.imageActionsController.requestApplyPreset()
                 return
             }
             if (actionId === "delete") {
@@ -369,9 +411,12 @@ Item {
         onConfirmed: root.imageActionsController.runDeleteTargets()
     }
 
+    // Above Settings and Welcome (z 30): the window's close button stays usable
+    // while they are open, and the Save / Discard question must show on top.
     EditorCloseConfirmDialog {
         id: editorCloseConfirmDialogObj
         parent: Overlay.overlay
+        z: 40
         theme: root.host
         host: root.host
         blurSource: root.blurSource
@@ -391,6 +436,7 @@ Item {
         id: welcomeDialogObj
         objectName: "welcomeDialog"
         z: 30
+        windowHost: root.host
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius
         adapter: welcomePreviewAdapterObj
@@ -432,11 +478,12 @@ Item {
     function anyDialogOpened() {
         return settingsDialogObj.opened
                || adjustmentTransferDialogObj.opened
+               || applyPresetDialogObj.opened
                || nikonHeRecoveryDialogObj.opened
                || semanticGenerationDialogObj.opened
                || backgroundTasksDialogObj.opened
                || deleteConfirmDialogObj.opened
-               || folderImportConfirmDialogObj.opened
+               || importFolderFlowObj.opened
                || editorCloseConfirmDialogObj.opened
                || welcomeDialogObj.opened
     }

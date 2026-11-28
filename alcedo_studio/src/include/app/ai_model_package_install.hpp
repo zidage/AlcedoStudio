@@ -22,6 +22,14 @@ inline constexpr std::string_view kAiMaskModelPackageId            = "alcedo-ai-
 inline constexpr std::uint64_t    kAiMaskModelSetMinimumVersion    = 1;
 inline constexpr std::uint64_t    kAiMaskModelSetMaximumVersion    = 1;
 
+/// Package ID of the AI Denoise model (AI Denoise integration plan, DN12). The installation
+/// directory `alcedo-ai-denoise-v<version>` holds the FP16 graph that the Develop render runs.
+inline constexpr std::string_view kAiDenoiseModelPackageId         = "alcedo-ai-denoise";
+inline constexpr std::uint64_t    kAiDenoiseModelSetMinimumVersion = 1;
+inline constexpr std::uint64_t    kAiDenoiseModelSetMaximumVersion = 1;
+/// The role of the FP16 graph in `model_set.json` of the AI Denoise package.
+inline constexpr std::string_view kAiDenoiseGraphRole              = "denoise_graph";
+
 /// Files at the root of an installed AI model package.
 inline constexpr std::string_view kAiModelPackageReceiptFileName   = "installed.json";
 inline constexpr std::string_view kAiModelPackageInventoryFileName = "package-inventory.json";
@@ -96,6 +104,31 @@ struct AiModelInstallation {
 /// this before the AI Mask tool loads models.
 [[nodiscard]] auto ReadAiMaskModelInstallation(const std::filesystem::path& model_directory)
     -> AiModelInstallation;
+
+/// The AI Denoise package of @p model_directory for this build's supported range.
+[[nodiscard]] auto ReadAiDenoiseModelInstallation(const std::filesystem::path& model_directory)
+    -> AiModelInstallation;
+
+/// The file of the model with @p role that `model_set.json` of the complete @p installation
+/// names, when that file exists; nullopt otherwise. Reads `model_set.json` only.
+[[nodiscard]] auto AiModelSetFilePath(const AiModelSetInstallation& installation,
+                                      std::string_view role)
+    -> std::optional<std::filesystem::path>;
+
+/// Where the AI Denoise graph of a model directory is (DN12).
+struct AiDenoiseGraphLocation {
+  /// The graph file of the complete supported installation; empty when there is none.
+  std::filesystem::path graph;
+  /// Why there is no graph (English, for the render error); empty when @ref graph is set.
+  std::string           problem;
+};
+
+/// The AI Denoise graph of @p model_directory: the file of the role `denoise_graph` of the
+/// complete installation of a supported version. Not installed, an installation of an
+/// unsupported version, an incomplete installation, and a `model_set.json` without the role give
+/// no graph and their reason. Reads file metadata and the small JSON files; safe on any thread.
+[[nodiscard]] auto ResolveAiDenoiseGraph(const std::filesystem::path& model_directory)
+    -> AiDenoiseGraphLocation;
 
 /// Stage of an installation that runs on the worker thread.
 enum class AiModelPackageInstallStage { kVerifying, kInstalling };

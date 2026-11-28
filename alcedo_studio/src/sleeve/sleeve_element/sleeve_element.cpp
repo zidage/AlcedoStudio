@@ -6,6 +6,7 @@
 
 #include <chrono>
 
+#include "sleeve/node_cache.hpp"
 #include "utils/clock/time_provider.hpp"
 
 namespace alcedo {
@@ -41,11 +42,23 @@ void SleeveElement::IncrementRefCount() { ++ref_count_; }
 void SleeveElement::DecrementRefCount() {
   --ref_count_;
   if (ref_count_ <= 0) {
-    sync_flag_ = SyncFlag::DELETED;
+    SetSyncFlag(SyncFlag::DELETED);
   }
 }
 
 auto SleeveElement::IsShared() -> bool { return ref_count_ > 1; }
 
-void SleeveElement::SetSyncFlag(SyncFlag flag) { sync_flag_ = flag; }
+void SleeveElement::SetSyncFlag(SyncFlag flag) {
+  const auto old_flag = sync_flag_;
+  sync_flag_          = flag;
+  if (cache_ != nullptr && old_flag != flag) {
+    cache_->OnSyncFlagChanged(*this, old_flag);
+  }
+}
+
+void SleeveElement::MarkModified() {
+  if (sync_flag_ == SyncFlag::SYNCED) {
+    SetSyncFlag(SyncFlag::MODIFIED);
+  }
+}
 };  // namespace alcedo

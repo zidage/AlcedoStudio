@@ -63,7 +63,7 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, NoTasks_AllCapabilitiesAllow
   EXPECT_TRUE(policy.CanEditFocusedDescription());
   EXPECT_TRUE(policy.CanEditFocusedRating());
   EXPECT_TRUE(policy.CanEditFocusedRatingReason());
-  EXPECT_TRUE(policy.CanDeletePendingTargets());
+  EXPECT_TRUE(policy.CanDeleteFocused());
   EXPECT_TRUE(policy.CanChangeSemanticModel());
   EXPECT_TRUE(policy.CanRunSemanticGeneration());
   EXPECT_TRUE(policy.CanChangeModelDownloadSettings());
@@ -117,12 +117,16 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, PerElementLocks_BlockAffecte
   EXPECT_TRUE(policy.CanEditFocusedRatingReason());
   EXPECT_TRUE(policy.FocusedEditReason().isEmpty());
 
-  // Pending delete target check.
-  policy.SetPendingDeleteTargets(Targets({42}));
-  EXPECT_FALSE(policy.CanDeletePendingTargets());
-  EXPECT_FALSE(policy.PendingDeleteReason().isEmpty());
-  policy.SetPendingDeleteTargets(Targets({99}));
-  EXPECT_TRUE(policy.CanDeletePendingTargets());
+  // Delete of the focused image (the clicked image of the image menu).
+  policy.SetFocusedElementId(42);
+  EXPECT_FALSE(policy.CanDeleteFocused());
+  EXPECT_EQ(policy.FocusedDeleteReason(), QStringLiteral("no delete"));
+  policy.SetFocusedElementId(99);
+  EXPECT_TRUE(policy.CanDeleteFocused());
+
+  // A delete of several images skips each locked image (#1135).
+  EXPECT_EQ(policy.DeleteImageRefusal(42), std::optional<QString>(QStringLiteral("no delete")));
+  EXPECT_FALSE(policy.DeleteImageRefusal(99).has_value());
 }
 
 TEST_F(ApplicationModuleHostInteractionPolicyTests, GlobalLock_BlocksEveryElement) {
@@ -137,6 +141,9 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, GlobalLock_BlocksEveryElemen
   // A global (element_id == 0) lock blocks every element, not just 0.
   EXPECT_FALSE(policy.EvaluateDeleteImages(Targets({99})).value("allowed").toBool());
   EXPECT_FALSE(policy.EvaluateEditImageRatings(Targets({7})).value("allowed").toBool());
+  EXPECT_TRUE(policy.DeleteImageRefusal(99).has_value());
+  policy.SetFocusedElementId(99);
+  EXPECT_FALSE(policy.CanDeleteFocused());
 }
 
 TEST_F(ApplicationModuleHostInteractionPolicyTests, SemanticGenerationLocks_BlockModelAndGeneration) {
@@ -210,7 +217,7 @@ TEST(InteractionPolicyControllerTest, UserStateChangeLockDoesNotRestrictSessionA
   EXPECT_TRUE(policy.CanPasteAdjustments());
   EXPECT_TRUE(policy.CanCheckoutVersion());
   EXPECT_TRUE(policy.CanSwitchWorkspace());
-  EXPECT_TRUE(policy.CanDeletePendingTargets());
+  EXPECT_TRUE(policy.CanDeleteFocused());
 
   registry.FinishTask(id, BackgroundTaskState::Succeeded);
   EXPECT_TRUE(policy.CanChangeStateAsUser());

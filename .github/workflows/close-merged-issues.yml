@@ -1,0 +1,62 @@
+name: Close merged issues
+
+# GitHub closes an issue from "Closes #N" only when the pull request merges into the default
+# branch. A pull request of a base-chained stack merges into the branch below it, so its issues
+# stay open after its commits reach main. On each push to main this workflow closes the open
+# issues that the merged pull requests of the pushed commits name with a closing keyword
+# (scripts/close_merged_issues.py, issue #1186).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - scripts/close_merged_issues.py
+      - scripts/tests/close_merged_issues_test.py
+      - .github/workflows/close-merged-issues.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test the close script
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      - name: Run the unit tests
+        run: python3 -m unittest scripts/tests/close_merged_issues_test.py
+
+  close:
+    name: Close the issues of merged pull requests
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    concurrency:
+      group: close-merged-issues
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      - name: Close the issues
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          REPOSITORY: ${{ github.repository }}
+        run: >-
+          python3 scripts/close_merged_issues.py
+          --repository "$REPOSITORY" --before "$BEFORE" --after "$AFTER"

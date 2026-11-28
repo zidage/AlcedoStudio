@@ -347,4 +347,17 @@ auto SelectAllTransferableItems(const PipelineDocument& document) -> AdjustmentT
   return selection;
 }
 
+auto SelectPresetItems(const PipelineDocument& document) -> AdjustmentTransferSelection {
+  auto selection = SelectAllTransferableItems(document);
+  for (auto& node : selection.nodes) {
+    std::erase_if(node.items, [](const AdjustmentTransferItemSelection& item) {
+      return item.kind == AdjustmentTransferItemKind::Geometry ||
+             item.kind == AdjustmentTransferItemKind::LensCalibration;
+    });
+  }
+  std::erase_if(selection.nodes,
+                [](const AdjustmentTransferNodeSelection& node) { return node.items.empty(); });
+  return selection;
+}
+
 }  // namespace alcedo

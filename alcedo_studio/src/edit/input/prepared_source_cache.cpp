@@ -128,6 +128,11 @@ auto PreparedSourceCache::AcquireEncoded(std::span<const std::byte> encoded, Dec
   prepared.source_key.downsample_passes    = lookup.downsample_passes;
   prepared.source_key.preparation_version  = lookup.preparation_version;
 
+  return Insert(lookup, std::move(prepared));
+}
+
+auto PreparedSourceCache::Insert(const PreparedSourceLookup& lookup, PreparedRawInput prepared)
+    -> Lease {
   auto entry          = std::make_shared<Entry>();
   entry->key          = prepared.source_key;
   entry->lookup       = lookup;
@@ -138,6 +143,48 @@ auto PreparedSourceCache::AcquireEncoded(std::span<const std::byte> encoded, Dec
   auto [it, inserted] = entries_.emplace(lookup, entry);
   (void)inserted;
   return MakeLease(it->second);
+}
+
+auto PreparedSourceCache::AcquireDenoised(std::span<const std::byte>   encoded,
+                                          std::string_view             model_version,
+                                          const std::array<double, 9>& xyz_to_camera,
+                                          const DenoiseFn&             denoise) -> Lease {
+  auto lookup = PreparedSourceLookup{
+      HashEncoded(encoded), encoded.size(), DecodeResToDownsamplePasses(DecodeRes::FULL),
+      kRawInputPreparationVersion, HashAiDenoiseRun(model_version, xyz_to_camera)};
+  if (auto it = entries_.find(lookup); it != entries_.end()) {
+    ++stats_.hits;
+    return MakeLease(it->second);
+  }
+  ++stats_.misses;
+  PreparedRawInput denoised;
+  {
+    auto cfa = AcquireEncoded(encoded, DecodeRes::FULL);
+    if (cfa.Get().CompileSource().kind != DevelopInputKind::BayerCfa) {
+      return cfa;
+    }
+    denoised = denoise(cfa.Get());
+    ++stats_.denoise_runs;
+  }
+  denoised.content_key.content_hash = lookup.encoded_content_hash;
+  return Insert(lookup, std::move(denoised));
+}
+
+auto PreparedSourceCache::HoldsEncoded(std::span<const std::byte> encoded, DecodeRes decode_res)
+    -> bool {
+  const auto lookup = PreparedSourceLookup{
+      HashEncoded(encoded), encoded.size(), DecodeResToDownsamplePasses(decode_res),
+      kRawInputPreparationVersion};
+  return entries_.contains(lookup);
+}
+
+auto PreparedSourceCache::HoldsDenoised(std::span<const std::byte>   encoded,
+                                        std::string_view             model_version,
+                                        const std::array<double, 9>& xyz_to_camera) -> bool {
+  const auto lookup = PreparedSourceLookup{
+      HashEncoded(encoded), encoded.size(), DecodeResToDownsamplePasses(DecodeRes::FULL),
+      kRawInputPreparationVersion, HashAiDenoiseRun(model_version, xyz_to_camera)};
+  return entries_.contains(lookup);
 }
 
 void PreparedSourceCache::Clear() {

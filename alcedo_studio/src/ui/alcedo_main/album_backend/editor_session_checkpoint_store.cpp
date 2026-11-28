@@ -26,27 +26,26 @@ EditorSessionCheckpointStore::~EditorSessionCheckpointStore() {
 void EditorSessionCheckpointStore::SetServices(Services services) {
   std::scoped_lock lock(mutex_);
   services_ = std::move(services);
-  materializer_.reset();
-  materializer_storage_.reset();
 }
 
-auto EditorSessionCheckpointStore::EnsureMaterializer()
-    -> std::shared_ptr<alcedo::EditorMiniGitMaterializer> {
-  std::scoped_lock lock(mutex_);
-  if (!services_.storage_service) return nullptr;
-  if (!services_.save_coordinator) return nullptr;
-  auto storage = services_.storage_service();
-  if (!storage) return nullptr;
-  if (materializer_ && materializer_storage_ == storage) return materializer_;
-  try {
-    materializer_storage_ = storage;
-    materializer_         = std::make_shared<alcedo::EditorMiniGitMaterializer>(
-        std::move(storage), services_.save_coordinator);
-  } catch (...) {
-    materializer_.reset();
-    materializer_storage_.reset();
+auto EditorSessionCheckpointStore::MakeMaterializer()
+    -> std::unique_ptr<alcedo::EditorMiniGitMaterializer> {
+  std::function<std::shared_ptr<alcedo::Storage>()>        storage_service;
+  std::shared_ptr<alcedo::EditorSaveCheckpointCoordinator> save_coordinator;
+  {
+    std::scoped_lock lock(mutex_);
+    storage_service  = services_.storage_service;
+    save_coordinator = services_.save_coordinator;
   }
-  return materializer_;
+  if (!storage_service || !save_coordinator) return nullptr;
+  auto storage = storage_service();
+  if (!storage) return nullptr;
+  try {
+    return std::make_unique<alcedo::EditorMiniGitMaterializer>(std::move(storage),
+                                                               std::move(save_coordinator));
+  } catch (...) {
+    return nullptr;
+  }
 }
 
 auto EditorSessionCheckpointStore::ResolveJournalPath(sl_element_id_t element_id,
@@ -76,7 +75,7 @@ auto EditorSessionCheckpointStore::Materialize(
     if (error) *error = "Save capture is required";
     return {false, false, 0, error != nullptr ? *error : "Save capture is required"};
   }
-  auto materializer = EnsureMaterializer();
+  auto materializer = MakeMaterializer();
   if (!materializer) {
     if (error) *error = "Mini-Git storage is unavailable";
     return {false, false, 0, error != nullptr ? *error : "Mini-Git storage is unavailable"};
@@ -110,7 +109,7 @@ auto EditorSessionCheckpointStore::RecoverAndMaterialize(sl_element_id_t element
     if (error && error->empty()) *error = "Mini-Git journal path is unavailable";
     return {false, false, 0, error != nullptr ? *error : "Mini-Git journal path is unavailable"};
   }
-  auto materializer = EnsureMaterializer();
+  auto materializer = MakeMaterializer();
   if (!materializer) {
     if (error && error->empty()) *error = "Mini-Git storage is unavailable";
     return {false, false, 0, error != nullptr ? *error : "Mini-Git storage is unavailable"};

@@ -125,7 +125,7 @@ auto ExportCounts(const ui::ImportExportHandler& import_export) -> QJsonObject {
 }
 
 /// The photos of the last export run and their state (queued, running, succeeded, failed,
-/// missing).
+/// missing, ai_denoise: an AI Denoise render error, integration plan DN8).
 auto ExportItems(const ui::ImportExportHandler& import_export) -> QJsonArray {
   QJsonArray items;
   const auto statuses = import_export.ExportItemStatuses();

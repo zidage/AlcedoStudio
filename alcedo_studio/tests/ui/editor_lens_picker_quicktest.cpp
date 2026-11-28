@@ -8,7 +8,7 @@
 // inline fixture catalog (fuzzy matching, brand filter, detection mapping).
 // tst_lens_auto_detect.qml hosts the production EditorRawDecodePanel against
 // LensPanelSession — a recording IEditorAdjustmentSubmitter with a scripted
-// EXIF lens identity — and verifies the auto-recognition checkbox behavior:
+// Auto lens profile — and verifies the auto-recognition checkbox behavior:
 // default checked when detection succeeds, disabled + "需手动选择" label when
 // it fails, manual picks uncheck it, re-checking restores the detected row.
 //
@@ -43,24 +43,24 @@ auto SrcQmlDir() -> QString {
       (std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml").string());
 }
 
-/// Recording submitter + scripted EXIF lens identity. The QML panel only
-/// requires adjustmentSnapshot, exifLensMake/exifLensModel, and the
+/// Recording submitter + scripted Auto lens profile. The QML panel only
+/// requires adjustmentSnapshot, autoLensMake/autoLensModel, and the
 /// IEditorAdjustmentSubmitter interface; calls are exposed as plain maps so
 /// the QML tests can JSON.parse paramsJson directly.
 class LensPanelSession final : public QObject, public IEditorAdjustmentSubmitter {
   Q_OBJECT
   Q_PROPERTY(
       QVariantMap adjustmentSnapshot READ adjustmentSnapshot NOTIFY adjustmentSnapshotChanged)
-  Q_PROPERTY(QString exifLensMake READ exifLensMake NOTIFY imageExifChanged)
-  Q_PROPERTY(QString exifLensModel READ exifLensModel NOTIFY imageExifChanged)
+  Q_PROPERTY(QString autoLensMake READ autoLensMake NOTIFY autoLensChanged)
+  Q_PROPERTY(QString autoLensModel READ autoLensModel NOTIFY autoLensChanged)
   Q_PROPERTY(QVariantList calls READ calls NOTIFY callsChanged)
 
  public:
   explicit LensPanelSession(QObject* parent = nullptr) : QObject(parent) {}
 
   [[nodiscard]] auto adjustmentSnapshot() const -> QVariantMap { return snapshot_; }
-  [[nodiscard]] auto exifLensMake() const -> QString { return exif_make_; }
-  [[nodiscard]] auto exifLensModel() const -> QString { return exif_model_; }
+  [[nodiscard]] auto autoLensMake() const -> QString { return auto_make_; }
+  [[nodiscard]] auto autoLensModel() const -> QString { return auto_model_; }
   [[nodiscard]] auto calls() const -> QVariantList { return calls_; }
 
   [[nodiscard]] auto canEdit() const -> bool override { return true; }
@@ -92,13 +92,13 @@ class LensPanelSession final : public QObject, public IEditorAdjustmentSubmitter
     return true;
   }
 
-  Q_INVOKABLE void setExifLens(const QString& make, const QString& model) {
-    if (exif_make_ == make && exif_model_ == model) {
+  Q_INVOKABLE void setAutoLens(const QString& make, const QString& model) {
+    if (auto_make_ == make && auto_model_ == model) {
       return;
     }
-    exif_make_  = make;
-    exif_model_ = model;
-    emit imageExifChanged();
+    auto_make_  = make;
+    auto_model_ = model;
+    emit autoLensChanged();
   }
 
   Q_INVOKABLE void setSnapshot(const QVariantMap& snapshot) {
@@ -120,7 +120,7 @@ class LensPanelSession final : public QObject, public IEditorAdjustmentSubmitter
 
  signals:
   void adjustmentSnapshotChanged();
-  void imageExifChanged();
+  void autoLensChanged();
   void callsChanged();
 
  private:
@@ -151,8 +151,8 @@ class LensPanelSession final : public QObject, public IEditorAdjustmentSubmitter
 
   QVariantMap  snapshot_;
   QVariantList calls_;
-  QString      exif_make_;
-  QString      exif_model_;
+  QString      auto_make_;
+  QString      auto_model_;
 };
 
 class LensPickerSetup : public QObject {

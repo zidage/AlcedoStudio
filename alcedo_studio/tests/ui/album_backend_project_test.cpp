@@ -10,6 +10,7 @@
 /// the welcome surface preview (entry mode, overview, recent list, persist skip).
 
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/album_backend_populated_project_fixture.hpp"
 #include "ui/welcome_project_test_support.hpp"
 
 #include <QDate>
@@ -36,6 +37,7 @@
 #include "sleeve/storage.hpp"
 #include "ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
+#include "ui/alcedo_main/album_backend/workspace_router.hpp"
 #include "../support/storage_test_access.hpp"
 
 namespace alcedo::ui::test {
@@ -913,6 +915,40 @@ TEST_F(WelcomePreviewTests, ProjectSwitchRemovesPreviousWorkspace) {
   while (std::filesystem::exists(workspace_a) && std::chrono::steady_clock::now() < deadline) {
     ProcessEvents(50);
   }
+  EXPECT_FALSE(std::filesystem::exists(workspace_a)) << workspace_a.string();
+}
+
+// Issue #1175: the editor's checkpoint store lives for the application. An editor session in
+// the previous project leaves no reference to its Storage, so the switch closes its database
+// and removes its workspace.
+TEST_F(WelcomePreviewTests, ProjectSwitchAfterAnEditorSessionRemovesPreviousWorkspace) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  project_a_dir = temp_dir_ / "project_a";
+  std::filesystem::create_directories(project_a_dir);
+  const auto populated = CreatePopulatedPackedProject(project_a_dir);
+  ASSERT_TRUE(populated.has_value());
+  const auto project_b = BuildPackedProject(temp_dir_, "project_b");
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(LoadPackedProject(host, populated->packed_path_));
+  const std::filesystem::path workspace_a = host.project()->handler().workspace_dir();
+  ASSERT_FALSE(workspace_a.empty());
+  const std::weak_ptr<Storage> storage_a = host.project()->handler().project()->GetStorage();
+
+  host.workspace_router()->OpenEditor(static_cast<uint>(populated->file_id_),
+                                      static_cast<uint>(populated->image_id_));
+  ProcessEvents(2000);
+  host.workspace_router()->OpenLibrary();
+  ProcessEvents(1000);
+
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(project_b)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  ASSERT_TRUE(IsLoadedPackage(host, project_b));
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+  while (std::filesystem::exists(workspace_a) && std::chrono::steady_clock::now() < deadline) {
+    ProcessEvents(50);
+  }
+  EXPECT_EQ(storage_a.use_count(), 0);
   EXPECT_FALSE(std::filesystem::exists(workspace_a)) << workspace_a.string();
 }
 

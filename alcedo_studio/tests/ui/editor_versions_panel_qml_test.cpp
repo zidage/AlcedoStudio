@@ -3,7 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file editor_versions_panel_qml_test.cpp
-/// @brief Production Versions panel: inline draft, outline selection, trash remove.
+/// @brief Production Versions panel: inline draft, outline selection, card menu.
 
 #include <QMetaObject>
 #include <QtGlobal>
@@ -18,12 +18,54 @@ namespace alcedo::ui::test {
 namespace {
 
 using rail_harness::Click;
+using rail_harness::FindVisualItem;
 using rail_harness::ProcessEvents;
 using rail_harness::RailQmlFixture;
 using rail_harness::StableId;
 using rail_harness::TypeText;
 
-class EditorVersionsPanelQmlTest : public RailQmlFixture {};
+class EditorVersionsPanelQmlTest : public RailQmlFixture {
+ protected:
+  /// The Version menu, a popup of the panel.
+  auto VersionMenu() -> QObject* {
+    return window_ != nullptr ? window_->findChild<QObject*>(QStringLiteral("editorVersionMenu"))
+                              : nullptr;
+  }
+
+  /// A right click on @p card opens the Version menu of that card. Waits first until the panel
+  /// allows Version changes: the session admits Version actions a moment after the page opens.
+  auto OpenCardMenu(QQuickItem* card) -> QObject* {
+    if (card == nullptr) return nullptr;
+    auto* panel = card->parentItem();
+    while (panel != nullptr && panel->objectName() != QStringLiteral("editorVersionsPageBody")) {
+      panel = panel->parentItem();
+    }
+    if (panel == nullptr ||
+        !WaitFor([&] { return panel->property("canMutateVersions").toBool(); }, 5000)) {
+      ADD_FAILURE() << "the Versions panel does not allow Version changes";
+      return nullptr;
+    }
+    QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier,
+                      card->mapToScene(QPointF(12.0, card->height() / 2.0)).toPoint());
+    ProcessEvents();
+    auto* menu = VersionMenu();
+    if (menu == nullptr || !WaitFor([&] { return menu->property("opened").toBool(); }, 1000)) {
+      return nullptr;
+    }
+    return menu;
+  }
+
+  /// A right click on @p card, then a click on the menu item @p object_name; the menu closes.
+  void ChooseCardMenuItem(QQuickItem* card, const QString& object_name) {
+    auto* menu = OpenCardMenu(card);
+    ASSERT_NE(menu, nullptr);
+    auto* item = menu->findChild<QQuickItem*>(object_name);
+    ASSERT_NE(item, nullptr);
+    ASSERT_TRUE(item->property("enabled").toBool()) << object_name.toStdString();
+    Click(window_, item);
+    ASSERT_TRUE(WaitFor([&] { return !menu->property("visible").toBool(); }, 1000));
+  }
+};
 
 /// Album catalog that records the edit states the editor session shows on the Library card.
 class RecordingAlbumCatalog final : public IAlbumCatalog {
@@ -180,7 +222,7 @@ TEST_F(EditorVersionsPanelQmlTest, VersionNameInputCreatesRenamesAndRemovesNamed
   EXPECT_TRUE(created_card->property("versionActive").toBool());
   EXPECT_FALSE(controller_.history_snapshot().active_head.has_value());
 
-  Click(window_, created_card->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
+  ChooseCardMenuItem(created_card, QStringLiteral("editorVersionMenuRenameItem"));
   auto* inline_field =
       created_card->findChild<QQuickItem*>(QStringLiteral("editorVersionInlineRenameField"));
   ASSERT_NE(inline_field, nullptr);
@@ -202,8 +244,7 @@ TEST_F(EditorVersionsPanelQmlTest, VersionNameInputCreatesRenamesAndRemovesNamed
     if (card->property("versionId").toString() != created_id) removable_card = card;
   }
   ASSERT_NE(removable_card, nullptr);
-  Click(window_,
-        removable_card->findChild<QQuickItem*>(QStringLiteral("editorRemoveVersionButton")));
+  ChooseCardMenuItem(removable_card, QStringLiteral("editorVersionMenuRemoveItem"));
   EXPECT_EQ(backend_.remove_count(), 1);
   EXPECT_EQ(backend_.last_removed_id(), StableId(2));
   EXPECT_EQ(Cards().size(), 2);
@@ -324,23 +365,31 @@ TEST_F(EditorVersionsPanelQmlTest, ActiveVersionUsesOutlineWithoutStopPlaybackAc
   const qreal hash_left   = active_subtitle->mapToItem(active_card, QPointF(0, 0)).x();
   EXPECT_LE(badge_right, hash_left + 0.5);
 
-  auto* remove_btn =
-      inactive_card->findChild<QQuickItem*>(QStringLiteral("editorRemoveVersionButton"));
-  ASSERT_NE(remove_btn, nullptr);
-  const QString icon_src = remove_btn->property("iconSrc").toString();
-  EXPECT_FALSE(icon_src.contains(QStringLiteral("stop.svg")));
-  EXPECT_TRUE(icon_src.contains(QStringLiteral("trash.svg")));
-  const QString action_name = remove_btn->property("actionName").toString();
-  EXPECT_TRUE(action_name.contains(QStringLiteral("Remove"), Qt::CaseInsensitive) ||
-              action_name.contains(QStringLiteral("Delete"), Qt::CaseInsensitive));
-  EXPECT_FALSE(action_name.contains(QStringLiteral("Stop"), Qt::CaseInsensitive));
-  EXPECT_FALSE(action_name.contains(QStringLiteral("Play"), Qt::CaseInsensitive));
-  EXPECT_FALSE(action_name.contains(QStringLiteral("Playback"), Qt::CaseInsensitive));
-  // Accessible name matches remove/delete, not stop/playback.
-  EXPECT_EQ(remove_btn->property("Accessible.name").toString().isEmpty()
-                ? action_name
-                : remove_btn->property("Accessible.name").toString(),
-            action_name);
+  // Issue #1124: a card has no buttons; Rename, Export Version, and Remove are in the menu
+  // of a right click. Remove is a labeled item, never a stop-playback glyph, and is off for
+  // the active Version.
+  EXPECT_EQ(FindVisualItem(active_card, QStringLiteral("editorRenameVersionButton")), nullptr);
+  EXPECT_EQ(FindVisualItem(inactive_card, QStringLiteral("editorRemoveVersionButton")), nullptr);
+  auto* menu = OpenCardMenu(inactive_card);
+  ASSERT_NE(menu, nullptr);
+  auto* remove_item = menu->findChild<QQuickItem*>(QStringLiteral("editorVersionMenuRemoveItem"));
+  ASSERT_NE(remove_item, nullptr);
+  const QString remove_text = remove_item->property("text").toString();
+  EXPECT_TRUE(remove_text.contains(QStringLiteral("Remove"), Qt::CaseInsensitive));
+  EXPECT_FALSE(remove_text.contains(QStringLiteral("Stop"), Qt::CaseInsensitive));
+  EXPECT_TRUE(remove_item->property("enabled").toBool());
+  auto* export_item = menu->findChild<QQuickItem*>(QStringLiteral("editorVersionMenuExportItem"));
+  ASSERT_NE(export_item, nullptr);
+  EXPECT_EQ(export_item->property("text").toString(), QStringLiteral("Export Version..."));
+  ASSERT_TRUE(QMetaObject::invokeMethod(menu, "close"));
+  ASSERT_TRUE(WaitFor([&] { return !menu->property("visible").toBool(); }, 1000));
+
+  menu = OpenCardMenu(active_card);
+  ASSERT_NE(menu, nullptr);
+  remove_item = menu->findChild<QQuickItem*>(QStringLiteral("editorVersionMenuRemoveItem"));
+  ASSERT_NE(remove_item, nullptr);
+  EXPECT_FALSE(remove_item->property("enabled").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(menu, "close"));
 }
 
 TEST_F(EditorVersionsPanelQmlTest, InlineDraftPendingSubmitBlocksDuplicateCreate) {
@@ -399,7 +448,7 @@ TEST_F(EditorVersionsPanelQmlTest, RenameEditsTheCardTitleInPlace) {
   ASSERT_NE(title, nullptr);
   ASSERT_NE(inline_field, nullptr);
   EXPECT_FALSE(inline_field->isVisible());
-  Click(window_, active->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
+  ChooseCardMenuItem(active, QStringLiteral("editorVersionMenuRenameItem"));
 
   // The title turns into the editor on the same card; the header create row
   // stays closed and no modal dialog appears.
@@ -433,7 +482,7 @@ TEST_F(EditorVersionsPanelQmlTest, InlineRenameEscapeRestoresTitleWithoutSubmitt
   }
   ASSERT_NE(active, nullptr);
   const QString original = active->property("displayName").toString();
-  Click(window_, active->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
+  ChooseCardMenuItem(active, QStringLiteral("editorVersionMenuRenameItem"));
   auto* inline_field =
       active->findChild<QQuickItem*>(QStringLiteral("editorVersionInlineRenameField"));
   ASSERT_NE(inline_field, nullptr);
@@ -520,7 +569,7 @@ TEST_F(EditorVersionsPanelQmlTest, VersionListPreservesContentYAcrossCreateRenam
     if (card->property("versionActive").toBool()) active_card = card;
   }
   ASSERT_NE(active_card, nullptr);
-  Click(window_, active_card->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
+  ChooseCardMenuItem(active_card, QStringLiteral("editorVersionMenuRenameItem"));
   auto* inline_field =
       active_card->findChild<QQuickItem*>(QStringLiteral("editorVersionInlineRenameField"));
   ASSERT_NE(inline_field, nullptr);
@@ -621,7 +670,8 @@ TEST_F(EditorVersionsPanelQmlTest, BranchFromCurrentButtonBranchesFromActiveHead
   ASSERT_NE(accept, nullptr);
   Click(window_, accept);
   QTRY_VERIFY_WITH_TIMEOUT(backend_.branch_count() == 1, 2000);
-  EXPECT_EQ(backend_.last_branch_commit(), StableId(13));
+  // The fixture head of "Base Look" is the second commit (issue #1125).
+  EXPECT_EQ(backend_.last_branch_commit(), StableId(12));
   EXPECT_EQ(QString::fromStdString(backend_.last_branch_name()), QStringLiteral("currentbranch"));
   EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
             QStringLiteral("branchFromCommit"));

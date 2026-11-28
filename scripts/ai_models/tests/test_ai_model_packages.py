@@ -12,8 +12,9 @@ import unittest
 
 import py7zr
 
-from ai_model_test_support import (CPP_FIXTURE_DIR, REPO_ROOT, TemporaryDirectory,
-                                   build_test_feed, test_public_key_base64, without_archive_bytes,
+from ai_model_test_support import (CPP_FIXTURE_DIR, FIXTURE_DEFINITIONS, REPO_ROOT,
+                                   TemporaryDirectory, build_test_feed, sign_with_test_key,
+                                   test_public_key_base64, without_archive_bytes,
                                    write_test_model_set)
 
 import ai_model_packages
@@ -36,9 +37,17 @@ def find_signer() -> Path | None:
     return signer if signer.is_file() else None
 
 
-def archive_path(directory: Path, manifest: dict, platform: str) -> Path:
+def feed_package(manifest: dict, package_id: str | None = None) -> dict:
+    """The entry of ``package_id``, or the first entry."""
+    if package_id is None:
+        return manifest["packages"][0]
+    return next(entry for entry in manifest["packages"] if entry["id"] == package_id)
+
+
+def archive_path(directory: Path, manifest: dict, platform: str,
+                 package_id: str | None = None) -> Path:
     """The archive of ``platform`` in ``directory`` (``packages/`` of a prepared output)."""
-    url = manifest["packages"][0]["artifacts"][platform]["url"]
+    url = feed_package(manifest, package_id)["artifacts"][platform]["url"]
     return directory / Path(url).name
 
 
@@ -73,11 +82,13 @@ class AiModelPackagePreparationTest(unittest.TestCase):
         if definition is None:
             definition, sources = write_test_model_set(work / "model_set")
         output = work / "out"
+        # Without a given base, a first feed: the tests never read the live feed.
+        base = [] if "--base-feed" in extra else ["--no-base-feed"]
         code, printed = run_quietly(prepare_ai_model_packages.main, [
             "--definition", str(definition),
             "--windows-source", str(sources["windows-x86_64"]),
             "--macos-source", str(sources["macos-arm64"]),
-            "--sequence", "42", "--output-dir", str(output), *extra])
+            "--sequence", "42", "--output-dir", str(output), *base, *extra])
         return code, output, printed
 
     def test_PreparedArchivesVerifyFromLocalFiles(self) -> None:
@@ -260,19 +271,21 @@ class AiModelPackageCppFixtureTest(unittest.TestCase):
         committed = json.loads((CPP_FIXTURE_DIR / "manifest.json").read_text(encoding="utf-8"))
         verify_signature(CPP_FIXTURE_DIR / "manifest.json", CPP_FIXTURE_DIR / "manifest.json.sig",
                          (CPP_FIXTURE_DIR / "test_public_key.txt").read_text().strip())
+        self.assertEqual([entry["id"] for entry in committed["packages"]],
+                         ["alcedo-ai-denoise", "alcedo-ai-mask"])
         with TemporaryDirectory() as work:
-            for platform in ai_model_packages.PLATFORMS:
-                verify_package_archive(archive_path(CPP_FIXTURE_DIR, committed, platform),
-                                       committed["packages"][0], platform, work / "verify")
             output = work / "out"
-            current = build_test_feed(work, output)
+            current = build_test_feed(work, output, definitions=FIXTURE_DEFINITIONS)
             self.assertEqual(without_archive_bytes(current), without_archive_bytes(committed))
-            for platform in ai_model_packages.PLATFORMS:
-                self.assertEqual(
-                    extracted_files(archive_path(output / "packages", current, platform),
-                                    work / "new"),
-                    extracted_files(archive_path(CPP_FIXTURE_DIR, committed, platform),
-                                    work / "old"))
+            for entry in committed["packages"]:
+                for platform in ai_model_packages.PLATFORMS:
+                    with self.subTest(package=entry["id"], platform=platform):
+                        fixture = archive_path(CPP_FIXTURE_DIR, committed, platform, entry["id"])
+                        verify_package_archive(fixture, entry, platform, work / "verify")
+                        self.assertEqual(
+                            extracted_files(archive_path(output / "packages", current, platform,
+                                                         entry["id"]), work / "new"),
+                            extracted_files(fixture, work / "old"))
 
 
 class AiMaskModelSetDefinitionTest(unittest.TestCase):
@@ -327,6 +340,179 @@ class AiMaskModelSetDefinitionTest(unittest.TestCase):
                      "Before you download", "下载前请阅读", "Accept and Download"):
             self.assertIn(text, notice)
         # Decision A7: the statement does not forbid commercial use.
+        self.assertIsNone(re.search(r"(?i)do not use .* commercial", notice))
+
+
+class AiModelFeedWithMoreThanOnePackageTest(unittest.TestCase):
+    """A preparation over a base feed (AI Denoise integration plan, DN12)."""
+
+    def write_base_feed(self, work: Path) -> tuple[dict, Path, Path]:
+        """The signed AI Mask feed of sequence 41 and the file of the test public key."""
+        base = work / "base_feed"
+        manifest = build_test_feed(work / "base_work", base, sequence=41)
+        key_file = work / "key.txt"
+        key_file.write_text(test_public_key_base64(), encoding="utf-8")
+        return manifest, base, key_file
+
+    def prepare_over(self, work: Path, base: Path, key_file: Path, real_definition: Path,
+                     revision: str = "r1", sequence: str = "42") -> tuple[int, Path, str]:
+        definition, sources = write_test_model_set(work / "next_set", revision, real_definition)
+        output = work / "out"
+        code, printed = run_quietly(prepare_ai_model_packages.main, [
+            "--definition", str(definition),
+            "--source", f"windows-x86_64={sources['windows-x86_64']}",
+            "--source", f"macos-arm64={sources['macos-arm64']}",
+            "--sequence", sequence, "--output-dir", str(output), "--base-feed", str(base),
+            "--public-key-file", str(key_file)])
+        return code, output, printed
+
+    def test_FeedOverBaseCarriesTheBaseEntryUnchanged(self) -> None:
+        with TemporaryDirectory() as work:
+            base_manifest, base, key_file = self.write_base_feed(work)
+            code, output, printed = self.prepare_over(work, base, key_file,
+                                                      ai_model_packages.DENOISE_DEFINITION)
+            self.assertEqual(code, 0, printed)
+            self.assertIn("Carried alcedo-ai-mask v1 r1", printed)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["sequence"], 42)
+            self.assertEqual([entry["id"] for entry in manifest["packages"]],
+                             ["alcedo-ai-denoise", "alcedo-ai-mask"])
+            # The released builds read the AI Mask entry: the same values as in the base feed.
+            self.assertEqual(feed_package(manifest, "alcedo-ai-mask"),
+                             feed_package(base_manifest, "alcedo-ai-mask"))
+            denoise = feed_package(manifest, "alcedo-ai-denoise")
+            self.assertEqual((denoise["name"], denoise["model_set_version"], denoise["revision"]),
+                             ("AI Denoise", 1, "r1"))
+            self.assertEqual([item["name"] for item in denoise["licenses"]],
+                             ["GPL-3.0", "CC BY 4.0"])
+            for platform in ai_model_packages.PLATFORMS:
+                archive = archive_path(output / "packages", manifest, platform,
+                                       "alcedo-ai-denoise")
+                verify_package_archive(archive, denoise, platform, work / "verify")
+                model_set = json.loads(extracted_files(archive, work)["model_set.json"])
+                self.assertEqual(model_set["models"], [{
+                    "role": "denoise_graph", "path": "utnet2_bayer_dark_loss_10k_fp16.onnx",
+                    "licenses": ["GPL-3.0", "CC BY 4.0"]}])
+            # Only the new archives are in the output; the base files are copied exactly.
+            self.assertEqual(len(list((output / "packages").iterdir())), 2)
+            for name in ("manifest.json", "manifest.json.sig"):
+                self.assertEqual((output / "base" / name).read_bytes(), (base / name).read_bytes())
+
+    def test_EntryOfTheSameVersionIsReplaced(self) -> None:
+        with TemporaryDirectory() as work:
+            _, base, key_file = self.write_base_feed(work)
+            code, output, printed = self.prepare_over(work, base, key_file,
+                                                      ai_model_packages.DEFAULT_DEFINITION, "r2")
+            self.assertEqual(code, 0, printed)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual([(entry["id"], entry["revision"]) for entry in manifest["packages"]],
+                             [("alcedo-ai-mask", "r2")])
+
+    def test_InvalidBaseSignatureOrSequenceStopsPreparation(self) -> None:
+        for change in ("signature", "sequence"):
+            with self.subTest(change=change), TemporaryDirectory() as work:
+                _, base, key_file = self.write_base_feed(work)
+                sequence = "42"
+                if change == "signature":
+                    manifest = base / "manifest.json"
+                    manifest.write_bytes(manifest.read_bytes().replace(b'"r1"', b'"r7"', 1))
+                else:
+                    sequence = "41"
+                code, output, printed = self.prepare_over(
+                    work, base, key_file, ai_model_packages.DENOISE_DEFINITION,
+                    sequence=sequence)
+                self.assertEqual(code, 1)
+                self.assertIn(change, printed)
+                self.assertFalse((output / "manifest.json").exists())
+
+    def test_PublicationUploadsOnlyTheNewArchivesAndChecksCarriedEntries(self) -> None:
+        with TemporaryDirectory() as work:
+            _, base, key_file = self.write_base_feed(work)
+            code, output, printed = self.prepare_over(work, base, key_file,
+                                                      ai_model_packages.DENOISE_DEFINITION)
+            self.assertEqual(code, 0, printed)
+            manifest_path = output / "manifest.json"
+            sign_with_test_key(manifest_path, output / "manifest.json.sig")
+            publish_args = ["--output-dir", str(output), "--public-key-file", str(key_file)]
+            code, printed = run_quietly(publish_ai_model_packages.main, publish_args)
+            self.assertEqual(code, 0, printed)
+            self.assertIn("Carried from the base feed, not uploaded: alcedo-ai-mask v1 r1", printed)
+            manifest, carried = publish_ai_model_packages.verify_prepared_output(output, key_file)
+            self.assertEqual(carried, frozenset({("alcedo-ai-mask", 1)}))
+            keys = [item["key"] for item in publish_ai_model_packages.planned_uploads(
+                output, manifest, "ai-models/v1", carried)]
+            self.assertEqual(keys, [
+                "ai-models/v1/packages/alcedo-ai-denoise/v1/r1/"
+                "alcedo-ai-denoise-v1-r1-macos-arm64.7z",
+                "ai-models/v1/packages/alcedo-ai-denoise/v1/r1/"
+                "alcedo-ai-denoise-v1-r1-windows-x86_64.7z",
+                "ai-models/v1/manifests/42/manifest.json.sig",
+                "ai-models/v1/manifests/42/manifest.json",
+                "ai-models/v1/manifest.json.sig",
+                "ai-models/v1/manifest.json",
+            ])
+
+            # The archives of a carried entry must be on the server with their signed size.
+            responses = {}
+            for artifact in feed_package(manifest, "alcedo-ai-mask")["artifacts"].values():
+                responses[artifact["url"]] = (200, {"Content-Length": str(artifact["size"])}, b"")
+            original = publish_ai_model_packages.fetch_url
+            try:
+                publish_ai_model_packages.fetch_url = lambda url, method: responses[url]
+                publish_ai_model_packages.check_carried_archives(manifest, carried)
+                first = next(iter(responses))
+                responses[first] = (404, {}, b"")
+                with self.assertRaisesRegex(AiModelPackageError, "HTTP 404"):
+                    publish_ai_model_packages.check_carried_archives(manifest, carried)
+            finally:
+                publish_ai_model_packages.fetch_url = original
+
+            # An entry without archives in the output that differs from the base is refused.
+            changed = json.loads(manifest_path.read_text(encoding="utf-8"))
+            feed_package(changed, "alcedo-ai-mask")["artifacts"]["macos-arm64"]["size"] += 1
+            manifest_path.write_bytes(ai_model_packages.manifest_bytes(42, changed["packages"]))
+            sign_with_test_key(manifest_path, output / "manifest.json.sig")
+            with self.assertRaisesRegex(AiModelPackageError, "not an entry of the base feed"):
+                run_quietly(publish_ai_model_packages.main, publish_args)
+
+
+class AiDenoiseModelSetDefinitionTest(unittest.TestCase):
+    INTEGRATION_PLAN = (REPO_ROOT / "docs" / "roadmap" / "alcedo_studio" / "raw-processing" /
+                        "ai_denoise" / "ai_denoise_integration_plan.md")
+
+    def test_DefinitionPinsTheGraphOfDn2AndTheLicenseTexts(self) -> None:
+        definition = ai_model_packages.load_definition(ai_model_packages.DENOISE_DEFINITION)
+        self.assertEqual((definition["id"], definition["name"], definition["model_set_version"],
+                          definition["revision"]), ("alcedo-ai-denoise", "AI Denoise", 1, "r1"))
+        plan = self.INTEGRATION_PLAN.read_text(encoding="utf-8")
+        # One FP16 graph for both platforms (D2): the DN2 graph, whose SHA-256 is the model
+        # version that projects record (D10).
+        pins = [definition["platforms"][platform] for platform in ai_model_packages.PLATFORMS]
+        self.assertEqual(pins[0], pins[1])
+        [graph] = pins[0]
+        self.assertEqual((graph["path"], graph["size"]),
+                         ("utnet2_bayer_dark_loss_10k_fp16.onnx", 15552242))
+        self.assertIn(graph["sha256"], plan)
+        self.assertEqual([model["role"] for model in definition["models"]], ["denoise_graph"])
+
+        texts = {license["name"]: ai_model_packages.license_text(license)
+                 for license in definition["licenses"]}
+        self.assertEqual(sorted(texts), ["CC BY 4.0", "GPL-3.0"])
+        self.assertTrue(texts["GPL-3.0"].lstrip().startswith(b"GNU GENERAL PUBLIC LICENSE"))
+        self.assertNotIn(b"NVIDIA", texts["GPL-3.0"])
+        self.assertTrue(texts["CC BY 4.0"].startswith(b"Attribution 4.0 International"))
+
+    def test_NoticeNamesTheModelLicensesAndTrainingData(self) -> None:
+        definition = ai_model_packages.load_definition(ai_model_packages.DENOISE_DEFINITION)
+        notice = definition["notice"].read_text(encoding="utf-8")
+        for license in definition["licenses"]:
+            self.assertIn(license["file"], notice)
+        for model in definition["models"]:
+            for path in model["files"].values():
+                self.assertIn(path, notice)
+        for text in ("alcedo-denoise-lab", "rawnind_jddc", "RawNIND", "10.14428/DVN/DEQCIM",
+                     "Attribution-ShareAlike 4.0", "Benoit Brummer"):
+            self.assertIn(text, notice)
         self.assertIsNone(re.search(r"(?i)do not use .* commercial", notice))
 
 

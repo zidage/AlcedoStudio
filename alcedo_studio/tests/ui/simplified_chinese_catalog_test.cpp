@@ -45,7 +45,7 @@ const QMap<QString, int>& ExpectedContextMessageCounts() {
       {QStringLiteral("AdjustmentTransferItemPane"), 14},
       {QStringLiteral("AdjustmentTransferNodePane"), 4},
       {QStringLiteral("AdjustmentTransferVersionPane"), 4},
-      {QStringLiteral("CollectionsPanel"), 19},
+      {QStringLiteral("CollectionsPanel"), 36},
       {QStringLiteral("EditorAdjustmentHeader"), 4},
       {QStringLiteral("EditorAdjustmentStack"), 11},
       {QStringLiteral("EditorAiMaskPanel"), 40},
@@ -71,7 +71,7 @@ const QMap<QString, int>& ExpectedContextMessageCounts() {
   return counts;
 }
 
-constexpr int kExpectedTargetMessageTotal = 311;
+constexpr int kExpectedTargetMessageTotal = 328;
 
 /// Parses a Qt TS catalog into context -> messages. Numerus translations keep
 /// their combined <numerusform> text so placeholder checks stay meaningful.

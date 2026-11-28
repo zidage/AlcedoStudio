@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.impl
-import QtQuick.Effects
 import QtQuick.Layouts
 import Alcedo.Main 1.0
 
@@ -21,10 +20,10 @@ import Alcedo.Main 1.0
 // Layout: tiles are laid out in rows of `columns` by a ListView over row
 // indices, so every row takes the height of its tallest tile and titles are
 // shown in full. Only visible rows instantiate tiles. The list layout is the
-// same view with one column and rows without the preview slot.
+// same view with one column; each row has a small preview slot left of the title.
 //
-// Previews: a grid tile watches its entry on the preview controller while it
-// exists, so only instantiated tiles render a preview. The slot shows the cube
+// Previews: a tile or list row watches its entry on the preview controller while
+// it exists, so only instantiated tiles render a preview. The slot shows the cube
 // placeholder until the preview is ready, and for a LUT that has no preview.
 //
 // Input: choosing a tile applies it to the target as one settled edit (the
@@ -434,8 +433,8 @@ Item {
 
     // One LUT: a grid tile (preview of the open photo or the placeholder cube,
     // centered title, print line, status, hover star) or, in the list layout, a
-    // compact row (title and print left, star right, no preview). Both read the
-    // same model roles and share one chrome.
+    // compact row (small preview left, then title and print, star right). Both read
+    // the same model roles and share one chrome.
     component EditorLutTile: Item {
         id: tile
 
@@ -458,17 +457,13 @@ Item {
         readonly property int starReserve: appTheme.iconOpticalSizeCompact + appTheme.spaceXs
         // The star's own area sits above the tile's; either one counts as hovering the tile.
         readonly property bool hovered: tileHover.containsMouse || starArea.containsMouse
-        // Preview: the entry this tile watches on the preview controller (grid layout only).
-        readonly property string previewEntryId: !listMode && present && !!root.preview ? entryId : ""
+        // Preview: the entry this tile watches on the preview controller.
+        readonly property string previewEntryId: present && !!root.preview ? entryId : ""
         property string watchedEntryId: ""
         readonly property string previewUrl: watchedEntryId.length > 0 && !!root.preview
                                              ? String(root.preview.previewUrl(watchedEntryId,
                                                                               root.preview.revision) || "")
                                              : ""
-        readonly property bool previewPainted: previewUrl.length > 0
-                                               && previewImage.status === Image.Ready
-                                               && previewImage.implicitWidth > 0
-                                               && previewImage.implicitHeight > 0
         // Every preview slot has the 3:2 shape of the filmstrip; the photo fits into it.
         readonly property real previewSlotAspect: 1.5
 
@@ -509,7 +504,8 @@ Item {
             border.color: root.colSelectionOutline
         }
 
-        ColumnLayout {
+        // Grid: the preview slot above the text. List: a small preview slot left of it.
+        GridLayout {
             id: tileColumn
             anchors.left: parent.left
             anchors.right: parent.right
@@ -518,99 +514,61 @@ Item {
             anchors.leftMargin: appTheme.spaceSm
             anchors.rightMargin: tile.listMode ? appTheme.spaceSm + tile.starReserve : appTheme.spaceSm
             anchors.topMargin: appTheme.spaceSm
-            spacing: tile.listMode ? 0 : appTheme.spaceXs
+            columns: tile.listMode ? 2 : 1
+            columnSpacing: appTheme.spaceSm
+            rowSpacing: appTheme.spaceXs
 
             // Preview slot (DESIGN.md "LUT browser tiles"): the photo fits the 3:2 slot, is
             // centered, and has controlRadiusSmall corners, like a filmstrip photo.
-            Item {
+            BrowserPreviewThumb {
                 id: previewSlot
                 objectName: "editorLutTilePreviewSlot"
-                visible: !tile.listMode
-                Layout.fillWidth: true
-                Layout.preferredHeight: Math.round(width / tile.previewSlotAspect)
+                namePrefix: "editorLutTile"
+                readonly property real slotWidth: tile.listMode ? appTheme.editorBrowserListThumbWidth
+                                                                : width
+                Layout.fillWidth: !tile.listMode
+                Layout.preferredWidth: tile.listMode ? appTheme.editorBrowserListThumbWidth : -1
+                Layout.preferredHeight: Math.round(slotWidth / tile.previewSlotAspect)
+                Layout.alignment: Qt.AlignVCenter
+                previewUrl: tile.previewUrl
+                placeholderSource: "qrc:/panel_icons/lut-cube.svg"
+                placeholderColor: tile.applied ? root.colText : appTheme.iconColor
+                placeholderOpacity: tile.selectable ? 1.0 : 0.45
+            }
 
-                ColorImage {
-                    objectName: "editorLutTileCube"
-                    anchors.centerIn: parent
-                    width: appTheme.editorLutTileIconSize
-                    height: appTheme.editorLutTileIconSize
-                    visible: !tile.previewPainted
-                    source: "qrc:/panel_icons/lut-cube.svg"
-                    sourceSize.width: appTheme.editorLutTileIconSize * 2
-                    sourceSize.height: appTheme.editorLutTileIconSize * 2
-                    color: tile.applied ? root.colText : appTheme.iconColor
-                    opacity: tile.selectable ? 1.0 : 0.45
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignVCenter
+                spacing: tile.listMode ? 0 : appTheme.spaceXs
+
+                Label {
+                    objectName: "editorLutTileTitle"
+                    Layout.fillWidth: true
+                    horizontalAlignment: tile.textAlignment
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    text: tile.title
+                    color: tile.selectable ? tile.inkColor : tile.mutedInkColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: tile.listMode ? appTheme.fontSizeBody : appTheme.fontSizeCaption
+                    font.weight: tile.applied ? appTheme.fontWeightStrong : appTheme.fontWeightRegular
                 }
 
-                Item {
-                    id: previewPhoto
-                    objectName: "editorLutTilePreview"
-                    readonly property real fitScale: tile.previewPainted
-                                                     ? Math.min(previewSlot.width / previewImage.implicitWidth,
-                                                                previewSlot.height / previewImage.implicitHeight)
-                                                     : 1
-                    width: tile.previewPainted ? Math.round(previewImage.implicitWidth * fitScale)
-                                               : previewSlot.width
-                    height: tile.previewPainted ? Math.round(previewImage.implicitHeight * fitScale)
-                                                : previewSlot.height
-                    x: Math.round((previewSlot.width - width) / 2)
-                    y: Math.round((previewSlot.height - height) / 2)
-                    visible: tile.previewUrl.length > 0
-
-                    Rectangle {
-                        id: previewMask
-                        anchors.fill: parent
-                        radius: appTheme.controlRadiusSmall
-                        visible: false
-                        layer.enabled: true
-                    }
-
-                    Image {
-                        id: previewImage
-                        objectName: "editorLutTilePreviewImage"
-                        anchors.fill: parent
-                        source: tile.previewUrl
-                        asynchronous: true
-                        // Every shown preview has its own URL; the controller keeps the pixels.
-                        cache: false
-                        fillMode: Image.PreserveAspectFit
-                        opacity: tile.previewPainted ? 1 : 0
-                        layer.enabled: tile.previewPainted
-                        layer.effect: MultiEffect {
-                            maskEnabled: true
-                            maskSource: previewMask
-                        }
-                    }
+                Label {
+                    objectName: "editorLutTilePrint"
+                    Layout.fillWidth: true
+                    visible: tile.printName.length > 0
+                    horizontalAlignment: tile.textAlignment
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    text: tile.printName
+                    color: tile.mutedInkColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
                 }
-            }
 
-            Label {
-                objectName: "editorLutTileTitle"
-                Layout.fillWidth: true
-                horizontalAlignment: tile.textAlignment
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                text: tile.title
-                color: tile.selectable ? tile.inkColor : tile.mutedInkColor
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: tile.listMode ? appTheme.fontSizeBody : appTheme.fontSizeCaption
-                font.weight: tile.applied ? appTheme.fontWeightStrong : appTheme.fontWeightRegular
-            }
-
-            Label {
-                objectName: "editorLutTilePrint"
-                Layout.fillWidth: true
-                visible: tile.printName.length > 0
-                horizontalAlignment: tile.textAlignment
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                text: tile.printName
-                color: tile.mutedInkColor
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
-            }
-
-            AlertBadge {
-                Layout.fillWidth: true
-                text: tile.statusText
+                AlertBadge {
+                    Layout.fillWidth: true
+                    text: tile.statusText
+                }
             }
         }
 

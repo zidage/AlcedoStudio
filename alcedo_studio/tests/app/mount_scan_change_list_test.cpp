@@ -19,6 +19,7 @@
 
 #include "type/hash_type.hpp"
 #include "type/mount_records.hpp"
+#include "type/source_file_record.hpp"
 #include "utils/file/mount_directory_listing.hpp"
 #include "utils/file/source_file_fingerprint.hpp"
 

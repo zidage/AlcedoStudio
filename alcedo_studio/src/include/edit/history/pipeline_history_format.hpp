@@ -34,9 +34,16 @@ namespace alcedo {
  * project, so they never write Element rows without the mount id. The root id of an image does
  * not read the Element row, so it is unchanged. The other identities are unchanged.
  *
+ * Project metadata 0.15.0 makes a file name a label (Sleeve Node Cache Plan, SN4): two files of
+ * one folder, the library root included, can have the same name. The tables do not change. A
+ * 0.10.0 to 0.12.0 project opens with no data change, and the next save writes 0.15.0. A build
+ * that accepts only 0.12.0 loads the root with one name entry for each file and throws on the
+ * second equal name, so it must reject a 0.15.0 project. The versions 0.13.0 and 0.14.0 are not
+ * used. The other identities are unchanged.
+ *
  * | Identity | Constant | Value |
  * | --- | --- | --- |
- * | Project metadata | @ref kProjectFileVersion | 0.12.0 |
+ * | Project metadata | @ref kProjectFileVersion | 0.15.0 |
  * | Packed project header | @ref kPackedProjectFormatVersion | 7 |
  * | Pipeline document JSON | @ref kPipelineDocumentFormatVersion | 7 |
  * | Image edit schema | @ref kImageEditSchemaVersion | 5 |
@@ -50,12 +57,12 @@ namespace alcedo {
  */
 
 /// Project metadata version written by SaveProject and required on open.
-inline constexpr std::string_view kProjectFileVersion = "0.12.0";
+inline constexpr std::string_view kProjectFileVersion = "0.15.0";
 /// Inclusive lower bound of accepted project metadata: 0.10.0 opens and gains the mark columns
 /// and the mounted folder records.
 inline constexpr std::string_view kMinSupportedProjectFileVersion = "0.10.0";
 /// Inclusive upper bound of accepted project metadata. Equals @ref kProjectFileVersion.
-inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.12.0";
+inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.15.0";
 /// Packed `.alcd` header version. Independent of the metadata string.
 inline constexpr std::uint32_t kPackedProjectFormatVersion = 7;
 

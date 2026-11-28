@@ -15,8 +15,9 @@ Popup {
     property string confirmText: ""
     // Image deletes add the note about source files; a collection delete writes its own text.
     property bool appendSourceFilesNote: true
-    // Image deletes stay disabled while the targets are analyzed; other hosts bind their own.
-    property bool confirmEnabled: appModules.interactionPolicy.canDeletePendingTargets
+    // Image deletes stay disabled while a task locks the clicked image; the delete skips each
+    // other locked image (#1135). Other hosts bind their own.
+    property bool confirmEnabled: appModules.interactionPolicy.canDeleteFocused
     signal cancelled()
     signal confirmed()
     modal: true

@@ -29,6 +29,39 @@ namespace alcedo {
  */
 [[nodiscard]] auto ReadVolumeIdentity(const std::filesystem::path& directory) -> std::string;
 
+/// The display name and the mount point of the volume that holds a directory. The Disk section
+/// of the Collections panel shows them for each mount (#1076).
+struct VolumeLabel {
+  /// The name of the volume as the system shows it. Empty when the volume has no name.
+  std::string           name;
+  /// The path where the volume is mounted: the drive (`E:\`) or the mount folder on Windows,
+  /// the mount path on macOS and Linux. Empty when it cannot be read.
+  std::filesystem::path mount_point;
+
+  auto                  operator==(const VolumeLabel&) const -> bool = default;
+};
+
+/**
+ * @brief Read the display name and the mount point of the volume that holds @p directory.
+ *
+ * The source of the name:
+ *
+ * - Windows: the volume label of `GetVolumeInformationW`. A volume without a label has an empty
+ *   name (Windows then shows a name of its own, such as "Local Disk").
+ * - macOS: `NSURLVolumeNameKey`, the volume name that `getattrlist` reads.
+ * - Linux: the file system label (the `/dev/disk/by-label` entry of the block device of the
+ *   directory), or the last component of the mount point when the file system has no label.
+ *
+ * The mount point comes from `GetVolumePathNameW` on Windows, `statfs` on macOS, and the
+ * longest `/proc/self/mounts` entry above the directory on the same device on Linux.
+ *
+ * Thread safety: the function holds no state; any thread can call it. It reads the file system
+ * of the directory, so call it from a worker thread.
+ *
+ * @return Empty values when the directory does not exist. The function does not throw.
+ */
+[[nodiscard]] auto ReadVolumeLabel(const std::filesystem::path& directory) -> VolumeLabel;
+
 /// One mounted volume: its identity in the form of ReadVolumeIdentity and one path where it is
 /// mounted.
 struct VolumeMountPoint {

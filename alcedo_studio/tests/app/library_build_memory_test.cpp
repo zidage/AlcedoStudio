@@ -20,8 +20,11 @@
 #include "app/project_service.hpp"
 #include "library_search_test_support.hpp"
 #include "process_memory_test_support.hpp"
-#include "utils/clock/time_provider.hpp"
+#include "sleeve/sleeve_element/sleeve_element.hpp"
+#include "sleeve/sleeve_filesystem.hpp"
+#include "storage/store/sleeve/element_store.hpp"
 #include "support/test_temp_directory.hpp"
+#include "utils/clock/time_provider.hpp"
 
 namespace alcedo {
 namespace {
@@ -167,11 +170,18 @@ TEST_F(LibraryBuildMemoryTest, DISABLED_ReportsPrivateBytesOfEachSleeveSyncStep)
         fs.CreateFileInLibrary(specs[i].file_name_)->image_id_ = image_ids[i - begin];
       }
       after_fs = PrivateBytes();
-      element_store.AddElements(fs.GetUnsyncedElements());
+      // The steps of SleeveServiceImpl::Sync, measured one by one.
+      const auto                                  dirty = fs.DirtyElements();
+      std::vector<std::shared_ptr<SleeveElement>> inserts;
+      std::vector<std::shared_ptr<SleeveElement>> updates;
+      for (const auto& element : dirty) {
+        (element->SyncState() == SyncFlag::UNSYNC ? inserts : updates).push_back(element);
+      }
+      element_store.WriteSync(inserts, {}, {});
       after_add = PrivateBytes();
-      element_store.UpdateElements(fs.GetModifiedElements());
+      element_store.WriteSync({}, updates, {});
       after_update = PrivateBytes();
-      fs.GarbageCollect();
+      fs.MarkWritten(dirty);
       after_gc = PrivateBytes();
     });
     std::cout << std::format("{:>5} {:>9.1f} {:>9.1f} {:>9.1f} {:>9.1f} {:>9.1f} {:>9.1f}\n",

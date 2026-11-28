@@ -47,14 +47,6 @@ void InteractionPolicyController::SetFocusedElementId(uint elementId) {
   emit PolicyChanged();
 }
 
-void InteractionPolicyController::SetPendingDeleteTargets(const QVariantList& targets) {
-  if (pending_delete_targets_ == targets) {
-    return;
-  }
-  pending_delete_targets_ = targets;
-  emit PolicyChanged();
-}
-
 void InteractionPolicyController::SetNaturalLanguageSearchEnabled(bool enabled) {
   if (natural_language_search_enabled_ == enabled) {
     return;
@@ -209,12 +201,21 @@ QString InteractionPolicyController::FocusedEditReason() const {
   return {};
 }
 
-bool InteractionPolicyController::CanDeletePendingTargets() const {
-  return EvalTargets(InteractionCapability::DeleteImages, pending_delete_targets_).allowed_;
+bool InteractionPolicyController::CanDeleteFocused() const {
+  return Eval(InteractionCapability::DeleteImages, focused_element_id_).allowed_;
 }
 
-QString InteractionPolicyController::PendingDeleteReason() const {
-  return EvalTargets(InteractionCapability::DeleteImages, pending_delete_targets_).reason_;
+QString InteractionPolicyController::FocusedDeleteReason() const {
+  return Eval(InteractionCapability::DeleteImages, focused_element_id_).reason_;
+}
+
+auto InteractionPolicyController::DeleteImageRefusal(quint64 elementId) const
+    -> std::optional<QString> {
+  auto answer = Eval(InteractionCapability::DeleteImages, elementId);
+  if (answer.allowed_) {
+    return std::nullopt;
+  }
+  return std::move(answer.reason_);
 }
 
 bool InteractionPolicyController::CanChangeSemanticModel() const {

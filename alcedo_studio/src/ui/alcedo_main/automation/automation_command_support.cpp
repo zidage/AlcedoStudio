@@ -11,6 +11,8 @@
 #include <exception>
 #include <utility>
 
+#include "edit/input/ai_denoise_error.hpp"
+
 namespace alcedo::automation {
 
 auto AutomationObjectSchema(QJsonObject properties, QJsonArray required) -> QJsonObject {
@@ -146,9 +148,21 @@ auto ResolveAutomationElementRows(ProjectService& project, const QJsonObject& pa
   return rows;
 }
 
+auto AutomationOwnerErrorData(const QString& message) -> QJsonObject {
+  QJsonObject data{{"reason", message}};
+  if (const auto denoise = ParseAiDenoiseRenderError(message.toStdString())) {
+    const auto kind = AiDenoiseErrorKindToken(denoise->kind);
+    data.insert("ai_denoise_error",
+                QJsonObject{{"kind", QString::fromUtf8(kind.data(),
+                                                       static_cast<qsizetype>(kind.size()))},
+                            {"text", QString::fromStdString(denoise->text)}});
+  }
+  return data;
+}
+
 void SendAutomationOwnerError(AutomationReply& reply, AutomationErrorCode code,
                               const QString& message) {
-  reply.SendError(code, message, QJsonObject{{"reason", message}});
+  reply.SendError(code, message, AutomationOwnerErrorData(message));
 }
 
 void SendAutomationParamError(AutomationReply& reply, const QString& pointer,

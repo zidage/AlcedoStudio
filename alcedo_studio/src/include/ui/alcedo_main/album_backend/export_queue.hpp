@@ -26,8 +26,9 @@ namespace alcedo::ui {
 ///   run has a status for the entry (ImportExportHandler::exportItemStatuses). Only the entries
 ///   of the current run show a run status; every other entry is queued for the next export.
 /// - An entry leaves the queue when its run reports it as succeeded or failed, when its element
-///   is deleted, and when the project changes. An entry that its run reports as missing stays in
-///   the queue with that status, and joins the next export run again.
+///   is deleted, and when the project changes. An entry that its run reports as missing or as
+///   ai_denoise (an AI Denoise render error, integration plan DN8) stays in the queue with that
+///   status, and joins the next export run again.
 class ExportQueue final : public QObject {
   Q_OBJECT
   Q_PROPERTY(int count READ Count NOTIFY QueueChanged)
@@ -74,9 +75,14 @@ class ExportQueue final : public QObject {
 
   /// Applies the export state of ImportExportHandler: when @p run_id is a new run, the entries
   /// with a status in @p statuses join it; then the entries of the run whose status is
-  /// succeeded or failed leave the queue, and the missing ones stay. Called on
+  /// succeeded or failed leave the queue, and the missing and ai_denoise ones stay. Called on
   /// ImportExportHandler::ExportStateChanged.
   void                     ApplyExportState(quint64 run_id, const QVariantMap& statuses);
+
+  /// Takes the entry of @p element_id out of its export run, so it shows Queued (no statusKey)
+  /// and the next run takes it: the step after `Turn Off AI Denoise` of a queue item (DN8).
+  /// False when the queue has no entry of @p element_id.
+  bool                     ReturnToQueued(sl_element_id_t element_id);
 
  signals:
   void QueueChanged();

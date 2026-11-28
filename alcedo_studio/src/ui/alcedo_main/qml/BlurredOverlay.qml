@@ -31,6 +31,8 @@ Item {
         y: root.blurActive && root.blurSource ? root.blurSource.y : 0
         width: root.blurActive && root.blurSource ? root.blurSource.width : 0
         height: root.blurActive && root.blurSource ? root.blurSource.height : 0
+        // A scaled source (the editor viewport stage) draws over its scaled area.
+        scale: root.blurActive && root.blurSource ? root.blurSource.scale : 1
         source: snapshot
         blurEnabled: root.blurActive
         blur: 0.6

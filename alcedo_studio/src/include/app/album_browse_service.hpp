@@ -23,6 +23,7 @@
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/store/semantic/semantic_records.hpp"
 #include "storage/store/sleeve/element_store.hpp"
+#include "type/album_scope.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -68,8 +69,10 @@ struct AlbumFolderEditResult {
 
 struct AlbumDeleteResult {
   std::vector<AlbumFileView>         deleted_files_{};
-  std::vector<std::filesystem::path> failed_paths_{};
   std::vector<sl_element_id_t>       failed_element_ids_{};
+  /// A delete from the library: the mounted photos of the request. They stay in the library,
+  /// and the other photos of the request are deleted (#1135).
+  std::vector<sl_element_id_t>       kept_mounted_element_ids_{};
   /// Set when SleeveServiceImpl refused the request (Mounted Folder Plan, MF5). The refused
   /// request changed nothing; each of its ids is in failed_element_ids_.
   std::optional<SleeveError>         refusal_{};
@@ -81,10 +84,16 @@ class AlbumBrowseService {
                               std::shared_ptr<SleeveFilterService> filter_service = nullptr)
       : sleeve_service_(std::move(sleeve_service)), filter_service_(std::move(filter_service)) {}
 
+  /// The child folders of the folder at @p folder_path. Reads folders only; no file element of
+  /// the project loads (Sleeve Node Cache Plan, SN1). A failed read writes one warning with the
+  /// path and the error text and throws the error, so a caller can read the folder again.
   [[nodiscard]] auto ListFolders(const std::filesystem::path& folder_path) const
       -> std::vector<AlbumFolderView>;
-  [[nodiscard]] auto ListFilesInFolder(const std::filesystem::path& folder_path) const
-      -> std::vector<AlbumFileView>;
+  /// Every folder of the library at each of its paths, parents before children, from one
+  /// SleeveServiceImpl::ListFolderTree call (Sleeve Node Cache Plan, SN3). A folder with two
+  /// parents is in the result under each. Empty when the sleeve service is absent. A failed read
+  /// writes one warning with the error text and throws the error.
+  [[nodiscard]] auto ListFolderTree() const -> std::vector<AlbumFolderView>;
   [[nodiscard]] auto ListFilesInFolderById(sl_element_id_t folder_id) const
       -> std::vector<AlbumFileView>;
   /// One page of the files of @p folder_id that match @p filter (all files when empty), in
@@ -100,20 +109,22 @@ class AlbumBrowseService {
   /// Unlike the listing reads, it does not hide a failure: it throws std::runtime_error when the
   /// sleeve service is absent or the statement fails.
   [[nodiscard]] auto ReadProjectOverview() const -> ProjectOverviewCounts;
-  /// Photo count of the whole project and of the subtree of every folder from one statement (see
-  /// ElementStore::ReadFolderImageCounts). Throws like ReadAlbumQuery.
+  /// Photo count of the whole project (All Photos), of the library root row, and of the subtree
+  /// of every folder from one statement (see ElementStore::ReadFolderImageCounts). Throws like
+  /// ReadAlbumQuery.
   /// Thread: may run on a worker thread.
   [[nodiscard]] auto ReadFolderImageCounts() const -> FolderImageCounts;
 
   /**
    * @brief The one library read: Inspector filters and search, sort, groups, statistics, and
-   *        one bounded page of the ordered photo occurrences of @p folder_id.
+   *        one bounded page of the ordered photo occurrences of @p scope: All Photos, a
+   *        folder, or the photos directly in the library root (see AlbumScope).
    *
    * @param filter Merged search and Inspector filter tree; compiled once here.
    * @param active_semantic_model_key Key the caller read once from its owner; the label
    *        filter, groups, sort, and statistics all use it.
    * @param semantic_relevance The embeddings of a natural-language search
-   *        (SleeveFilterService::EmbedSemanticQuery). When set, only the files of @p folder_id
+   *        (SleeveFilterService::EmbedSemanticQuery). When set, only the files of @p scope
    *        that the relevance rule keeps match, and without a selected sort they order by
    *        relevance (see ElementStore::ReadAlbumQuery).
    * @throws std::invalid_argument for invalid options or page bounds.
@@ -123,21 +134,21 @@ class AlbumBrowseService {
    * Thread: may run on a worker thread; reads storage under its connection lock.
    */
   [[nodiscard]] auto ReadAlbumQuery(
-      sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+      const AlbumScope& scope, const std::optional<FilterNode>& filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
       const AlbumQueryRead&                        read,
       const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> AlbumQueryResult;
   /// Position of @p file_id in the ordered occurrences of the same query (see ReadAlbumQuery).
   [[nodiscard]] auto ReadAlbumFilePosition(
-      sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+      const AlbumScope& scope, const std::optional<FilterNode>& filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
       sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group,
       const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> std::optional<AlbumFilePosition>;
   /// Ordered unique file ids of the occurrences in [@p begin, @p end) of the same query.
   [[nodiscard]] auto ReadAlbumFileIds(
-      sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+      const AlbumScope& scope, const std::optional<FilterNode>& filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key, int64_t begin,
       int64_t                                      end,
       const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
@@ -172,8 +183,6 @@ class AlbumBrowseService {
   [[nodiscard]] auto MoveFolder(const std::filesystem::path& folder_path,
                                 const std::filesystem::path& new_parent_path)
       -> AlbumFolderEditResult;
-  [[nodiscard]] auto DeleteFiles(const std::vector<std::filesystem::path>& file_paths)
-      -> AlbumDeleteResult;
   [[nodiscard]] auto DeleteFilesByElementIds(const std::vector<sl_element_id_t>& element_ids)
       -> AlbumDeleteResult;
   [[nodiscard]] auto DeleteFilesInFolderByElementIds(

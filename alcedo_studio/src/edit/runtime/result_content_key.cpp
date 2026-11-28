@@ -53,6 +53,10 @@ auto MixPreparedSource(ContentHash& hash, const PreparedSourceKey& key) -> void 
   MixRect(hash, key.sensor_active_area);
   hash.MixI32(key.orientation_flip);
   hash.MixU32(key.preparation_version);
+  // Only an AI Denoise input has a model hash, so the keys of every other input stay as before.
+  if (key.denoise_hash != 0) {
+    hash.MixU64(key.denoise_hash);
+  }
 }
 
 auto MixLinearization(ContentHash& hash, const RawLinearizationParams& linearization) -> void {
@@ -89,6 +93,11 @@ auto MixSensorDevelopParams(ContentHash& hash, const DevelopPayload& params) -> 
   hash.MixText(params.lens_profile_db_path);
   hash.MixText(params.lens_maker);
   hash.MixText(params.lens_model);
+  // The switch only: the render uses the installed model, whose version is in the prepared source
+  // (D10). Nothing is mixed while it is off, so the keys of those documents stay as before.
+  if (params.ai_denoise.has_value()) {
+    hash.MixText("ai_denoise");
+  }
 }
 
 auto MixCameraColorParams(ContentHash& hash, const DevelopPayload& params) -> void {

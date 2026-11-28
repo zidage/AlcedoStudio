@@ -3,9 +3,11 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
 
-// Full-width application toolbar: native traffic-light reserve, collections
-// toggle, workspace switch, File, Settings, update, background-task island,
-// inspector, and caption actions. The wordmark remains on the collections card below this bar.
+// Application toolbar: native traffic-light reserve, collections toggle,
+// workspace switch, File, Settings, update, background-task island, and
+// inspector. The wordmark remains on the collections card below this bar.
+// Drawn caption buttons sit in the window corner beside the bar
+// (WindowCaptionLayer.qml); Main.qml leaves room for them.
 Rectangle {
     id: root
     objectName: "topToolbar"
@@ -24,6 +26,11 @@ Rectangle {
     border.color: theme ? theme.colGlassStroke : Qt.rgba(1, 1, 1, 0.08)
     z: 1
 
+    // The empty stretch between the left and right action groups, in toolbar
+    // coordinates. WindowCaptionLayer keeps it draggable above modal dialogs.
+    readonly property real dragStripX: toolbarRow.x + dragStretch.x
+    readonly property real dragStripWidth: dragStretch.width
+
     // Drag the window from any empty area of the toolbar; double-click toggles maximize.
     TapHandler {
         acceptedButtons: Qt.LeftButton
@@ -37,11 +44,12 @@ Rectangle {
     }
 
     RowLayout {
+        id: toolbarRow
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         anchors.leftMargin: appTheme.spaceXl
-        anchors.rightMargin: 0
+        anchors.rightMargin: appTheme.spaceXs
         spacing: 10
 
         Item {
@@ -164,7 +172,10 @@ Rectangle {
             }
         }
 
-        Item { Layout.fillWidth: true }
+        Item {
+            id: dragStretch
+            Layout.fillWidth: true
+        }
 
         // Background-task island: a status lamp that unfolds while a task runs
         // or after one fails.
@@ -176,20 +187,6 @@ Rectangle {
         // Inspector toggle: compact IconActionButton, same hit as the
         // collections sidebar control. Visible only in the Library workspace.
         InspectorToggleButton {
-            theme: root.theme
-            host: root.host
-        }
-
-        // Drawn caption buttons stay off macOS so they do not sit next to the
-        // system traffic lights.
-        Item {
-            Layout.preferredWidth: 8
-            visible: captionButtons.visible
-        }
-
-        WindowCaptionButtons {
-            id: captionButtons
-            visible: !root.nativeTrafficLightsEnabled
             theme: root.theme
             host: root.host
         }

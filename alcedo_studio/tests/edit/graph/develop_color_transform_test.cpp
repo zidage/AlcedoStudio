@@ -246,6 +246,55 @@ TEST(GpuDagModelGraph, DevelopColorTransformRejectsMissingOrSingularCameraMatric
   EXPECT_EQ(singular_result.error, ColorTransformError::SingularCameraMatrix);
 }
 
+// #1055: the camera matrix of the AI Denoise gain match.
+TEST(GpuDagModelGraph, XyzToCameraD65IsTheD65ColorMatrixForEachWhiteBalance) {
+  auto       payload = DualIlluminantPayload();
+  const auto d65     = ResolveDevelopXyzToCameraD65(payload);
+  ASSERT_TRUE(d65.ok);
+  for (int i = 0; i < 9; ++i) {
+    EXPECT_DOUBLE_EQ(d65.xyz_to_camera[static_cast<std::size_t>(i)],
+                     payload.camera_profile.color_matrix_2[static_cast<std::size_t>(i)]);
+  }
+  // The white balance does not change it.
+  payload.custom_cct = 3000.0f;
+  EXPECT_EQ(ResolveDevelopXyzToCameraD65(payload).xyz_to_camera, d65.xyz_to_camera);
+  payload.wb_mode = "as_shot";
+  EXPECT_EQ(ResolveDevelopXyzToCameraD65(payload).xyz_to_camera, d65.xyz_to_camera);
+
+  // One illuminant: its matrix.
+  payload.camera_profile.calibration_illuminants_valid = false;
+  const auto single                                    = ResolveDevelopXyzToCameraD65(payload);
+  ASSERT_TRUE(single.ok);
+  EXPECT_EQ(single.xyz_to_camera, payload.camera_profile.color_matrix_1);
+}
+
+TEST(GpuDagModelGraph, XyzToCameraD65IsTheMatrixOfTheRenderAtD65) {
+  // With the AnalogBalance of a DNG profile (fixture "dng"), a non-DNG RAW, and an RGB file.
+  for (const auto& fixture : gpu_dag_test::MakeImportedCameraProfileFixtures()) {
+    SCOPED_TRACE(fixture.name_);
+    DevelopPayload payload;
+    BindDevelopCameraProfile(payload, fixture.context_);
+    const auto d65 = ResolveDevelopXyzToCameraD65(payload);
+    ASSERT_TRUE(d65.ok);
+    const auto render = CameraToXyzAt(payload, static_cast<float>(kHighCct));
+    ASSERT_TRUE(render.ok);
+    ExpectMatrixNear(render.transform.camera_to_xyz, Invert3x3(d65.xyz_to_camera), 1.0e-5);
+  }
+}
+
+TEST(GpuDagModelGraph, XyzToCameraD65ReportsTheErrorOfTheRender) {
+  DevelopPayload missing;
+  EXPECT_FALSE(ResolveDevelopXyzToCameraD65(missing).ok);
+  EXPECT_EQ(ResolveDevelopXyzToCameraD65(missing).error,
+            ColorTransformError::MissingCameraMatrices);
+
+  auto singular                          = DualIlluminantPayload();
+  singular.camera_profile.color_matrix_2 = {};
+  EXPECT_FALSE(ResolveDevelopXyzToCameraD65(singular).ok);
+  EXPECT_EQ(ResolveDevelopXyzToCameraD65(singular).error,
+            ResolveDevelopColorTransform(singular).error);
+}
+
 TEST(GpuDagModelGraph, RawWhiteBalanceCctNeedsARawInputWithAResolvedColorTransform) {
   // Scene light As Shot of the film print reads this temperature (issue 672).
   auto custom = DualIlluminantPayload();
@@ -423,6 +472,32 @@ auto Apply(const std::array<float, 9>& m, const std::array<double, 3>& rgb)
   return {m[0] * rgb[0] + m[1] * rgb[1] + m[2] * rgb[2],
           m[3] * rgb[0] + m[4] * rgb[1] + m[5] * rgb[2],
           m[6] * rgb[0] + m[7] * rgb[1] + m[8] * rgb[2]};
+}
+
+// The film print As Shot light reads the white through RawWhiteBalanceWhite; it uses the clamp of
+// the color transform, so a stored custom value outside the range never reaches it (#1096).
+TEST(GpuDagModelGraph, RawWhiteBalanceWhiteClampsTheCustomWhiteAsTheColorTransformDoes) {
+  auto payload        = DualIlluminantPayload();
+  payload.custom_cct  = -5.0f;
+  payload.custom_tint = 1.0e6f;
+  const auto low      = RawWhiteBalanceWhite(payload);
+  ASSERT_TRUE(low.has_value());
+  EXPECT_EQ(low->cct, kWhiteBalanceCctMin);
+  EXPECT_EQ(low->tint, kWhiteBalanceTintMax);
+
+  payload.custom_cct  = 1.0e9f;
+  payload.custom_tint = -1.0e6f;
+  const auto high     = RawWhiteBalanceWhite(payload);
+  ASSERT_TRUE(high.has_value());
+  EXPECT_EQ(high->cct, kWhiteBalanceCctMax);
+  EXPECT_EQ(high->tint, kWhiteBalanceTintMin);
+
+  payload.custom_cct  = 5000.0f;
+  payload.custom_tint = 10.0f;
+  const auto inside   = RawWhiteBalanceWhite(payload);
+  ASSERT_TRUE(inside.has_value());
+  EXPECT_DOUBLE_EQ(inside->cct, 5000.0);
+  EXPECT_DOUBLE_EQ(inside->tint, 10.0);
 }
 
 }  // namespace

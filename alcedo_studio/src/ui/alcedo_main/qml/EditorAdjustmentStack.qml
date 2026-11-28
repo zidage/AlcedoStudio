@@ -29,6 +29,8 @@ Item {
     property var comparison: null
     // The application host (Main.qml): panels open dialogs through it.
     property var host: null
+    // EditorAiDenoiseControl of the application (AI Denoise plan, DN7); null in panel tests.
+    property var aiDenoise: null
     property bool controlsEnabled: true
 
     // ── Opaque semantic colors (no alpha derivations) ─────────────────────
@@ -370,6 +372,8 @@ Item {
                         objectName: "editorAdjustmentPanel_raw"
                         theme: root.theme
                         editorSession: root.editorSession
+                        aiDenoise: root.aiDenoise
+                        host: root.host
                         controlsEnabled: root.controlsEnabled
                     }
 

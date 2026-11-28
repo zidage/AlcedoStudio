@@ -209,8 +209,26 @@ TEST(AiModelPackageManifestTest, PythonPreparedFeedVerifiesInCpp) {
       VerifyAiModelPackageManifest(json, signature, public_key, kFeedUrl, 20261027120000ULL);
   ASSERT_TRUE(result) << result.error.toStdString();
   EXPECT_EQ(result.manifest->sequence, 20261027120000ULL);
-  ASSERT_EQ(result.manifest->packages.size(), 1);
-  const AiModelPackageDescriptor& entry = result.manifest->packages.front();
+  // The feed lists every package, sorted by ID (DN12): AI Denoise, then AI Mask.
+  ASSERT_EQ(result.manifest->packages.size(), 2);
+  const AiModelPackageDescriptor& denoise = result.manifest->packages.front();
+  EXPECT_EQ(denoise.id, QStringLiteral("alcedo-ai-denoise"));
+  EXPECT_EQ(denoise.name, QStringLiteral("AI Denoise"));
+  EXPECT_EQ(denoise.model_set_version, 1u);
+  ASSERT_EQ(denoise.licenses.size(), 2);
+  EXPECT_EQ(denoise.licenses[0].name, QStringLiteral("GPL-3.0"));
+  EXPECT_EQ(denoise.licenses[1].name, QStringLiteral("CC BY 4.0"));
+  EXPECT_EQ(denoise.licenses[1].file, QStringLiteral("licenses/CC-BY-4.0.txt"));
+  for (const QString platform : {QStringLiteral("windows-x86_64"), QStringLiteral("macos-arm64")}) {
+    const AiModelPackageArtifact* artifact = denoise.Artifact(platform);
+    ASSERT_NE(artifact, nullptr) << platform.toStdString();
+    EXPECT_EQ(artifact->size, ReadFixture(qPrintable(artifact->url.fileName())).size());
+  }
+  EXPECT_EQ(SelectAiModelPackage(*result.manifest, denoise.id, 1, 1,
+                                 QStringLiteral("windows-x86_64")),
+            &denoise);
+
+  const AiModelPackageDescriptor& entry = result.manifest->packages.back();
   EXPECT_EQ(entry.id, QStringLiteral("alcedo-ai-mask"));
   EXPECT_EQ(entry.name, QStringLiteral("AI Mask"));
   EXPECT_EQ(entry.model_set_version, 1u);

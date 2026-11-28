@@ -27,6 +27,7 @@
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
+#include "edit/runtime/develop_ai_denoise.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/dng_profile_gpu_data.hpp"
 #include "edit/runtime/lens/lens_calibration_resolver.hpp"
@@ -87,9 +88,9 @@ auto AcquireRgba(OpenClRenderWorkspace& workspace, const GraphValueId& id, std::
 void ExecuteOpenClLensCalibration(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                   const PreparedRawInput& input,
                                   const DevelopPayload&   develop_params) {
-  const auto runtime = LensCalibrationResolver::Resolve(develop_params, input.color_context,
-                                                        plan.source.develop_output_extent,
-                                                        input.dng_warp_rectilinear.has_value());
+  const auto runtime = LensCalibrationResolver::Resolve(
+      develop_params, input.color_context, plan.source.develop_output_extent,
+      dng::CorrectionsOf(input.dng_warp_rectilinear));
   if (!runtime.has_value()) {
     return;
   }
@@ -561,6 +562,7 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
     CopyRgbaToPacked(stream, linear_view, decoded.Texture().Native(), input, width, height, false);
     ReleaseTransientSlabsAfterGpuLastUse(device, {uploaded, params_ptr, linear_ptr});
   } else if (input.input_kind == RawInputKind::DebayeredRgb ||
+             input.input_kind == RawInputKind::DenoisedRgb ||
              plan.source.kind == DevelopInputKind::DirectRgb) {
     const auto width  = input.host_extent.width;
     const auto height = input.host_extent.height;
@@ -580,7 +582,7 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
     {
       diag::PreviewSubStageInterval linearize(diag::PreviewSubStageKind::Linearize);
       OpenCL::EncodeLinearizeRgb(stream, source, width, height,
-                                 input.rgb_linearization.value_or(RawRgbLinearizationParams{}));
+                                 DevelopRgbLinearization(input, hlr));
     }
     auto& decoded = AcquireRgba(workspace, demosaic_id, out_w, out_h);
     if (hlr && input.rgb_linearization.has_value()) {

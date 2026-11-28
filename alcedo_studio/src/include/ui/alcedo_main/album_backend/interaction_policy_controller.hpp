@@ -10,6 +10,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <optional>
 #include <vector>
 
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
@@ -20,7 +21,7 @@ namespace alcedo::ui {
 /// control run right now, and if not, why?". It consumes the interaction locks
 /// published by active background tasks (via `BackgroundTaskController::ActiveLocks`)
 /// plus a small set of QML-pushed inputs (the currently focused image element id
-/// and the pending delete / analysis target lists) and exposes both Q_INVOKABLE
+/// and the natural-language search toggle) and exposes both Q_INVOKABLE
 /// one-shot queries and cached Q_PROPERTY booleans for `enabled:` bindings.
 ///
 /// Like `BackgroundTaskController`, this is a standalone QObject with no host
@@ -40,8 +41,6 @@ class InteractionPolicyController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(uint focusedElementId READ FocusedElementId WRITE SetFocusedElementId
                  NOTIFY PolicyChanged)
-  Q_PROPERTY(QVariantList pendingDeleteTargets READ PendingDeleteTargets WRITE
-                 SetPendingDeleteTargets NOTIFY PolicyChanged)
   // Search-settings natural-language toggle (UI mutual-exclusion input). When
   // true the search field-filter checkboxes are disabled (see
   // CanChangeSearchFieldFilters). This is a UI-only gate — it does NOT go
@@ -57,9 +56,10 @@ class InteractionPolicyController final : public QObject {
   Q_PROPERTY(bool canEditFocusedRating READ CanEditFocusedRating NOTIFY PolicyChanged)
   Q_PROPERTY(bool canEditFocusedRatingReason READ CanEditFocusedRatingReason NOTIFY PolicyChanged)
   Q_PROPERTY(QString focusedEditReason READ FocusedEditReason NOTIFY PolicyChanged)
-  // Pending delete gate (depends on pendingDeleteTargets + locks).
-  Q_PROPERTY(bool canDeletePendingTargets READ CanDeletePendingTargets NOTIFY PolicyChanged)
-  Q_PROPERTY(QString pendingDeleteReason READ PendingDeleteReason NOTIFY PolicyChanged)
+  // Delete gate of the focused image, the clicked image of the image menu (depends on
+  // focusedElementId + locks). A delete of several images skips each locked image (#1135).
+  Q_PROPERTY(bool canDeleteFocused READ CanDeleteFocused NOTIFY PolicyChanged)
+  Q_PROPERTY(QString focusedDeleteReason READ FocusedDeleteReason NOTIFY PolicyChanged)
   // Global task gates.
   Q_PROPERTY(bool canChangeSemanticModel READ CanChangeSemanticModel NOTIFY PolicyChanged)
   Q_PROPERTY(bool canRunSemanticGeneration READ CanRunSemanticGeneration NOTIFY PolicyChanged)
@@ -90,8 +90,6 @@ class InteractionPolicyController final : public QObject {
   // ── Settable inputs ────────────────────────────────────────────────────
   uint             FocusedElementId() const { return focused_element_id_; }
   void             SetFocusedElementId(uint elementId);
-  QVariantList     PendingDeleteTargets() const { return pending_delete_targets_; }
-  void             SetPendingDeleteTargets(const QVariantList& targets);
   bool             NaturalLanguageSearchEnabled() const { return natural_language_search_enabled_; }
   void             SetNaturalLanguageSearchEnabled(bool enabled);
 
@@ -100,8 +98,8 @@ class InteractionPolicyController final : public QObject {
   bool    CanEditFocusedRating() const;
   bool    CanEditFocusedRatingReason() const;
   QString FocusedEditReason() const;
-  bool    CanDeletePendingTargets() const;
-  QString PendingDeleteReason() const;
+  bool    CanDeleteFocused() const;
+  QString FocusedDeleteReason() const;
   bool    CanChangeSemanticModel() const;
   bool    CanRunSemanticGeneration() const;
   bool    CanChangeModelDownloadSettings() const;
@@ -137,6 +135,10 @@ class InteractionPolicyController final : public QObject {
   Q_INVOKABLE QVariantMap EvaluatePasteAdjustments() const;
   Q_INVOKABLE QVariantMap EvaluateChangeStateAsUser() const;
 
+  /// The reason of the lock that keeps @p elementId from a delete now (it can be empty), or no
+  /// value when the image can be deleted. A delete of several images skips each locked image.
+  [[nodiscard]] auto DeleteImageRefusal(quint64 elementId) const -> std::optional<QString>;
+
  signals:
   void PolicyChanged();
 
@@ -165,7 +167,6 @@ class InteractionPolicyController final : public QObject {
   BackgroundTaskController*      registry_ = nullptr;
   std::vector<ActiveLock>        locks_;
   uint                           focused_element_id_      = 0;
-  QVariantList                   pending_delete_targets_  = {};
   bool                           natural_language_search_enabled_ = false;
 };
 

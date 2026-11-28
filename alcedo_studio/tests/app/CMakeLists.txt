@@ -177,6 +177,20 @@ gtest_discover_tests(EditorPipelineCommandServiceTest
     TEST_PREFIX "EditorPipelineCommandServiceTest.")
 alcedo_register_test_target(EditorPipelineCommandServiceTest app)
 
+# AI Denoise integration plan, DN7: the switch as the ai_denoise key of the raw_decode field
+# (write, history value, owned JSON, panel projection, paste).
+add_executable(EditorAiDenoiseSwitchTest
+    ${ALCEDO_TEST_ROOT}/app/editor_ai_denoise_switch_test.cpp)
+target_include_directories(EditorAiDenoiseSwitchTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorAiDenoiseSwitchTest
+    PRIVATE GTest::gtest_main AdjustmentTransferService PipelineHistoryApplier
+            EditorPipelineCommandService EditorPanelProjection EditGraph EditMaskCore EditRuntime
+            JSON)
+gtest_discover_tests(EditorAiDenoiseSwitchTest
+    TEST_PREFIX "EditorAiDenoiseSwitchTest.")
+alcedo_register_test_target(EditorAiDenoiseSwitchTest app)
+
 add_executable(EditorPanelProjectionTest
     ${ALCEDO_TEST_ROOT}/app/editor_panel_projection_test.cpp)
 target_include_directories(EditorPanelProjectionTest
@@ -271,6 +285,48 @@ gtest_discover_tests(DocumentTransferTest
     PROPERTIES LABELS "ci_core_flow;edit;history")
 alcedo_register_test_target(DocumentTransferTest app)
 
+# Preset files: the safety rules of edit_presets_plan.md section 3, the writer, the preset item
+# selection, and a mutation run of the reader and the Paste planner (PS1).
+add_executable(PresetFileTest
+    ${ALCEDO_TEST_ROOT}/app/preset_file_test.cpp)
+target_include_directories(PresetFileTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(PresetFileTest
+    PRIVATE GTest::gtest_main PresetFile AdjustmentTransferService
+            PipelineHistoryApplier EditorPipelineCommandService EditGraph EditMaskCore EditRuntime)
+gtest_discover_tests(PresetFileTest
+    TEST_PREFIX "PresetFileTest."
+    PROPERTIES LABELS "ci_core_flow;edit")
+alcedo_register_test_target(PresetFileTest app)
+
+# Preset preview document and sensor key (edit_presets_plan.md, PS3): the preview equals a real
+# Paste except for the sensor settings, which come from the current Version.
+add_executable(PresetPreviewImageTest
+    ${ALCEDO_TEST_ROOT}/app/preset_preview_image_test.cpp)
+target_include_directories(PresetPreviewImageTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(PresetPreviewImageTest
+    PRIVATE GTest::gtest_main BrowserPreviewImage AdjustmentTransferService PipelineHistoryApplier
+            EditorPipelineCommandService PipelineHistory EditGraph EditMaskCore EditRuntime)
+gtest_discover_tests(PresetPreviewImageTest
+    TEST_PREFIX "PresetPreviewImageTest."
+    PROPERTIES LABELS "ci_core_flow;edit")
+alcedo_register_test_target(PresetPreviewImageTest app)
+
+# Preset folder owner: scan, package cache, and file operations (edit_presets_plan.md, PS1).
+add_executable(PresetLibraryServiceTest
+    ${ALCEDO_TEST_ROOT}/app/preset_library_service_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
+target_include_directories(PresetLibraryServiceTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(PresetLibraryServiceTest
+    PRIVATE PresetLibraryService PipelineHistoryApplier EditorPipelineCommandService EditGraph
+            GTest::gtest Qt6::Test)
+gtest_discover_tests(PresetLibraryServiceTest
+    TEST_PREFIX "PresetLibraryServiceTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(PresetLibraryServiceTest app)
+
 # NM10.3 read-only Version catalog: inactive-Version replay with no live-state
 # mutation, backbone ordering, instance identity, aggregate Masks row, DRT/Post
 # ownership, and fail-closed replay errors.
@@ -347,12 +403,17 @@ target_link_libraries(ImportThroughputBenchmark
 alcedo_copy_duckdb_fts_extension(ImportThroughputBenchmark)
 alcedo_register_test_target(ImportThroughputBenchmark app)
 
-# Benchmark only: reads ALCEDO_PROJECT_OPEN_BENCH_FILE and is not registered with ctest.
+# Benchmark only: reads ALCEDO_PROJECT_OPEN_BENCH_FILE, ALCEDO_SLEEVE_BENCH_MOUNT_DIR, and
+# ALCEDO_SLEEVE_BENCH_PROJECT_DIR, and is not registered with ctest.
 add_executable(ProjectOpenBenchmark ${ALCEDO_TEST_ROOT}/app/project_open_benchmark.cpp)
-target_include_directories(ProjectOpenBenchmark PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(ProjectOpenBenchmark PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ProjectOpenBenchmark
   ImportService ProjectService PipelineMgmtService ThumbnailService ExportService
   SleeveFilterService GTest::gtest_main)
+if(WIN32)
+  # GetProcessMemoryInfo for the memory of the node cache measurement.
+  target_link_libraries(ProjectOpenBenchmark psapi)
+endif()
 alcedo_copy_duckdb_fts_extension(ProjectOpenBenchmark)
 alcedo_register_test_target(ProjectOpenBenchmark app)
 
@@ -604,6 +665,15 @@ gtest_discover_tests(PipelineMapperTest TEST_PREFIX "PipelineMapperTest."
   PROPERTIES LABELS "ci_core_flow")
 
 alcedo_register_test_target(PipelineMapperTest app ci_core)
+
+# AI Denoise integration plan, DN8: the switch written into a stored history.
+add_executable(AiDenoiseHistoryWriteTest ${ALCEDO_TEST_ROOT}/app/ai_denoise_history_write_test.cpp)
+target_include_directories(AiDenoiseHistoryWriteTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(AiDenoiseHistoryWriteTest
+  AiDenoiseHistoryWrite ProjectService PipelineMgmtService PipelineHistoryApplier
+  GTest::gtest_main)
+gtest_discover_tests(AiDenoiseHistoryWriteTest TEST_PREFIX "AiDenoiseHistoryWriteTest.")
+alcedo_register_test_target(AiDenoiseHistoryWriteTest app)
 
 # Phase 6C-8: Mini-Git-based Paste and Merge tests using the project fixture.
 add_executable(AdjustmentTransferServiceMiniGitTest
@@ -1035,7 +1105,8 @@ alcedo_register_test_target(ExecutorIsolationTest app)
 add_executable(ThumbnailCommittedRenderTest ${ALCEDO_TEST_ROOT}/app/thumbnail_committed_render_test.cpp)
 target_include_directories(ThumbnailCommittedRenderTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ThumbnailCommittedRenderTest ThumbnailService SemanticInputImageService
-  ProjectService ImportService EditorWorkingDocument GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+  ProjectService ImportService EditorWorkingDocument BrowserPreviewImage AdjustmentTransferService
+  EditorPipelineCommandService GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(ThumbnailCommittedRenderTest TEST_PREFIX "ThumbnailCommittedRenderTest.")
 alcedo_register_test_target(ThumbnailCommittedRenderTest app)
 

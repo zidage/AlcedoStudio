@@ -39,7 +39,8 @@ auto PlaneBytes(std::size_t pixels, std::size_t bytes_per_pixel) -> std::size_t 
 }
 
 auto EstimateDevelopTransientBytes(const DevelopCompileSource& source) -> std::size_t {
-  if (source.kind == DevelopInputKind::DirectRgb || source.kind == DevelopInputKind::Raster) {
+  if (source.kind == DevelopInputKind::DirectRgb || source.kind == DevelopInputKind::Raster ||
+      source.kind == DevelopInputKind::DenoisedRgb) {
     // Raster: uploaded RGBA (at most 16 bytes) + linearized RGB, then the packed copy.
     const auto pixels =
         static_cast<std::size_t>(source.host_extent.width) * source.host_extent.height;
@@ -432,6 +433,12 @@ void CompileDevelopPasses(ExecutionPlan& plan, const NodeId& develop_id,
   if (source.kind == DevelopInputKind::DirectRgb || source.kind == DevelopInputKind::Raster) {
     // Raster input: UploadRgb runs LinearizeRaster, so lens and geometry see linear light.
     PushPass(plan, GpuPassKind::UploadRgb, develop_id, {}, {sensor_out});
+  } else if (source.kind == DevelopInputKind::DenoisedRgb) {
+    // AI Denoise output: the model replaced Linearize and Demosaic. UploadRgb applies the white
+    // balance and the clamp of the CFA path, then the highlight recovery runs as for a CFA.
+    PushPass(plan, GpuPassKind::UploadRgb, develop_id, {}, {sensor_out});
+    PushPass(plan, GpuPassKind::HighlightRecover, develop_id, {sensor_in}, {sensor_out});
+    PushPass(plan, GpuPassKind::InverseCamMulPack, develop_id, {sensor_in}, {sensor_out});
   } else {
     PushPass(plan, GpuPassKind::UploadRaw, develop_id, {}, {sensor_out});
     PushPass(plan, GpuPassKind::Linearize, develop_id, {sensor_in}, {sensor_out});

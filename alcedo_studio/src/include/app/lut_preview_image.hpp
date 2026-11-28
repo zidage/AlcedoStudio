@@ -4,17 +4,13 @@
 
 #pragma once
 
-#include <cstdint>
 #include <memory>
-#include <optional>
 
 #include "app/editor_parameter_write.hpp"
 #include "app/pipeline_root_state.hpp"
-#include "edit/geometry/render_request.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/commit_graph.hpp"
-#include "io/image/export_color_profile_config.hpp"
 #include "type/type.hpp"
 
 /**
@@ -28,9 +24,6 @@
  * through the editor image render port, so the DRT and Post steps of the root are in it.
  */
 namespace alcedo {
-
-/// Long edge of a LUT preview, in pixels. A tile is at least 128 logical pixels wide.
-inline constexpr std::uint32_t kLutPreviewLongEdge = 256;
 
 /**
  * @brief Build the frozen LUT preview document of one image from its held history.
@@ -52,19 +45,5 @@ inline constexpr std::uint32_t kLutPreviewLongEdge = 256;
                 const CommitGraph& graph, const LoadedRootState& root,
                 const std::shared_ptr<const PipelineGraphSnapshot>& current, sl_element_id_t element_id,
                 const EditorLutWrite& write) -> std::shared_ptr<const PipelineGraphSnapshot>;
-
-/// Render request of a LUT preview: the whole root frame (the root has no crop), Preview
-/// resampling, long edge kLutPreviewLongEdge.
-[[nodiscard]] auto MakeLutPreviewRenderRequest() -> RenderRequest;
-
-/**
- * @brief Output encoding of a LUT preview of @p document.
- *
- * Empty for an SDR DRT: the preview uses the encoding of the document. For an ST 2084 or HLG
- * DRT, Rec.709 gamma 2.2 at 100 nits (ExportColorProfileConfig defaults), because a tile is an
- * 8-bit SDR image.
- */
-[[nodiscard]] auto LutPreviewOutputColor(const PipelineDocument& document)
-    -> std::optional<ExportColorProfileConfig>;
 
 }  // namespace alcedo

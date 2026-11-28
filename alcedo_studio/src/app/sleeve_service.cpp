@@ -4,13 +4,14 @@
 
 #include "app/sleeve_service.hpp"
 
-#include <algorithm>
 #include <stdexcept>
 #include <unordered_set>
+#include <vector>
 
 #include "edit/graph/pipeline_document.hpp"
 #include "storage/store/mount/mount_store.hpp"
 #include "type/mount_records.hpp"
+#include "type/source_file_record.hpp"
 #include "utils/logging/log.hpp"
 #include "utils/string/convert.hpp"
 
@@ -49,12 +50,24 @@ void RequireEditableFolder(FileSystem& fs, const sl_element_id_t folder_id) {
   }
 }
 
-/// Throws SleeveOperationError when a live file of @p file_ids is mounted (P7, MF5 data rules).
-/// A mounted file with no source record counts as present: the scan that gave it the mount id
-/// found its file, and a failed later batch of that scan can leave the record unwritten. Ids that
-/// name no live file pass, as in FileSystem::DeleteFilesEverywhere.
-void RequireRemovableFromLibrary(FileSystem& fs, MountStore& mount_store,
-                                 std::span<const sl_element_id_t> file_ids) {
+/// The file elements of @p file_ids; an id that names no file is left out.
+auto FileElements(FileSystem& fs, std::span<const sl_element_id_t> file_ids)
+    -> std::vector<std::shared_ptr<SleeveFile>> {
+  std::vector<std::shared_ptr<SleeveFile>> files;
+  files.reserve(file_ids.size());
+  for (const auto file_id : file_ids) {
+    auto element = fs.Get(file_id);
+    if (!element || element->type_ != ElementType::FILE) {
+      continue;
+    }
+    files.push_back(std::static_pointer_cast<SleeveFile>(element));
+  }
+  return files;
+}
+
+/// The ids of @p file_ids that name a live mounted file, in the order of @p file_ids.
+auto MountedFileIds(FileSystem& fs, std::span<const sl_element_id_t> file_ids)
+    -> std::vector<sl_element_id_t> {
   std::vector<sl_element_id_t> mounted_ids;
   for (const auto file_id : file_ids) {
     std::shared_ptr<SleeveElement> file;
@@ -63,11 +76,20 @@ void RequireRemovableFromLibrary(FileSystem& fs, MountStore& mount_store,
     } catch (const std::exception&) {
       continue;
     }
-    if (file && file->type_ == ElementType::FILE && file->sync_flag_ != SyncFlag::DELETED &&
-        file->mount_id_.has_value()) {
+    if (file && file->type_ == ElementType::FILE && file->IsLive() && file->mount_id_.has_value()) {
       mounted_ids.push_back(file_id);
     }
   }
+  return mounted_ids;
+}
+
+/// Throws SleeveOperationError when a live file of @p file_ids is mounted (P7, MF5 data rules).
+/// A mounted file with no source record counts as present: the scan that gave it the mount id
+/// found its file, and a failed later batch of that scan can leave the record unwritten. Ids that
+/// name no live file pass, as in FileSystem::DeleteFilesEverywhere.
+void RequireRemovableFromLibrary(FileSystem& fs, MountStore& mount_store,
+                                 std::span<const sl_element_id_t> file_ids) {
+  const auto mounted_ids = MountedFileIds(fs, file_ids);
   if (mounted_ids.empty()) {
     return;
   }
@@ -92,28 +114,6 @@ auto ElementTypeLabel(const ElementType type) -> const char* {
       return "folder";
   }
   return "unknown";
-}
-
-void RemoveIdsFrom(std::vector<std::shared_ptr<SleeveElement>>& elements,
-                   const std::unordered_set<sl_element_id_t>&   blocked_ids) {
-  elements.erase(std::remove_if(elements.begin(), elements.end(),
-                                [&blocked_ids](const std::shared_ptr<SleeveElement>& element) {
-                                  return !element || blocked_ids.contains(element->element_id_);
-                                }),
-                 elements.end());
-}
-
-auto CollectIds(const std::vector<std::shared_ptr<SleeveElement>>& elements)
-    -> std::unordered_set<sl_element_id_t> {
-  std::unordered_set<sl_element_id_t> ids;
-  ids.reserve(elements.size());
-  for (const auto& element : elements) {
-    if (!element) {
-      continue;
-    }
-    ids.insert(element->element_id_);
-  }
-  return ids;
 }
 
 void LogSyncElement(const char* bucket, const std::shared_ptr<SleeveElement>& element) {
@@ -154,46 +154,45 @@ SleeveServiceImpl::SleeveServiceImpl(std::shared_ptr<Storage> storage_service,
 }
 
 auto SleeveServiceImpl::Sync() -> SyncResult {
+  std::lock_guard<std::mutex> lock(fs_lock_);
+  SyncResult                  result = SyncLocked();
+  // The end of this fs_lock_ scope, as in Read and Write (SN7).
+  fs_->EvictToLimit();
+  return result;
+}
+
+auto SleeveServiceImpl::SyncLocked() -> SyncResult {
   SyncResult result{true, 0, ""};
   try {
-    auto&      element_ctrl      = storage_->GetElementStore();
-    auto       modified_elements = fs_->GetModifiedElements();
-    auto       unsynced_elements = fs_->GetUnsyncedElements();
-    auto       garbage_elements  = fs_->GetDeletedElements();
-
-    const auto deleted_ids       = CollectIds(garbage_elements);
-    RemoveIdsFrom(unsynced_elements, deleted_ids);
-
-    auto       skip_modified_ids = deleted_ids;
-    const auto unsynced_ids      = CollectIds(unsynced_elements);
-    skip_modified_ids.insert(unsynced_ids.begin(), unsynced_ids.end());
-    RemoveIdsFrom(modified_elements, skip_modified_ids);
-
-    // Sync unsynced elements first, batched into a single transaction instead of
-    // one autocommit transaction per element.
-    for (auto& element : unsynced_elements) {
-      LogSyncElement("Unsynced", element);
+    // The dirty list holds each changed element once with its current flag, so the three
+    // groups do not overlap. An element that a write created and deleted is in the deletes.
+    const auto                                  dirty = fs_->DirtyElements();
+    std::vector<std::shared_ptr<SleeveElement>> inserts;
+    std::vector<std::shared_ptr<SleeveElement>> updates;
+    std::vector<std::shared_ptr<SleeveElement>> deletes;
+    for (const auto& element : dirty) {
+      switch (element->SyncState()) {
+        case SyncFlag::UNSYNC:
+          LogSyncElement("Unsynced", element);
+          inserts.push_back(element);
+          break;
+        case SyncFlag::MODIFIED:
+          LogSyncElement("Modified", element);
+          updates.push_back(element);
+          break;
+        case SyncFlag::DELETED:
+          LogSyncElement("Deleted", element);
+          deletes.push_back(element);
+          break;
+        case SyncFlag::SYNCED:
+          break;
+      }
     }
-    element_ctrl.AddElements(unsynced_elements);
-    result.elements_synced_ += static_cast<uint32_t>(unsynced_elements.size());
-
-    // Then sync modified elements, also batched into a single transaction.
-    for (auto& element : modified_elements) {
-      LogSyncElement("Modified", element);
-    }
-    element_ctrl.UpdateElements(modified_elements);
-    result.elements_synced_ += static_cast<uint32_t>(modified_elements.size());
-
-    // Finally, delete the deleted elements.
-    // TODO: This should be done periodically instead of every sync.
-    for (auto& element : garbage_elements) {
-      LogSyncElement("Deleted", element);
-    }
-    element_ctrl.RemoveElements(garbage_elements);
-    result.elements_synced_ += static_cast<uint32_t>(garbage_elements.size());
-    // Perform garbage collection in the storage
-    // The same goes to here, this should be done periodically
-    fs_->GarbageCollect();
+    // One transaction: a failure leaves the database and the dirty list unchanged, and the
+    // next sync writes the same elements.
+    storage_->GetElementStore().WriteSync(inserts, updates, deletes);
+    fs_->MarkWritten(dirty);
+    result.elements_synced_ = static_cast<uint32_t>(dirty.size());
   } catch (std::exception& e) {
     result.success_ = false;
     result.message_ = e.what();
@@ -205,18 +204,22 @@ auto SleeveServiceImpl::CanEditFolderStructure(const SleeveElement& folder) -> b
   return !folder.mount_id_.has_value();
 }
 
-void SleeveServiceImpl::CheckFolderStructureEditable(const std::filesystem::path& folder_path) {
-  Read<void>([&folder_path](FileSystem& fs) {
-    std::shared_ptr<SleeveElement> folder;
-    try {
-      folder = fs.Get(folder_path, false);
-    } catch (const std::runtime_error&) {
-      return;
-    }
-    if (folder && folder->type_ == ElementType::FOLDER) {
-      RequireEditableStructure(*folder);
-    }
-  });
+auto SleeveServiceImpl::CheckFolderStructureEditable(const std::filesystem::path& folder_path)
+    -> std::optional<sl_element_id_t> {
+  return Read<std::optional<sl_element_id_t>>(
+      [&folder_path](FileSystem& fs) -> std::optional<sl_element_id_t> {
+        std::shared_ptr<SleeveElement> folder;
+        try {
+          folder = fs.Get(folder_path, false);
+        } catch (const std::runtime_error&) {
+          return std::nullopt;
+        }
+        if (folder && folder->type_ == ElementType::FOLDER) {
+          RequireEditableStructure(*folder);
+          return folder->element_id_;
+        }
+        return std::nullopt;
+      });
 }
 
 auto SleeveServiceImpl::GetCurrentID() const -> sl_element_id_t {
@@ -233,41 +236,38 @@ auto SleeveServiceImpl::ResolveElement(const std::filesystem::path& path)
 auto SleeveServiceImpl::ResolveFolder(const std::filesystem::path& path)
     -> std::shared_ptr<SleeveFolder> {
   auto element = ResolveElement(path);
-  if (!element || element->type_ != ElementType::FOLDER ||
-      element->sync_flag_ == SyncFlag::DELETED) {
+  if (!element || element->type_ != ElementType::FOLDER || !element->IsLive()) {
     throw std::runtime_error("SleeveService: Target path is not a folder.");
   }
   return std::static_pointer_cast<SleeveFolder>(element);
-}
-
-auto SleeveServiceImpl::ResolveFile(const std::filesystem::path& path)
-    -> std::shared_ptr<SleeveFile> {
-  auto element = ResolveElement(path);
-  if (!element || element->type_ != ElementType::FILE || element->sync_flag_ == SyncFlag::DELETED) {
-    throw std::runtime_error("SleeveService: Target path is not a file.");
-  }
-  auto file = std::dynamic_pointer_cast<SleeveFile>(element);
-  if (!file) {
-    throw std::runtime_error("SleeveService: Failed to resolve file pointer.");
-  }
-  return file;
 }
 
 auto SleeveServiceImpl::ListFolderEntries(const std::filesystem::path& folder_path)
     -> std::vector<std::shared_ptr<SleeveElement>> {
   return Read<std::vector<std::shared_ptr<SleeveElement>>>([folder_path](FileSystem& fs) {
     std::vector<std::shared_ptr<SleeveElement>> entries;
-    const auto                                  ids = fs.ListFolderContent(folder_path, false);
+    const auto                                  folder = fs.Get(folder_path, false);
+    const auto                                  ids    = fs.ListFolderContent(folder->element_id_);
     entries.reserve(ids.size());
     for (const auto id : ids) {
       auto element = fs.Get(id);
-      if (!element || element->sync_flag_ == SyncFlag::DELETED) {
+      if (!element || !element->IsLive()) {
         continue;
       }
       entries.push_back(std::move(element));
     }
     return entries;
   });
+}
+
+auto SleeveServiceImpl::ListChildFolders(const std::filesystem::path& folder_path)
+    -> std::vector<FolderTreeEntry> {
+  return Read<std::vector<FolderTreeEntry>>(
+      [&folder_path](FileSystem& fs) { return fs.ListChildFolders(folder_path); });
+}
+
+auto SleeveServiceImpl::ListFolderTree() -> std::vector<FolderTreeEntry> {
+  return Read<std::vector<FolderTreeEntry>>([](FileSystem& fs) { return fs.ListFolderTree(); });
 }
 
 auto SleeveServiceImpl::CreateFolder(const std::filesystem::path& parent_path,
@@ -343,20 +343,31 @@ auto SleeveServiceImpl::DeleteFilesEverywhere(std::span<const sl_element_id_t> f
   return Write<std::vector<std::shared_ptr<SleeveFile>>>(
       [this, file_ids](FileSystem& fs) -> std::vector<std::shared_ptr<SleeveFile>> {
         RequireRemovableFromLibrary(fs, storage_->GetMountStore(), file_ids);
-        std::vector<std::shared_ptr<SleeveFile>> files;
-        files.reserve(file_ids.size());
-
-        const auto deleted_ids = fs.DeleteFilesEverywhere(file_ids);
-        files.reserve(deleted_ids.size());
-        for (const auto file_id : deleted_ids) {
-          auto element = fs.Get(file_id);
-          if (!element || element->type_ != ElementType::FILE) {
-            continue;
-          }
-          files.push_back(std::static_pointer_cast<SleeveFile>(element));
-        }
-        return files;
+        return FileElements(fs, fs.DeleteFilesEverywhere(file_ids));
       });
+}
+
+auto SleeveServiceImpl::DeleteFilesEverywhereKeepingMounted(
+    std::span<const sl_element_id_t> file_ids) -> std::pair<LibraryRemoval, SyncResult> {
+  return Write<LibraryRemoval>([this, file_ids](FileSystem& fs) -> LibraryRemoval {
+    LibraryRemoval out;
+    out.kept_mounted_ids_ = MountedFileIds(fs, file_ids);
+    const std::unordered_set<sl_element_id_t> kept(out.kept_mounted_ids_.begin(),
+                                                   out.kept_mounted_ids_.end());
+    std::vector<sl_element_id_t>              removable_ids;
+    removable_ids.reserve(file_ids.size());
+    for (const auto file_id : file_ids) {
+      if (!kept.contains(file_id)) {
+        removable_ids.push_back(file_id);
+      }
+    }
+    if (removable_ids.empty() && !kept.empty()) {
+      // Only mounted photos: the request is refused with the reason of the strict delete.
+      RequireRemovableFromLibrary(fs, storage_->GetMountStore(), file_ids);
+    }
+    out.deleted_files_ = FileElements(fs, fs.DeleteFilesEverywhere(removable_ids));
+    return out;
+  });
 }
 
 auto SleeveServiceImpl::DuplicateFileToFolder(sl_element_id_t file_id,
@@ -366,35 +377,25 @@ auto SleeveServiceImpl::DuplicateFileToFolder(sl_element_id_t file_id,
 
   RequireEditableFolder(*fs_, folder_id);
   auto       duplicated  = fs_->DuplicateFileToFolder(file_id, folder_id);
-  SyncResult sync_result = Sync();
-  if (!duplicated || !sync_result.success_) {
-    return {duplicated, sync_result};
+  SyncResult sync_result = SyncLocked();
+  if (duplicated && sync_result.success_) {
+    try {
+      ClonePipelineForDuplicate(*storage_, file_id, duplicated->element_id_);
+    } catch (const std::exception& e) {
+      sync_result.success_ = false;
+      sync_result.message_ = e.what();
+    }
   }
 
-  try {
-    ClonePipelineForDuplicate(*storage_, file_id, duplicated->element_id_);
-  } catch (const std::exception& e) {
-    sync_result.success_ = false;
-    sync_result.message_ = e.what();
-  }
-
+  // The end of this fs_lock_ scope, as in Read and Write (SN7).
+  fs_->EvictToLimit();
   return {duplicated, sync_result};
 }
 
 auto SleeveServiceImpl::DeletePath(const std::filesystem::path& target_path) -> SyncResult {
-  return Write<void>([this, target_path](FileSystem& fs) {
-    // FileSystem::Delete removes a file of the root from the library and unlinks a file of any
-    // other folder from that folder.
-    const auto target = fs.Get(target_path, false);
-    if (target->type_ == ElementType::FOLDER) {
-      RequireEditableStructure(*target);
-    } else if (const auto parent = fs.Get(target_path.parent_path(), false);
-               parent->element_id_ == 0) {
-      RequireRemovableFromLibrary(fs, storage_->GetMountStore(),
-                                  std::span(&target->element_id_, 1));
-    } else {
-      RequireEditableStructure(*parent);
-    }
+  return Write<void>([target_path](FileSystem& fs) {
+    // A path names a folder only (a file name is a label); a file leaves by its id.
+    RequireEditableStructure(*fs.Get(target_path, false));
     fs.Delete(target_path);
   });
 }
@@ -421,6 +422,13 @@ auto SleeveServiceImpl::RenameFolder(const std::filesystem::path& folder_path,
   });
 }
 
+auto SleeveServiceImpl::ReadMountFolders(sl_element_id_t root_folder_id, mount_id_t mount_id)
+    -> std::vector<MountTreeFolder> {
+  return Read<std::vector<MountTreeFolder>>([root_folder_id, mount_id](FileSystem& fs) {
+    return alcedo::ReadMountFolders(fs, root_folder_id, mount_id);
+  });
+}
+
 auto SleeveServiceImpl::ReadMountTree(sl_element_id_t root_folder_id, mount_id_t mount_id)
     -> MountTree {
   return Read<MountTree>([root_folder_id, mount_id](FileSystem& fs) {
@@ -432,11 +440,10 @@ auto SleeveServiceImpl::ApplyMountTreeChanges(const MountTreeChanges& changes) -
   return Write<void>([&changes](FileSystem& fs) { alcedo::ApplyMountTreeChanges(fs, changes); });
 }
 
-auto SleeveServiceImpl::CreateMountRootFolder(sl_element_id_t parent_id, const file_name_t& name,
-                                              mount_id_t mount_id)
+auto SleeveServiceImpl::CreateMountRootFolder(const file_name_t& name, mount_id_t mount_id)
     -> std::pair<std::shared_ptr<SleeveFolder>, SyncResult> {
-  return Write<std::shared_ptr<SleeveFolder>>([parent_id, &name, mount_id](FileSystem& fs) {
-    return alcedo::CreateMountRootFolder(fs, parent_id, name, mount_id);
+  return Write<std::shared_ptr<SleeveFolder>>([&name, mount_id](FileSystem& fs) {
+    return alcedo::CreateMountRootFolder(fs, name, mount_id);
   });
 }
 
@@ -456,7 +463,7 @@ auto SleeveServiceImpl::DeleteMissingMountedFiles(mount_id_t                    
         for (const auto file_id : file_ids) {
           const auto file   = fs.Get(file_id);
           const auto record = mounts.ReadSourceFile(file_id);
-          if (!file || file->type_ != ElementType::FILE || file->sync_flag_ == SyncFlag::DELETED ||
+          if (!file || file->type_ != ElementType::FILE || !file->IsLive() ||
               file->mount_id_ != mount_id || !record.has_value() ||
               record->state != SourceFileState::kMissing) {
             throw std::invalid_argument("SleeveServiceImpl: the element " +

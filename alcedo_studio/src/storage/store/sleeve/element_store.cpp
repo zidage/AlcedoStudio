@@ -28,7 +28,7 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/mapper/duckorm/duckdb_select.hpp"
-#include "storage/mapper/mount/source_file_mapper.hpp"
+#include "storage/mapper/image/source_file_mapper.hpp"
 #include "storage/query/filter_compiler.hpp"
 #include "storage/query/stats_dimension.hpp"
 #include "storage/store/ai/ai_store.hpp"
@@ -41,8 +41,20 @@
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
+namespace {
 
-auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
+/// True for the photo `e` when no folder other than the library root holds it: the photos of
+/// AlbumScope::LibraryRoot.
+auto HeldOnlyByLibraryRootSql() -> std::string {
+  return std::format(
+      "NOT EXISTS (SELECT 1 FROM FolderContent other_fc WHERE other_fc.element_id = e.id "
+      "AND other_fc.folder_id <> {})",
+      kLibraryRootFolderId);
+}
+
+}  // namespace
+
+auto BuildScopedFileQuery(const AlbumScope&                          album_scope,
                           const std::optional<duckorm::SqlFragment>& extra_filter,
                           const std::optional<duckorm::SqlFragment>& relevance_select)
     -> ScopedFileQuery {
@@ -63,7 +75,7 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
                                extra_filter->binds_.end());
   }
 
-  if (folder_id == 0) {
+  if (album_scope.IsAllPhotos()) {
     scope.from_where_ = std::format(
         "FROM Element e "
         "JOIN FileImage fi ON fi.file_id = e.id "
@@ -73,13 +85,16 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
     return scope;
   }
 
+  const std::string held_only_by_root =
+      album_scope.IsLibraryRoot() ? " AND " + HeldOnlyByLibraryRootSql() : std::string{};
   scope.from_where_ = std::format(
       "FROM FolderContent fc "
       "JOIN Element e ON fc.element_id = e.id "
       "JOIN FileImage fi ON fi.file_id = e.id "
       "JOIN Image i ON i.id = fi.image_id{} "
-      "WHERE fc.folder_id = {} AND e.type = {}{}",
-      relevance_join, folder_id, static_cast<uint32_t>(ElementType::FILE), extra_where);
+      "WHERE fc.folder_id = {} AND e.type = {}{}{}",
+      relevance_join, album_scope.FolderId(), static_cast<uint32_t>(ElementType::FILE),
+      held_only_by_root, extra_where);
   return scope;
 }
 
@@ -88,16 +103,16 @@ namespace {
 namespace album_sql = album_query_sql;
 using album_sql::kMatchSetTable;
 
-/// The relevance select of @p semantic_relevance over @p folder_id on @p conn, or empty without
-/// a natural-language search. The caller holds the connection lock. Throws like
+/// The relevance select of @p semantic_relevance over @p scope on @p conn, or empty without a
+/// natural-language search. The caller holds the connection lock. Throws like
 /// BuildSemanticRelevanceSelect.
-auto RelevanceSelectOf(duckorm::Connection conn, sl_element_id_t folder_id,
+auto RelevanceSelectOf(duckorm::Connection conn, const AlbumScope& scope,
                        const std::optional<SemanticQueryEmbedding>& semantic_relevance)
     -> std::optional<duckorm::SqlFragment> {
   if (!semantic_relevance.has_value()) {
     return std::nullopt;
   }
-  return BuildSemanticRelevanceSelect(conn, folder_id, *semantic_relevance);
+  return BuildSemanticRelevanceSelect(conn, scope, *semantic_relevance);
 }
 
 /// COUNT(*) of @p from_where with the binds of @p binds. Throws std::runtime_error on failure.
@@ -685,6 +700,14 @@ auto SortedIds(const std::unordered_set<sl_element_id_t>& ids) -> std::vector<sl
   return sorted;
 }
 
+/// The `FolderContent` rows of a folder that has no stored row yet: its child folders and its
+/// pending links (the file links are not in memory, Sleeve Node Cache Plan, SN4).
+auto NewFolderContentIds(const SleeveFolder& folder) -> std::vector<sl_element_id_t> {
+  std::unordered_set<sl_element_id_t> ids(folder.ContentAddedSinceSync());
+  ids.insert(folder.ListElements().begin(), folder.ListElements().end());
+  return SortedIds(ids);
+}
+
 /// Clear the pending folder content changes of the folders in @p elements. Runs after the
 /// transaction that wrote their rows committed.
 void MarkFolderContentsSynced(std::span<const std::shared_ptr<SleeveElement>> elements) {
@@ -703,12 +726,12 @@ ElementStore::ElementStore(Database& database) : database_(database) {}
  *
  * @param element
  */
-void ElementStore::AddElement(const std::shared_ptr<SleeveElement> element) {
+void ElementStore::AddElement(const std::shared_ptr<SleeveElement>& element) {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   InsertElementRows(guard.conn_, element);
   MarkFolderContentsSynced(std::span<const std::shared_ptr<SleeveElement>>(&element, 1));
-  element->sync_flag_ = SyncFlag::SYNCED;
+  element->SetSyncFlag(SyncFlag::SYNCED);
 }
 
 void ElementStore::InsertElementRows(duckorm::Connection&                  conn,
@@ -719,11 +742,12 @@ void ElementStore::InsertElementRows(duckorm::Connection&                  conn,
     FileMapper(conn).Insert({file->element_id_, file->image_id_});
   } else if (element->type_ == ElementType::FOLDER) {
     auto folder = std::static_pointer_cast<SleeveFolder>(element);
-    FolderMapper(conn).InsertFolderContents(folder->element_id_, folder->ListElements());
+    FolderMapper(conn).InsertFolderContents(folder->element_id_, NewFolderContentIds(*folder));
   }
 }
 
-void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> elements) {
+void ElementStore::InsertElementBatchRows(
+    duckorm::Connection& conn, std::span<const std::shared_ptr<SleeveElement>> elements) {
   if (elements.empty()) {
     return;
   }
@@ -741,24 +765,31 @@ void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> e
     }
   }
 
+  ElementMapper(conn).InsertParamsRows(element_rows);
+  FileMapper(conn).InsertParamsRows(file_rows);
+  FolderMapper folder_mapper(conn);
+  for (const auto& element : elements) {
+    if (element->type_ == ElementType::FOLDER) {
+      const auto folder = std::static_pointer_cast<SleeveFolder>(element);
+      folder_mapper.InsertFolderContents(folder->element_id_, NewFolderContentIds(*folder));
+    }
+  }
+}
+
+void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> elements) {
+  if (elements.empty()) {
+    return;
+  }
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   {
     duckorm::Transaction transaction(guard.conn_);
-    ElementMapper(guard.conn_).InsertParamsRows(element_rows);
-    FileMapper(guard.conn_).InsertParamsRows(file_rows);
-    FolderMapper folder_mapper(guard.conn_);
-    for (const auto& element : elements) {
-      if (element->type_ == ElementType::FOLDER) {
-        const auto folder = std::static_pointer_cast<SleeveFolder>(element);
-        folder_mapper.InsertFolderContents(folder->element_id_, folder->ListElements());
-      }
-    }
+    InsertElementBatchRows(guard.conn_, elements);
     transaction.commit();
   }
   MarkFolderContentsSynced(elements);
   for (const auto& element : elements) {
-    element->sync_flag_ = SyncFlag::SYNCED;
+    element->SetSyncFlag(SyncFlag::SYNCED);
   }
 }
 
@@ -895,9 +926,15 @@ void ElementStore::RemoveElements(std::span<const std::shared_ptr<SleeveElement>
   if (elements.empty()) {
     return;
   }
-  auto                         guard   = database_.GetConnectionGuard();
-  auto                         db_lock = guard.Lock();
+  auto                 guard   = database_.GetConnectionGuard();
+  auto                 db_lock = guard.Lock();
+  duckorm::Transaction transaction(guard.conn_);
+  RemoveElementBatchRows(guard.conn_, elements);
+  transaction.commit();
+}
 
+void ElementStore::RemoveElementBatchRows(
+    duckorm::Connection& conn, std::span<const std::shared_ptr<SleeveElement>> elements) {
   std::vector<sl_element_id_t> file_ids;
   std::vector<sl_element_id_t> folder_ids;
   std::vector<sl_element_id_t> element_ids;
@@ -920,19 +957,19 @@ void ElementStore::RemoveElements(std::span<const std::shared_ptr<SleeveElement>
     }
   }
 
-  FolderMapper folder_mapper(guard.conn_);
+  FolderMapper folder_mapper(conn);
   if (!file_ids.empty()) {
-    DeleteSemanticAndAiRowsForFiles(guard.conn_, file_ids);
-    PipelineMapper(guard.conn_).RemoveByIds(file_ids);
-    SourceFileMapper(guard.conn_).RemoveByIds(file_ids);
-    FileMapper(guard.conn_).RemoveByIds(file_ids);
+    DeleteSemanticAndAiRowsForFiles(conn, file_ids);
+    PipelineMapper(conn).RemoveByIds(file_ids);
+    SourceFileMapper(conn).RemoveByIds(file_ids);
+    FileMapper(conn).RemoveByIds(file_ids);
     folder_mapper.RemoveContentByIds(file_ids);
   }
   if (!folder_ids.empty()) {
     folder_mapper.RemoveByIds(folder_ids);
   }
   if (!element_ids.empty()) {
-    ElementMapper(guard.conn_).RemoveByIds(element_ids);
+    ElementMapper(conn).RemoveByIds(element_ids);
   }
 }
 
@@ -941,12 +978,12 @@ void ElementStore::RemoveElements(std::span<const std::shared_ptr<SleeveElement>
  *
  * @param element
  */
-void ElementStore::UpdateElement(const std::shared_ptr<SleeveElement> element) {
+void ElementStore::UpdateElement(const std::shared_ptr<SleeveElement>& element) {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   UpdateElementRows(guard.conn_, element);
   MarkFolderContentsSynced(std::span<const std::shared_ptr<SleeveElement>>(&element, 1));
-  element->sync_flag_ = SyncFlag::SYNCED;
+  element->SetSyncFlag(SyncFlag::SYNCED);
 }
 
 void ElementStore::UpdateElementRows(duckorm::Connection&                  conn,
@@ -982,8 +1019,27 @@ void ElementStore::UpdateElements(std::span<const std::shared_ptr<SleeveElement>
   }
   MarkFolderContentsSynced(elements);
   for (const auto& element : elements) {
-    element->sync_flag_ = SyncFlag::SYNCED;
+    element->SetSyncFlag(SyncFlag::SYNCED);
   }
+}
+
+void ElementStore::WriteSync(std::span<const std::shared_ptr<SleeveElement>> inserts,
+                             std::span<const std::shared_ptr<SleeveElement>> updates,
+                             std::span<const std::shared_ptr<SleeveElement>> deletes) {
+  if (inserts.empty() && updates.empty() && deletes.empty()) {
+    return;
+  }
+  auto                 guard   = database_.GetConnectionGuard();
+  auto                 db_lock = guard.Lock();
+  duckorm::Transaction transaction(guard.conn_);
+  InsertElementBatchRows(guard.conn_, inserts);
+  for (const auto& element : updates) {
+    UpdateElementRows(guard.conn_, element);
+  }
+  if (!deletes.empty()) {
+    RemoveElementBatchRows(guard.conn_, deletes);
+  }
+  transaction.commit();
 }
 
 auto ElementStore::GetElementsInFolderByFilter(const std::shared_ptr<FilterCombo> filter,
@@ -1038,7 +1094,7 @@ auto ElementStore::ListSearchResultPageWithStats(
 }
 
 auto ElementStore::ReadAlbumQuery(
-    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
+    const AlbumScope& album_scope, const std::optional<duckorm::SqlFragment>& extra_filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
     const AlbumQueryRead&                        read,
     const std::optional<SemanticQueryEmbedding>& semantic_relevance) const -> AlbumQueryResult {
@@ -1051,7 +1107,7 @@ auto ElementStore::ReadAlbumQuery(
     // The only statement that evaluates the filter and the relevance select; every read below
     // uses its rows.
     const auto scope = BuildScopedFileQuery(
-        folder_id, extra_filter, RelevanceSelectOf(guard.conn_, folder_id, semantic_relevance));
+        album_scope, extra_filter, RelevanceSelectOf(guard.conn_, album_scope, semantic_relevance));
     const MatchSetTable match_set(guard.conn_, scope, options.local_day_time_zone_);
     out = ReadAlbumQueryFromMatchSet(guard.conn_, options, active_semantic_model_key, read,
                                      scope.joins_relevance_);
@@ -1061,7 +1117,7 @@ auto ElementStore::ReadAlbumQuery(
 }
 
 auto ElementStore::ReadAlbumFilePosition(
-    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
+    const AlbumScope& album_scope, const std::optional<duckorm::SqlFragment>& extra_filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
     sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group,
     const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
@@ -1074,7 +1130,7 @@ auto ElementStore::ReadAlbumFilePosition(
   std::optional<AlbumFilePosition> out;
   {
     const auto scope = BuildScopedFileQuery(
-        folder_id, extra_filter, RelevanceSelectOf(guard.conn_, folder_id, semantic_relevance));
+        album_scope, extra_filter, RelevanceSelectOf(guard.conn_, album_scope, semantic_relevance));
     const MatchSetTable match_set(guard.conn_, scope, options.local_day_time_zone_);
     auto                query = album_sql::RelationsPrefix(
         options, active_semantic_model_key, album_sql::EditStateProjection::kNotRead);
@@ -1123,7 +1179,7 @@ auto ElementStore::ReadAlbumFilePosition(
 }
 
 auto ElementStore::ReadAlbumFileIds(
-    sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
+    const AlbumScope& album_scope, const std::optional<duckorm::SqlFragment>& extra_filter,
     const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
     int64_t occurrence_begin, int64_t occurrence_end,
     const std::optional<SemanticQueryEmbedding>& semantic_relevance) const
@@ -1142,7 +1198,7 @@ auto ElementStore::ReadAlbumFileIds(
   duckorm::Transaction transaction(guard.conn_);
   {
     const auto scope = BuildScopedFileQuery(
-        folder_id, extra_filter, RelevanceSelectOf(guard.conn_, folder_id, semantic_relevance));
+        album_scope, extra_filter, RelevanceSelectOf(guard.conn_, album_scope, semantic_relevance));
     const MatchSetTable match_set(guard.conn_, scope, options.local_day_time_zone_);
     auto                query = album_sql::RelationsPrefix(
         options, active_semantic_model_key, album_sql::EditStateProjection::kNotRead);
@@ -1232,8 +1288,10 @@ auto ElementStore::ReadFolderImageCounts() const -> FolderImageCounts {
   // `subtree` pairs each folder (the root 0 left out: its row shows the project count) with
   // itself and every folder below it. The count of a folder is the number of distinct photos
   // linked into any folder of its subtree, read through the tables of BuildScopedFileQuery.
-  // One row per folder whose subtree holds a photo, then one row with a NULL folder id for the
-  // whole project.
+  // One row per folder whose subtree holds a photo, one row with the root id for the library
+  // root (#1076), then one row with a NULL folder id for the whole project. The root row counts
+  // each photo that no other folder holds, and each photo that an ordinary (not mounted) folder
+  // holds, so the mount trees are left out.
   static constexpr const char* kFolderCountsQuery =
       "WITH RECURSIVE subtree(anchor_id, folder_id) AS ("
       "SELECT f.id, f.id FROM Element f WHERE f.type = {0} AND f.id <> 0 "
@@ -1247,22 +1305,30 @@ auto ElementStore::ReadFolderImageCounts() const -> FolderImageCounts {
       "JOIN FileImage fi ON fi.file_id = e.id "
       "JOIN Image i ON i.id = fi.image_id "
       "WHERE e.type = {1} GROUP BY s.anchor_id "
+      "UNION ALL SELECT CAST({3} AS BIGINT), COUNT(*) {2} AND ({4} OR EXISTS ("
+      "SELECT 1 FROM FolderContent ordinary_fc "
+      "JOIN Element ordinary_f ON ordinary_f.id = ordinary_fc.folder_id "
+      "WHERE ordinary_fc.element_id = e.id AND ordinary_fc.folder_id <> {3} "
+      "AND ordinary_f.mount_id IS NULL)) "
       "UNION ALL SELECT CAST(NULL AS BIGINT), COUNT(*) {2}";
 
   auto              guard   = database_.GetConnectionGuard();
   auto              db_lock = guard.Lock();
-  const auto        project = BuildScopedFileQuery(0);
-  const auto        sql = std::format(kFolderCountsQuery, static_cast<uint32_t>(ElementType::FOLDER),
-                                      static_cast<uint32_t>(ElementType::FILE), project.from_where_);
+  const auto        project = BuildScopedFileQuery(AlbumScope{});
+  const auto sql = std::format(kFolderCountsQuery, static_cast<uint32_t>(ElementType::FOLDER),
+                               static_cast<uint32_t>(ElementType::FILE), project.from_where_,
+                               kLibraryRootFolderId, HeldOnlyByLibraryRootSql());
 
   FolderImageCounts out;
   for (const auto& row : duckorm::query<FolderPhotoCountRow>(
            guard.conn_, duckorm::SqlFragment{sql, project.binds_.binds_})) {
     const auto count = static_cast<uint64_t>(row.photo_count);
-    if (row.folder_id.has_value()) {
-      out.folder_photo_counts_[static_cast<sl_element_id_t>(*row.folder_id)] = count;
-    } else {
+    if (!row.folder_id.has_value()) {
       out.project_photo_count_ = count;
+    } else if (*row.folder_id == kLibraryRootFolderId) {
+      out.library_root_photo_count_ = count;
+    } else {
+      out.folder_photo_counts_[static_cast<sl_element_id_t>(*row.folder_id)] = count;
     }
   }
   return out;

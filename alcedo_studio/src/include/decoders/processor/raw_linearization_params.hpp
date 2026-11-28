@@ -22,6 +22,11 @@ struct RawLinearizationParams {
   std::int32_t  black_tile_width   = 0;
   std::int32_t  black_tile_height  = 0;
   float         pattern_black[36]  = {};
+  /// LibRaw `color.maximum` of the unpacked file (one value for all colors): the white level of
+  /// the AI Denoise input preparation (AI Denoise integration plan, DN6; lab
+  /// docs/alcedo_integration.md). 0 when the input does not come from LibRaw. The GPU passes use
+  /// `white_level`.
+  float         libraw_maximum     = 0.0f;
 };
 
 }  // namespace alcedo

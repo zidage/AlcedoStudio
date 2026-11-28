@@ -361,7 +361,7 @@ TEST(PipelineEditBatch, TypedCommitAndChainExpectedSerializedIdentitySurvivesLeg
 /// below were read from the expected-serialized files at `aa604b0a` (G10.3), so a change to
 /// those files alone cannot hide an identity change.
 TEST(PipelineEditBatch, TypedCommitAndChainIdentityUnchangedAfterFormatCut) {
-  EXPECT_EQ(kProjectFileVersion, "0.12.0");
+  EXPECT_EQ(kProjectFileVersion, "0.15.0");
   EXPECT_EQ(kCommitFormatVersion, 5u);
   EXPECT_EQ(kChainFormatVersion, 5u);
   EXPECT_EQ(kPipelineEditBatchFormatVersion, 4u);
@@ -788,6 +788,46 @@ TEST(PipelineEditBatch, GraphInsertAndTypedCommitVerification) {
   ASSERT_NE(stored, nullptr);
   const auto restored = PipelineEditBatch::FromJSON(stored->GetPayloadJSON());
   EXPECT_EQ(restored.CanonicalJSON().dump(), typed.GetPayloadJSON().dump());
+}
+
+// Issue #1111: a commit read from its stored row checks its hash on the stored payload text and
+// parses the payload only when a reader uses it.
+TEST(PipelineEditBatch, StoredRowKeepsPayloadTextAndChecksHashOnIt) {
+  const root_id_t root{0x0102030405060708ULL, 0x1112131415161718ULL};
+  const auto      typed = edit_history_test::EditCommitAccess::MakePipelineEditAtTimestamp(
+      root, std::nullopt, 7, MakeParameterBatch(0.0, 1.25));
+  EXPECT_EQ(typed.GetPayloadText(), typed.GetPayloadJSON().dump());
+
+  const auto stored = EditCommit::FromStoredRow(typed.GetCommitHash(), root, std::nullopt, 7,
+                                                typed.GetPayloadText());
+  EXPECT_EQ(stored.GetCommitHash(), typed.GetCommitHash());
+  EXPECT_EQ(stored.CanonicalHashInput(), typed.CanonicalHashInput());
+  EXPECT_EQ(stored.GetPayloadJSON(), typed.GetPayloadJSON());
+
+  std::string changed_text = typed.GetPayloadText();
+  changed_text.back()      = ' ';
+  EXPECT_THROW((void)EditCommit::FromStoredRow(typed.GetCommitHash(), root, std::nullopt, 7,
+                                               std::move(changed_text)),
+               std::runtime_error);
+  EXPECT_THROW((void)EditCommit::FromStoredRow(typed.GetCommitHash(), root, std::nullopt, 8,
+                                               typed.GetPayloadText()),
+               std::runtime_error);
+}
+
+TEST(PipelineEditBatch, StoredRowWithInvalidPayloadFailsOnFirstUse) {
+  const root_id_t   root{0x0102030405060708ULL, 0x1112131415161718ULL};
+  const std::string not_a_batch = R"({"stage":"basic"})";
+  const auto        input       = IndependentCommitHashInput(root, 9, not_a_batch);
+  const auto        hash        = Hash128::Compute(input.data(), input.size());
+
+  // The hash matches the stored text, so the row loads; its payload is not a batch.
+  const auto        stored = EditCommit::FromStoredRow(hash, root, std::nullopt, 9, not_a_batch);
+  EXPECT_EQ(stored.GetPayloadText(), not_a_batch);
+  EXPECT_THROW((void)stored.GetPayloadJSON(), std::runtime_error);
+  EXPECT_THROW(stored.ValidateStructure(), std::runtime_error);
+  // A copy shares the payload and its error.
+  const EditCommit copy = stored;
+  EXPECT_THROW((void)copy.GetPayloadJSON(), std::runtime_error);
 }
 
 TEST(PipelineEditBatch, CollectAiMaskAssetKeysFindsKeysInEveryBatchType) {

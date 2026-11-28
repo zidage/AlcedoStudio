@@ -138,7 +138,7 @@ TEST_F(MaskCoveragePresentationTest, OldCoverageLivesUntilRendererRelease) {
     EXPECT_EQ(queue.DiagnosticsSnapshot().ready_count, 1u);
     EXPECT_EQ(queue.DiagnosticsSnapshot().live_target_count, 2u)
         << "the replacement must use a second target";
-  } else {
+  } else if (g_backend == EditorBackend::Metal) {
     // Metal: the displayed frame holds its display target, so the replacement used another one.
     EXPECT_EQ(Counters().display_targets, 2u);
   }
@@ -152,7 +152,7 @@ TEST_F(MaskCoveragePresentationTest, OldCoverageLivesUntilRendererRelease) {
     EXPECT_EQ(viewport_->maskCoverageQueue()->SlotAt(first_slot)->state,
               DirectPresentQueue::SlotState::Available);
     EXPECT_NE(layer_.SlotIndex(), first_slot);
-  } else {
+  } else if (g_backend == EditorBackend::Metal) {
     // The renderer released the first frame: the next write reuses its display target.
     const auto creates = Counters().display_target_create;
     ASSERT_EQ(Present(Candidate(first), request, Identity(23)), MaskCoveragePublication::Published);
@@ -166,21 +166,21 @@ TEST_F(MaskCoveragePresentationTest, OldCoverageLivesUntilRendererRelease) {
   EXPECT_EQ(NativeResourceCounters::Instance().LiveImportedQRhiTextures(), imported_before - 1);
 }
 
-TEST_F(MaskCoveragePresentationTest, CoverageTransferDoesNotReadBackToHost) {
+TEST_F(MaskCoveragePresentationTest, CoverageTransferUsesTheAvailablePresentationMemory) {
   const auto                 pixels = MakeCandidatePixels(1);
   MaskCoverageDisplayRequest plain{MakePhotoGeometry(1.0f), false, 1.0f};
   const auto                 start = Counters();
   ASSERT_EQ(Present(Candidate(pixels), plain, Identity(31)), MaskCoveragePublication::Published);
   const auto first = Counters();
-  // The only host transfer is the original coverage upload into the device.
-  EXPECT_EQ(first.device_to_host, start.device_to_host);
+  // The candidate uploads once; a display without device sharing reads back each result.
+  EXPECT_EQ(first.device_to_host - start.device_to_host, UsesHostUpload() ? 1u : 0u);
   EXPECT_EQ(first.host_to_device - start.host_to_device, 1u);
 
-  // The same candidate with another invert and opacity: no upload and no readback.
+  // The same candidate with another invert and opacity does not upload again.
   MaskCoverageDisplayRequest inverted{plain.geometry, true, 0.5f};
   ASSERT_EQ(Present(Candidate(pixels), inverted, Identity(32)), MaskCoveragePublication::Published);
   const auto second = Counters();
-  EXPECT_EQ(second.device_to_host, start.device_to_host);
+  EXPECT_EQ(second.device_to_host - first.device_to_host, UsesHostUpload() ? 1u : 0u);
   EXPECT_EQ(second.host_to_device, first.host_to_device);
   ASSERT_TRUE(Consume());
   ExpectDisplayed(ExpectedCoverageR8(pixels, inverted), "inverted half-opacity coverage");

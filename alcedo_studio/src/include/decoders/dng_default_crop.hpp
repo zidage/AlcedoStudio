@@ -16,6 +16,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "decoders/dng_warp_rectilinear.hpp"
+
 namespace alcedo::dng {
 namespace detail {
 
@@ -167,13 +169,6 @@ inline auto ReadBeF64(const std::span<const uint8_t> buffer, const size_t offset
 }
 
 }  // namespace detail
-
-struct WarpRectilinear {
-  uint32_t                         coefficient_set_count = 0;
-  std::array<std::array<double, 6>, 3> coefficient_sets  = {};
-  double                           center_x              = 0.5;
-  double                           center_y              = 0.5;
-};
 
 struct Metadata {
   std::array<ushort, 4>            default_crop = {};

@@ -60,11 +60,25 @@ auto DevelopCameraProfileFileFromJson(const nlohmann::json& json) -> DevelopCame
   return reference;
 }
 
+auto DevelopAiDenoiseToJson(const DevelopAiDenoise& denoise) -> nlohmann::json {
+  return {{"model_version", denoise.model_version}};
+}
+
+auto DevelopAiDenoiseFromJson(const nlohmann::json& json) -> DevelopAiDenoise {
+  if (!json.is_object() || !json.contains("model_version") || !json["model_version"].is_string() ||
+      !IsAiDenoiseModelVersion(json["model_version"].get_ref<const std::string&>())) {
+    throw std::runtime_error(
+        "Develop: ai_denoise needs the string 'model_version' of 64 lowercase hexadecimal digits");
+  }
+  return DevelopAiDenoise{json["model_version"].get<std::string>()};
+}
+
 auto DevelopParamsModel::IsDefault() const -> bool {
   const auto payload = PayloadCopy();
   return payload.demosaic_method == "default" && payload.highlights_reconstruct &&
          payload.use_camera_wb && payload.user_wb == 7600.0f && payload.wb_mode == "as_shot" &&
-         !payload.lens_enabled && !payload.camera_profile_file.has_value();
+         !payload.lens_enabled && !payload.camera_profile_file.has_value() &&
+         !payload.ai_denoise.has_value();
 }
 
 auto DevelopParamsModel::DemosaicMethod() const -> std::string {
@@ -159,7 +173,33 @@ auto DevelopParamsModel::RasterInput() const -> std::optional<DevelopRasterInput
   return Read([](const DevelopPayload& payload) { return payload.input; });
 }
 
+auto DevelopParamsModel::AiDenoise() const -> std::optional<DevelopAiDenoise> {
+  return Read([](const DevelopPayload& payload) { return payload.ai_denoise; });
+}
+
+void DevelopParamsModel::ApplyAiDenoiseUpdate(std::optional<DevelopAiDenoise> denoise) {
+  if (denoise.has_value() && !IsAiDenoiseModelVersion(denoise->model_version)) {
+    throw std::invalid_argument(
+        "Develop: the AI Denoise model version must be 64 lowercase hexadecimal digits");
+  }
+  MutateWithDirtyFields([&denoise](DevelopPayload& payload) {
+    if (payload.input.has_value()) {
+      throw std::logic_error("Develop: a raster image has no AI Denoise");
+    }
+    if (payload.ai_denoise == denoise) {
+      return DirtyFieldMask{};
+    }
+    payload.ai_denoise = std::move(denoise);
+    return DirtyFieldMask{DevelopDirty::Denoise};
+  });
+}
+
 void DevelopParamsModel::ApplyRawDecodeUpdate(DevelopRawDecodeUpdate update) {
+  if (update.ai_denoise.has_value() && update.ai_denoise->has_value() &&
+      !IsAiDenoiseModelVersion((*update.ai_denoise)->model_version)) {
+    throw std::invalid_argument(
+        "Develop: the AI Denoise model version must be 64 lowercase hexadecimal digits");
+  }
   MutateWithDirtyFields([update = std::move(update)](DevelopPayload& payload) mutable {
     if (payload.input.has_value()) {
       throw std::logic_error("Develop: a raster image has no RAW decode settings");
@@ -181,6 +221,10 @@ void DevelopParamsModel::ApplyRawDecodeUpdate(DevelopRawDecodeUpdate update) {
     if (update.user_wb.has_value() && payload.user_wb != *update.user_wb) {
       payload.user_wb = *update.user_wb;
       changed |= DirtyFieldMask{DevelopDirty::WhiteBalance};
+    }
+    if (update.ai_denoise.has_value() && payload.ai_denoise != *update.ai_denoise) {
+      payload.ai_denoise = std::move(*update.ai_denoise);
+      changed |= DirtyFieldMask{DevelopDirty::Denoise};
     }
     return changed;
   });
@@ -442,11 +486,24 @@ auto DevelopParamsModel::ToJson() const -> nlohmann::json {
   if (payload.input.has_value()) {
     value["input"] = DevelopRasterInputToJson(*payload.input);
   }
+  // Written only while the switch is on, so the JSON of every other document stays as it was.
+  if (payload.ai_denoise.has_value()) {
+    value["ai_denoise"] = DevelopAiDenoiseToJson(*payload.ai_denoise);
+  }
   return value;
 }
 
 void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
-  Mutate(DevelopDirty::All, [&json](DevelopPayload& payload) {
+  // Read before the Mutate, so a malformed value leaves the Model unchanged.
+  std::optional<DevelopAiDenoise> ai_denoise;
+  if (json.contains("ai_denoise")) {
+    if (json.contains("input")) {
+      throw std::runtime_error("Develop: a raster image has no AI Denoise");
+    }
+    ai_denoise = DevelopAiDenoiseFromJson(json["ai_denoise"]);
+  }
+  Mutate(DevelopDirty::All, [&json, &ai_denoise](DevelopPayload& payload) {
+    payload.ai_denoise = std::move(ai_denoise);
     payload.demosaic_method =
         json_util::ReadString(json, "demosaic_method", payload.demosaic_method);
     payload.highlights_reconstruct =
@@ -581,6 +638,9 @@ void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
     }
     if (payload.input != dest.input) {
       changed |= DirtyFieldMask{DevelopDirty::Input};
+    }
+    if (payload.ai_denoise != dest.ai_denoise) {
+      changed |= DirtyFieldMask{DevelopDirty::Denoise};
     }
     dest = std::move(payload);
     return changed.Any() ? changed : DirtyFieldMask{DevelopDirty::All};

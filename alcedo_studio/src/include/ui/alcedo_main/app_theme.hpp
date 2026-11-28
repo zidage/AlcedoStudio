@@ -91,6 +91,27 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorScopeHeight READ editorScopeHeight CONSTANT)
   Q_PROPERTY(int editorScopeHeightMin READ editorScopeHeightMin CONSTANT)
   Q_PROPERTY(int editorAdjustmentHeaderMinHeight READ editorAdjustmentHeaderMinHeight CONSTANT)
+  // Viewport render alert (ViewportRenderAlert.qml, #1056): text column width, button height,
+  // detail lines before the detail scrolls, and the colors over the blurred viewport.
+  Q_PROPERTY(int viewportAlertWidth READ viewportAlertWidth CONSTANT)
+  Q_PROPERTY(int viewportAlertButtonHeight READ viewportAlertButtonHeight CONSTANT)
+  Q_PROPERTY(int viewportAlertDetailMaxLines READ viewportAlertDetailMaxLines CONSTANT)
+  Q_PROPERTY(int viewportAlertCopiedMs READ viewportAlertCopiedMs CONSTANT)
+  Q_PROPERTY(QColor viewportAlertScrimColor READ viewportAlertScrimColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor viewportAlertSecondaryTextColor READ viewportAlertSecondaryTextColor NOTIFY
+                 ThemeChanged)
+  Q_PROPERTY(
+      QColor viewportAlertDetailFillColor READ viewportAlertDetailFillColor NOTIFY ThemeChanged)
+  // Viewport render progress (EditorRenderProgress.qml, AI Denoise plan DN14): the pill, its step
+  // dots, the segmented bar at the bottom edge, and the fade at the end of the render.
+  Q_PROPERTY(int viewportProgressPillHeight READ viewportProgressPillHeight CONSTANT)
+  Q_PROPERTY(int viewportProgressDotSize READ viewportProgressDotSize CONSTANT)
+  Q_PROPERTY(int viewportProgressBarHeight READ viewportProgressBarHeight CONSTANT)
+  Q_PROPERTY(int viewportProgressSegmentGap READ viewportProgressSegmentGap CONSTANT)
+  Q_PROPERTY(int viewportProgressFadeMs READ viewportProgressFadeMs CONSTANT)
+  Q_PROPERTY(QColor viewportProgressPillColor READ viewportProgressPillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor viewportProgressTrackColor READ viewportProgressTrackColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor viewportProgressFillColor READ viewportProgressFillColor NOTIFY ThemeChanged)
   // LUT browser rail page (LUT library plan L6A): preferred page width, filter card width,
   // minimum tile width, and the tile placeholder icon size. See DESIGN.md.
   Q_PROPERTY(int editorLutBrowserPanelWidth READ editorLutBrowserPanelWidth CONSTANT)
@@ -99,6 +120,13 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorLutTileMinWidth READ editorLutTileMinWidth CONSTANT)
   Q_PROPERTY(int editorLutTileCompactWidth READ editorLutTileCompactWidth CONSTANT)
   Q_PROPERTY(int editorLutTileIconSize READ editorLutTileIconSize CONSTANT)
+  // Versions panel presets (edit presets plan, PS2): default preset part height, the
+  // smallest Versions part the splitter leaves, and the minimum preset tile width.
+  Q_PROPERTY(int editorPresetPaneHeight READ editorPresetPaneHeight CONSTANT)
+  Q_PROPERTY(int editorVersionsPartMinHeight READ editorVersionsPartMinHeight CONSTANT)
+  Q_PROPERTY(int editorPresetTileMinWidth READ editorPresetTileMinWidth CONSTANT)
+  // List rows of the LUT and preset browsers: width of the 3:2 preview slot left of the name.
+  Q_PROPERTY(int editorBrowserListThumbWidth READ editorBrowserListThumbWidth CONSTANT)
   // Persistent left collections column in the application shell (see DESIGN.md).
   // collectionsSidebarWidth is the default width; the user drags it in the min..max range.
   Q_PROPERTY(int collectionsSidebarWidth READ collectionsSidebarWidth CONSTANT)
@@ -430,12 +458,31 @@ class AppTheme final : public QObject {
   auto        editorScopeHeight() const -> int;
   auto        editorScopeHeightMin() const -> int;
   auto        editorAdjustmentHeaderMinHeight() const -> int;
+  auto        viewportAlertWidth() const -> int;
+  auto        viewportAlertButtonHeight() const -> int;
+  auto        viewportAlertDetailMaxLines() const -> int;
+  auto        viewportAlertCopiedMs() const -> int;
+  auto        viewportAlertScrimColor() const -> QColor;
+  auto        viewportAlertSecondaryTextColor() const -> QColor;
+  auto        viewportAlertDetailFillColor() const -> QColor;
+  auto        viewportProgressPillHeight() const -> int;
+  auto        viewportProgressDotSize() const -> int;
+  auto        viewportProgressBarHeight() const -> int;
+  auto        viewportProgressSegmentGap() const -> int;
+  auto        viewportProgressFadeMs() const -> int;
+  auto        viewportProgressPillColor() const -> QColor;
+  auto        viewportProgressTrackColor() const -> QColor;
+  auto        viewportProgressFillColor() const -> QColor;
   auto        editorLutBrowserPanelWidth() const -> int;
   auto        editorLutBrowserPanelWidthMin() const -> int;
   auto        editorLutBrowserFilterWidth() const -> int;
   auto        editorLutTileMinWidth() const -> int;
   auto        editorLutTileCompactWidth() const -> int;
   auto        editorLutTileIconSize() const -> int;
+  auto        editorPresetPaneHeight() const -> int;
+  auto        editorVersionsPartMinHeight() const -> int;
+  auto        editorPresetTileMinWidth() const -> int;
+  auto        editorBrowserListThumbWidth() const -> int;
   auto        collectionsSidebarWidth() const -> int;
   auto        collectionsSidebarMinWidth() const -> int;
   auto        collectionsSidebarMaxWidth() const -> int;

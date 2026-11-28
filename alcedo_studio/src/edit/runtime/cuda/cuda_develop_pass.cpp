@@ -63,9 +63,9 @@ auto AcquireRgba(CudaRenderWorkspace& workspace, const GraphValueId& id, std::ui
 void ExecuteCudaLensCalibration(CudaRenderDevice& device, const ExecutionPlan& plan,
                                 const PreparedRawInput& input,
                                 const DevelopPayload&   develop_params) {
-  const auto runtime = LensCalibrationResolver::Resolve(develop_params, input.color_context,
-                                                        plan.source.develop_output_extent,
-                                                        input.dng_warp_rectilinear.has_value());
+  const auto runtime = LensCalibrationResolver::Resolve(
+      develop_params, input.color_context, plan.source.develop_output_extent,
+      dng::CorrectionsOf(input.dng_warp_rectilinear));
   if (!runtime.has_value()) {
     return;
   }
@@ -163,6 +163,7 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
     }
     ReleaseTransientSlabsAfterGpuLastUse(device, {linear});
   } else if (input.input_kind == RawInputKind::DebayeredRgb ||
+             input.input_kind == RawInputKind::DenoisedRgb ||
              plan.source.kind == DevelopInputKind::DirectRgb) {
     const auto width  = input.host_extent.width;
     const auto height = input.host_extent.height;

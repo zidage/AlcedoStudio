@@ -1,0 +1,39 @@
+Alcedo Studio 0.3.7
+
+New
+---
+- AI Denoise removes noise and demosaics Bayer RAW photos in the editor and
+  export. Download the model in Settings > AI Models, then turn on AI Denoise
+  in RAW Decode. It uses DirectML on Windows and the Apple Neural Engine on
+  Apple silicon. Copy and paste RAW Decode settings to enable it on several
+  photos, or use the alcedo-cli denoise commands.
+- The editor shows a preview while it renders the first frame, with progress
+  and the current render step. AI Denoise errors appear in the editor and on
+  individual export items, where you can turn AI Denoise off.
+- Mount folders from the redesigned Collections sidebar. Mounted collections
+  follow changes on disk and keep edits when a photo moves within the mount.
+  The Disk section groups folders by drive and shows when a drive is offline.
+  Reconnect a folder, locate a missing photo, or remove missing entries.
+  Folder views show subfolders above photos. Import Folder can remember
+  whether to import or mount. alcedo-cli also supports mount commands.
+- Save and apply edit presets in Versions. Drag a Version into Presets to save
+  it, or drag a preset into Versions to apply it as a new Version. Search and
+  preview presets in the grid or list, and apply one to several Library photos.
+  Export Version in the context menu saves a shareable .alcpreset file.
+  Apply a preset file directly, or add it to the browser for reuse.
+  alcedo-cli can list, save, and apply presets. The LUT list also shows previews.
+
+Improvements and fixes
+----------------------
+- The photo menu opens faster with many photos selected. A mixed Delete
+  request skips mounted or locked photos. Export marks missing files per
+  photo and keeps them in the queue while the other photos export. Paste
+  Adjustments is faster on photos with many Versions.
+- Lens auto-detect checks the lens name and shot focal length before using a
+  profile. Manually selected profiles can apply across mounts. DNG files
+  that correct only lateral chromatic aberration can also use Lensfun
+  distortion correction. CUDA RAW processing preserves bright values when
+  highlight reconstruction finds no clipped pixels.
+- Add Radial Mask or Add Gradient Mask starts another mask of the same kind
+  while one is open for editing. Windows window controls stay usable over
+  dialogs.

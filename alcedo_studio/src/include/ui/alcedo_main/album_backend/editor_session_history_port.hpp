@@ -14,7 +14,9 @@
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_session_ports.hpp"
+#include "app/pipeline_root_state.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -131,6 +133,12 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
       const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
       const alcedo::LmtUpdate& write, std::shared_ptr<const alcedo::PipelineGraphSnapshot>* preview,
       std::string* error) -> bool override;
+  auto BuildPresetPreviewDocument(
+      const alcedo::EditorHistoryGuardHandle&                     guard,
+      const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
+      const alcedo::AdjustmentTransferPackage&                    package,
+      std::shared_ptr<const alcedo::PipelineGraphSnapshot>* preview, std::string* error)
+      -> bool override;
   [[nodiscard]] auto HasUncommittedLiveValues(const alcedo::EditorHistoryGuardHandle& guard) const
       -> bool override;
   auto HasUnmaterializedChanges(const alcedo::EditorHistoryGuardHandle& guard,
@@ -178,6 +186,19 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   /// write the working document (the operation ran while the argument was evaluated) and return
   /// that operation's @p result.
   auto PublishAfterWrite(const alcedo::EditorHistoryGuardHandle& guard, bool result) -> bool;
+  /// Builds one browser tile preview document from the graph and the root of the held image.
+  using RootPreviewBuilder = std::function<std::shared_ptr<const alcedo::PipelineGraphSnapshot>(
+      const alcedo::CommitGraph& graph, const alcedo::LoadedRootState& root)>;
+  /**
+   * @brief Shared body of BuildLutPreviewDocument and BuildPresetPreviewDocument: check the guard,
+   *        the held history, and the lineage of @p captured_current, then run @p build under the
+   *        history lock. An exception of @p build is the @p error.
+   */
+  auto BuildRootPreviewDocument(
+      const alcedo::EditorHistoryGuardHandle&                     guard,
+      const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
+      const char* noun, const RootPreviewBuilder& build,
+      std::shared_ptr<const alcedo::PipelineGraphSnapshot>* preview, std::string* error) -> bool;
 
   std::unique_ptr<EditorHistoryState>        state_;
   std::unique_ptr<EditorHistoryProjection>   projection_;

@@ -196,9 +196,10 @@ C) File-level adaptation pointers in this repository
 D) AI models that the application downloads at run time
 
 These models are not part of the installer. The AI Models settings page downloads the AI Mask
-model set (one package per platform) from https://static.aoraw.org/ai-models/v1/. Each package
-contains its license texts in licenses/ and a NOTICE.txt with the source and the training data of
-each model. The package is built by scripts/ai_models/prepare_ai_model_packages.py.
+model set and the AI Denoise model (one package per platform each) from
+https://static.aoraw.org/ai-models/v1/. Each package contains its license texts in licenses/ and a
+NOTICE.txt with the source and the training data of each model. The packages are built by
+scripts/ai_models/prepare_ai_model_packages.py.
 
 27) SAM 2.1 Hiera tiny (AI Mask: image encoder, prompt encoder, and mask decoder)
 Upstream: https://github.com/facebookresearch/sam2
@@ -240,6 +241,32 @@ Upstream: https://github.com/c-ares/c-ares
 License: MIT
 License text file: third_party_licenses/c-ares-LICENSE.md
 The corresponding source archive is in the aria2 release above.
+
+33) ONNX Runtime 1.24.4 with the DirectML execution provider (Windows: onnxruntime.dll and
+onnxruntime_providers_shared.dll, AI Denoise)
+Upstream: https://github.com/microsoft/onnxruntime, NuGet package Microsoft.ML.OnnxRuntime.DirectML
+License: MIT
+License text files:
+- third_party_licenses/onnxruntime-LICENSE.txt
+- third_party_licenses/onnxruntime-ThirdPartyNotices.txt
+
+34) DirectML 1.15.4 (Windows: DirectML.dll, AI Denoise and the AI Mask sidecar)
+Upstream: https://github.com/microsoft/DirectML, NuGet package Microsoft.AI.DirectML
+License: Microsoft Software License Terms for DirectML (redistributable with applications for
+Windows)
+License text files:
+- third_party_licenses/DirectML-LICENSE.txt
+- third_party_licenses/DirectML-ThirdPartyNotices.txt
+
+35) AI Denoise model: UtNet2 Bayer denoiser, fine-tuned by Alcedo Studio (alcedo-denoise-lab)
+from the public RawNIND weights (downloaded at run time, see the beginning of this section)
+Upstream: https://github.com/zidage/alcedo-denoise-lab; starting weights
+https://github.com/trougnouf/rawnind_jddc (Benoit Brummer and Christophe De Vleeschouwer)
+License: GPL-3.0 (the root LICENSE of this repository, without the additional permission) and
+CC BY 4.0, the licenses of the public RawNIND weights
+License text file: third_party_licenses/RawNIND-weights-CC-BY-4.0.txt
+Usage note: trained on the Raw Natural Image Noise Dataset (https://doi.org/10.14428/DVN/DEQCIM,
+CC BY-SA 4.0); exported as an FP16 ONNX graph; see the NOTICE.txt of the package.
 
 E) Redistribution reminder
 

@@ -11,7 +11,7 @@
 
 #include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/mapper/mapper.hpp"
-#include "type/mount_records.hpp"
+#include "type/source_file_record.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {

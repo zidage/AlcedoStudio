@@ -453,20 +453,20 @@ TEST(AiModelsSettingsQmlTest, PageOpenChecksTheFeedOnceAndStartupDoesNotCheck) {
   // The AI Mask card says in one sentence what the set does (no version text; the revision
   // Pill shows the version), links its GitHub project, and lists the license names.
   const QString mask = QString::fromLatin1(kAiMaskId);
-  EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsMaskSubtitle:") + mask)),
+  EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsPackageSubtitle:") + mask)),
             PanelText("Selects the subject, people, sky, and the objects that you click, box, or "
                       "draw over."));
-  QObject* mask_project = harness.item(QStringLiteral("aiModelsMaskUpstream:") + mask);
+  QObject* mask_project = harness.item(QStringLiteral("aiModelsPackageUpstream:") + mask);
   ASSERT_NE(mask_project, nullptr);
   EXPECT_TRUE(mask_project->property("visible").toBool());
   EXPECT_EQ(
-      harness.item(QStringLiteral("aiModelsMask:") + mask)->property("upstreamUrl").toString(),
+      harness.item(QStringLiteral("aiModelsPackage:") + mask)->property("upstreamUrl").toString(),
       QStringLiteral("https://github.com/zidage/alcedo-ai-mask-lab"));
-  EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsMaskLicense0:") + mask)),
+  EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsPackageLicense0:") + mask)),
             QStringLiteral("Apache-2.0"));
-  EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsMaskLicense3:") + mask)),
+  EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsPackageLicense3:") + mask)),
             QStringLiteral("GPL-3.0"));
-  EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsMaskAction:") + mask)),
+  EXPECT_EQ(Text(harness.item(QStringLiteral("aiModelsPackageAction:") + mask)),
             PanelText("Download"));
 
   // The AI Mask card has the column width and the near-square shape of the CLIP cards.
@@ -476,7 +476,7 @@ TEST(AiModelsSettingsQmlTest, PageOpenChecksTheFeedOnceAndStartupDoesNotCheck) {
                                     .toMap()
                                     .value(QStringLiteral("profileId"))
                                     .toString();
-  QObject* mask_card = harness.item(QStringLiteral("aiModelsMask:") + mask);
+  QObject* mask_card = harness.item(QStringLiteral("aiModelsPackage:") + mask);
   QObject* clip_card = harness.item(QStringLiteral("aiModelsClip:") + first_profile);
   ASSERT_NE(mask_card, nullptr);
   ASSERT_NE(clip_card, nullptr);
@@ -487,7 +487,7 @@ TEST(AiModelsSettingsQmlTest, PageOpenChecksTheFeedOnceAndStartupDoesNotCheck) {
 
   // Card titles use the section size of the type scale, not a display size, so a model name
   // stays on one line in a two-column page.
-  for (QObject* title : {harness.item(QStringLiteral("aiModelsMaskName:") + mask),
+  for (QObject* title : {harness.item(QStringLiteral("aiModelsPackageName:") + mask),
                          harness.item(QStringLiteral("aiModelsClipName:") + first_profile)}) {
     ASSERT_NE(title, nullptr);
     EXPECT_EQ(title->property("font").value<QFont>().pixelSize(),
@@ -534,7 +534,7 @@ TEST(AiModelsSettingsQmlTest, FirstDownloadOpensTheStatementAndCancelStartsNothi
   EXPECT_FALSE(harness.statement()->property("visible").toBool());
 
   // AI Mask: the statement opens instead of the download; Cancel starts nothing.
-  Press(harness.item(QStringLiteral("aiModelsMaskAction:") + QString::fromLatin1(kAiMaskId)));
+  Press(harness.item(QStringLiteral("aiModelsPackageAction:") + QString::fromLatin1(kAiMaskId)));
   ASSERT_TRUE(WaitUntil([&] { return harness.statement()->property("visible").toBool(); }));
   EXPECT_TRUE(harness.statementButton("aiModelDownloadStatementAcceptButton")
                   ->property("visible")
@@ -569,7 +569,7 @@ TEST(AiModelsSettingsQmlTest, AcceptStartsOnlyTheChosenDownloadAndTheStatementSt
   ASSERT_TRUE(harness.WaitForCheck());
   const QString mask = QString::fromLatin1(kAiMaskId);
 
-  Press(harness.item(QStringLiteral("aiModelsMaskAction:") + mask));
+  Press(harness.item(QStringLiteral("aiModelsPackageAction:") + mask));
   ASSERT_TRUE(WaitUntil([&] { return harness.statement()->property("visible").toBool(); }));
   Press(harness.statementButton("aiModelDownloadStatementAcceptButton"));
   ASSERT_TRUE(WaitUntil([&] { return !harness.statement()->property("visible").toBool(); }));
@@ -582,11 +582,11 @@ TEST(AiModelsSettingsQmlTest, AcceptStartsOnlyTheChosenDownloadAndTheStatementSt
       QStringLiteral("alcedo-ai-mask-v1-r1-%1.7z").arg(QString::fromLatin1(kPlatform))));
   EXPECT_FALSE(harness.host_->model_download()->ModelDownloadRunning());
   EXPECT_TRUE(
-      harness.item(QStringLiteral("aiModelsMaskCancel:") + mask)->property("visible").toBool());
+      harness.item(QStringLiteral("aiModelsPackageCancel:") + mask)->property("visible").toBool());
 
   // Cancel the transfer; the next download does not ask again.
-  Press(harness.item(QStringLiteral("aiModelsMaskCancel:") + mask));
-  QObject* action = harness.item(QStringLiteral("aiModelsMaskAction:") + mask);
+  Press(harness.item(QStringLiteral("aiModelsPackageCancel:") + mask));
+  QObject* action = harness.item(QStringLiteral("aiModelsPackageAction:") + mask);
   ASSERT_TRUE(WaitUntil([&] { return action->property("visible").toBool(); }));
   Press(action);
   ProcessEvents(100);

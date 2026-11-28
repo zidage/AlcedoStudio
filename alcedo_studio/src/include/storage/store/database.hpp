@@ -114,6 +114,10 @@ class Database {
   // MountRoot holds one row per mount; SourceFile holds the recorded source of a file element
   // (state 0 = present, 1 = missing; missing_since is set exactly for a missing file).
   // ElementStore removes the SourceFile row with its file element. Runs on every open.
+  // MountRoot.volume_name (#1076) is the last read display name of the volume, NULL when the
+  // volume has none. Project files written before it have no column: ADD COLUMN appends it after
+  // last_scan_at, the order of the CREATE TABLE, and every existing mount reads NULL until its
+  // next scan reaches the volume.
   constexpr static const char* mount_schema_query =
       "ALTER TABLE Element ADD COLUMN IF NOT EXISTS mount_id BIGINT;"
       "CREATE TABLE IF NOT EXISTS MountRoot ("
@@ -121,7 +125,9 @@ class Database {
       "root_folder_id BIGINT NOT NULL,"
       "volume_identity VARCHAR,"
       "root_path TEXT NOT NULL,"
-      "last_scan_at TIMESTAMP);"
+      "last_scan_at TIMESTAMP,"
+      "volume_name VARCHAR);"
+      "ALTER TABLE MountRoot ADD COLUMN IF NOT EXISTS volume_name VARCHAR;"
       "CREATE TABLE IF NOT EXISTS SourceFile ("
       "element_id BIGINT PRIMARY KEY,"
       "byte_size BIGINT NOT NULL,"

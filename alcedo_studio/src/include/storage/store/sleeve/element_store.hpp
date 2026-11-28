@@ -27,6 +27,7 @@
 #include "storage/mapper/sleeve/element/folder_mapper.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/semantic/semantic_records.hpp"
+#include "type/album_scope.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -67,19 +68,19 @@ struct ScopedFileQuery {
 
 /// Build the shared scope query fragment (FROM ... JOIN ... WHERE) for file-in-folder queries.
 /// All folder-scoped file lookups (search, stats, listing, pagination) must use this builder so
-/// the scope definition stays consistent across the application.
+/// the scope definition stays consistent across the application. See AlbumScope for the photos
+/// of each scope.
 ///
 /// Aliases: `e` Element, `fi` FileImage, `i` Image (with its search columns). Predicates on
 /// other tables (AI search text, semantic labels, BM25 documents) are subqueries on `e.id`,
 /// so the scope never joins them.
 ///
 /// @param relevance_select When set, a SELECT of `file_id, image_id, relevance` (see
-///        BuildSemanticRelevanceSelect) built for the same @p folder_id. The scope
+///        BuildSemanticRelevanceSelect) built for the same @p scope. The scope
 ///        then joins it as `rel` on the file and image ids, so only its files match, and AND-s
 ///        it with @p extra_filter. Without it the scope joins nothing more.
 auto BuildScopedFileQuery(
-    sl_element_id_t                            folder_id,
-    const std::optional<duckorm::SqlFragment>& extra_filter     = std::nullopt,
+    const AlbumScope& scope, const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt,
     const std::optional<duckorm::SqlFragment>& relevance_select = std::nullopt) -> ScopedFileQuery;
 
 struct FileListEntry {
@@ -190,14 +191,19 @@ struct ProjectOverviewCounts {
   std::optional<std::string> latest_capture_date_{};
 };
 
-/// Photo count of the whole project and of every album folder, read by
-/// ElementStore::ReadFolderImageCounts from one statement. Each count has the scope of the
-/// subtree of that folder: the distinct photos linked into the folder or into any folder below
-/// it (issue #1007). The library view of a folder shows only its own photos, so a folder with
-/// subfolders can count more than its view holds.
+/// Photo count of the whole project, of the library root, and of every album folder, read by
+/// ElementStore::ReadFolderImageCounts from one statement. Each folder count has the scope of
+/// the subtree of that folder: the distinct photos linked into the folder or into any folder
+/// below it (issue #1007). The library view of a folder shows only its own photos, so a folder
+/// with subfolders can count more than its view holds.
 struct FolderImageCounts {
-  /// Photos of the whole project: the scope of `CountFilesInFolder(0)`, the root view.
-  uint64_t                                      project_photo_count_ = 0;
+  /// Photos of the whole project: the All Photos scope (`AlbumScope(0)`), mounted photos
+  /// included.
+  uint64_t                                      project_photo_count_      = 0;
+  /// Photos of the library root row (#1076): the photos that no folder other than the root
+  /// holds (AlbumScope::LibraryRoot) and the photos of the ordinary collections. A mounted photo
+  /// counts only when an ordinary collection holds it, so the mount trees are left out.
+  uint64_t                                      library_root_photo_count_ = 0;
   /// Distinct photos of the subtree of each folder (the root left out) whose subtree holds at
   /// least one. A folder without an entry holds none in its subtree.
   std::unordered_map<sl_element_id_t, uint64_t> folder_photo_counts_{};
@@ -223,10 +229,19 @@ class ElementStore {
   Database&   database_;
 
   // Insert the element row plus its child rows (file binding / folder content) on @p conn.
-  // Does not touch sync_flag_ and does not manage a transaction, so it can run
+  // Does not change the sync flag and does not manage a transaction, so it can run
   // either autocommit (AddElement) or inside a shared transaction (AddElements).
   static void InsertElementRows(duckorm::Connection&                  conn,
                                 const std::shared_ptr<SleeveElement>& element);
+  // The rows of InsertElementRows for each element of @p elements, with multi-row statements.
+  // Same transaction-neutrality behavior as InsertElementRows.
+  static void InsertElementBatchRows(duckorm::Connection&                            conn,
+                                     std::span<const std::shared_ptr<SleeveElement>> elements);
+  // Delete the rows of each element of @p elements: for a file its pipeline, source file,
+  // image binding, semantic, AI, and FolderContent rows; for a folder its FolderContent rows;
+  // then the Element rows. Same transaction-neutrality behavior as InsertElementRows.
+  static void RemoveElementBatchRows(duckorm::Connection&                            conn,
+                                     std::span<const std::shared_ptr<SleeveElement>> elements);
   // Update the element row plus its child rows. For a folder, only the FolderContent rows of
   // the children added or removed since the last sync are written. Same
   // transaction-neutrality behavior as InsertElementRows; the caller clears the folder's
@@ -237,7 +252,7 @@ class ElementStore {
  public:
   explicit ElementStore(Database& database);
 
-  void AddElement(const std::shared_ptr<SleeveElement> element);
+  void AddElement(const std::shared_ptr<SleeveElement>& element);
   // Bulk-insert a batch of elements (and their file/folder-content child
   // rows) in a single transaction. Import sync should prefer this over the per-row
   // AddElement loop: one transaction for N elements instead of one autocommit
@@ -251,9 +266,22 @@ class ElementStore {
   void RemoveElement(const sl_element_id_t id);
   void RemoveElement(const std::shared_ptr<SleeveElement> element);
   void RemoveElements(std::span<const std::shared_ptr<SleeveElement>> elements);
-  void UpdateElement(const std::shared_ptr<SleeveElement> element);
+  void UpdateElement(const std::shared_ptr<SleeveElement>& element);
   // Bulk-update a batch of elements in a single transaction.
   void UpdateElements(std::span<const std::shared_ptr<SleeveElement>> elements);
+  /**
+   * @brief Writes the rows of one sync in one transaction: the inserts of @p inserts, the
+   *        updates of @p updates (for a folder, only its pending content changes), and the
+   *        deletes of @p deletes, in that order.
+   *
+   * Changes no element: the caller marks the elements after the call returns (Sleeve Node Cache
+   * Plan, P7). A deleted element without a row costs statements that remove nothing.
+   * @throws std::runtime_error with the DuckDB message when a statement or the commit fails.
+   *         The transaction then rolls back, so the database holds no part of the three groups.
+   */
+  void WriteSync(std::span<const std::shared_ptr<SleeveElement>> inserts,
+                 std::span<const std::shared_ptr<SleeveElement>> updates,
+                 std::span<const std::shared_ptr<SleeveElement>> deletes);
   auto GetElementById(const sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
   // Every element that FolderContent lists under @p folder_id, loaded as GetElementById loads
   // one element (SYNCED, file image binding read), with two queries for the whole folder.
@@ -343,7 +371,7 @@ class ElementStore {
    * the canonical labels of @p active_semantic_model_key only.
    *
    * With @p semantic_relevance (the embeddings of a natural-language search), the match set
-   * holds only the files of @p folder_id that the relevance rule of SemanticVectorSearch keeps
+   * holds only the files of @p scope that the relevance rule of SemanticVectorSearch keeps
    * (BuildSemanticRelevanceSelect, joined by BuildScopedFileQuery), with their relevance, and
    * the relevance select runs once for the call. Without a selected photo sort the photos then
    * order by relevance descending, then file id (see AlbumQueryOptions).
@@ -355,7 +383,7 @@ class ElementStore {
    *         not fit the model.
    */
   auto ReadAlbumQuery(
-      sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
+      const AlbumScope& scope, const std::optional<duckorm::SqlFragment>& extra_filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
       const AlbumQueryRead&                        read,
       const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
@@ -370,7 +398,7 @@ class ElementStore {
    * @throws Same as ReadAlbumQuery.
    */
   auto ReadAlbumFilePosition(
-      sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
+      const AlbumScope& scope, const std::optional<duckorm::SqlFragment>& extra_filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
       sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group,
       const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
@@ -382,13 +410,11 @@ class ElementStore {
    * @throws Same as ReadAlbumQuery; std::invalid_argument for an invalid range.
    */
   auto ReadAlbumFileIds(
-      sl_element_id_t folder_id, const std::optional<duckorm::SqlFragment>& extra_filter,
+      const AlbumScope& scope, const std::optional<duckorm::SqlFragment>& extra_filter,
       const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
       int64_t occurrence_begin, int64_t occurrence_end,
       const std::optional<SemanticQueryEmbedding>& semantic_relevance = std::nullopt) const
       -> std::vector<sl_element_id_t>;
-
-  void EnsureChildrenLoaded(sl_element_id_t folder_id);
 
   [[nodiscard]] auto GetPipelineJsonByElementId(sl_element_id_t element_id)
       -> std::optional<nlohmann::json>;
