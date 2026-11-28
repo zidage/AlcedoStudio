@@ -221,7 +221,7 @@ jobs:
         run: bash scripts/file_fuzz/ci_run.sh build/macos-arm-metal-ci
 
       - name: Upload file management fuzz failure
-        if: ${{ failure() && steps.file_fuzz.outcome == 'failure' }}
+        if: ${{ always() && (steps.file_fuzz.outcome == 'failure' || steps.file_fuzz.outcome == 'cancelled') }}
         uses: actions/upload-artifact@v4
         with:
           name: file-fuzz-failure
