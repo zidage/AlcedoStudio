@@ -57,6 +57,7 @@ The rules of the model come from the source:
 | A listing holds the regular files with a supported extension, with each name in NFC; it skips names that start with a period and does not follow links or junctions. | `ListMountDirectory` |
 | The fingerprint is a hash of the 8-byte size, the first 128 KiB, and the last 128 KiB (all bytes once for a file of 256 KiB or less). The model hashes the same bytes with SHA-256, so two files have one model key exactly when they have one fingerprint. | `ComputeSourceFileFingerprint` |
 | A scan joins the listing with the records by relative path; a different size or time is a change in place; a lost record and a new path with one fingerprint make a move (the same file name first, then the sorted order); an ordinary photo at a new path is adopted; a record below an unreadable directory stays. A directory gets a folder when it holds a listed file. | `BuildMountScanChangeList`, `MountScanRun` |
+| A new mount point (a created or attached volume) starts a scan of each offline mount, of any volume, after the volume arrival delay. | `MountScanCoordinator::HandleVolumeArrived` |
 
 Where an operation has several applicable refusals, the model accepts each of them, because the
 order of the checks differs between the commands.
@@ -124,6 +125,8 @@ the fix of its issue.
 | #1214 | Folder names with `:` on Windows |
 | #1215 | Mounted file names that are not in NFC on Windows |
 | #1218 | Hard links on Windows (NTFS keeps an old size and time in the entry of the other link) |
+| #1232 | `root_away` in watcher-on mode on Windows (the watcher does not notice a rename of the root) |
+| #1237 | Folder and disk names with a character above U+FFFF on macOS and Linux |
 
 Two answers are accepted until their issue is fixed: a `library.sync` during an import of the
 other connection answers -32002 without `data.error` (#1216), and an import of only mounted files
