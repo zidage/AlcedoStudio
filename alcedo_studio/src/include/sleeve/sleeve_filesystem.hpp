@@ -237,6 +237,11 @@ class FileSystem {
    */
   void MarkWritten(std::span<const std::shared_ptr<SleeveElement>> written);
 
+  /// Restores committed fields and child folders of the affected cache entries in place after a
+  /// failed sync. Discards newly created elements and preserves allocated IDs. Throws if the
+  /// restore fails. The caller holds the SleeveService lock.
+  void RestoreAfterFailedSync(std::span<const std::shared_ptr<SleeveElement>> affected);
+
   auto Tree(const std::filesystem::path& path) -> std::wstring;
 };
 };  // namespace alcedo

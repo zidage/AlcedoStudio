@@ -28,6 +28,7 @@
 #include <system_error>
 #include <vector>
 
+#include "../support/storage_test_access.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
@@ -39,6 +40,7 @@
 #include "image/color_label.hpp"
 #include "image/image.hpp"
 #include "json.hpp"
+#include "resources/compat/project_version_reader_012.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/project_compat_render.hpp"
@@ -46,7 +48,6 @@
 #include "support/test_temp_directory.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
-#include "../support/storage_test_access.hpp"
 
 namespace alcedo {
 namespace {
@@ -367,7 +368,7 @@ constexpr const char* kMountedElementCountSql =
     "SELECT COUNT(*) FROM Element WHERE mount_id IS NOT NULL;";
 
 // #769: a 0.10.0 project opens, gains the library mark columns with empty marks, keeps its root
-// ids, stores marks, and saves as the current version (0.15.0 since #1160).
+// ids, stores marks, and saves as the current project metadata version.
 TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds) {
   const test::TestTempDirectory temp_dir;
   TimeProvider::Refresh();
@@ -415,7 +416,9 @@ TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds
     project.SaveProject(meta_path);
   }
 
-  EXPECT_EQ(ReadProjectFileVersion(meta_path), "0.15.0");
+  EXPECT_EQ(ReadProjectFileVersion(meta_path), "0.16.0");
+  EXPECT_EQ(QueryDatabaseFileInt64(db_path, "SELECT COUNT(*) FROM PhotoStack"), 0);
+  EXPECT_EQ(QueryDatabaseFileInt64(db_path, "SELECT COUNT(*) FROM PhotoStackMember"), 0);
   EXPECT_EQ(QueryDatabaseFileInt64(db_path, kImageMarkColumnCountSql), 2);
   EXPECT_EQ(QueryDatabaseFileInt64(db_path, kMountedElementCountSql), 0);
   EXPECT_EQ(QueryDatabaseFileInt64(
@@ -443,6 +446,24 @@ TEST(ProjectCompatibilityTest, Version010ProjectGainsLibraryMarksAndKeepsRootIds
   std::filesystem::remove_all(workspace, ec);
 }
 
+TEST(ProjectCompatibilityTest, StackMetadataIsRejectedByTheVersion012Reader) {
+  EXPECT_TRUE(test::version_012::ProjectVersionIsSupported("0.10.0"));
+  EXPECT_TRUE(test::version_012::ProjectVersionIsSupported("0.11.0"));
+  EXPECT_TRUE(test::version_012::ProjectVersionIsSupported("0.12.0"));
+  EXPECT_FALSE(test::version_012::ProjectVersionIsSupported("0.13.0"));
+  EXPECT_EQ(kProjectFileVersion, "0.16.0");
+  EXPECT_FALSE(test::version_012::ProjectVersionIsSupported(kProjectFileVersion));
+  EXPECT_EQ(kPackedProjectFormatVersion, 7);
+  EXPECT_EQ(kPipelineDocumentFormatVersion, 7);
+  EXPECT_EQ(kImageEditSchemaVersion, 5);
+  EXPECT_EQ(kCommitFormatVersion, 5);
+  EXPECT_EQ(kChainFormatVersion, 5);
+  EXPECT_EQ(kRootStateFormatVersion, 5);
+  EXPECT_EQ(kCheckpointStateFormatVersion, 5);
+  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 7);
+  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v7");
+}
+
 /// Element ids of the comma-separated text of kElementIdsSql.
 auto ParseElementIds(const std::string& text) -> std::vector<sl_element_id_t> {
   std::vector<sl_element_id_t> ids;
@@ -460,7 +481,7 @@ constexpr const char* kElementIdsSql =
 
 // #983 (Mounted Folder Plan, MF1): a 0.11.0 project opens, gains Element.mount_id with NULL for
 // each element and the empty mount tables, keeps the edit history root id of its image and its
-// library marks, and saves as 0.15.0. tests/resources/compat/raw_project_016c3535b.alcd was
+// library marks, and saves as 0.16.0. tests/resources/compat/raw_project_016c3535b.alcd was
 // written by build 016c3535b (project file 0.11.0): it opened raw_project_abdb000c8.alcd, set the
 // Green label on image 1, saved, and packed the project.
 TEST(ProjectCompatibilityTest, Version011ProjectGainsMountColumnAndKeepsRootIds) {
@@ -529,7 +550,7 @@ TEST(ProjectCompatibilityTest, Version011ProjectGainsMountColumnAndKeepsRootIds)
     project.SaveProject(meta_path);
   }
 
-  EXPECT_EQ(ReadProjectFileVersion(meta_path), "0.15.0");
+  EXPECT_EQ(ReadProjectFileVersion(meta_path), "0.16.0");
   EXPECT_EQ(QueryDatabaseFileInt64(db_path, kMountColumnCountSql), 1);
   EXPECT_EQ(QueryDatabaseFileInt64(db_path, kMountTableCountSql), 2);
   EXPECT_EQ(QueryDatabaseFileInt64(db_path, kMountedElementCountSql), 0);

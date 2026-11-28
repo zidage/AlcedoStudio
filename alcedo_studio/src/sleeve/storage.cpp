@@ -9,6 +9,7 @@ Storage::Storage(std::filesystem::path db_path)
     : database_(db_path),
       element_store_(database_),
       folder_entry_store_(database_),
+      photo_stack_store_(database_),
       image_store_(database_.GetConnectionGuard()),
       source_file_store_(database_),
       mount_store_(database_, source_file_store_),
@@ -26,6 +27,8 @@ auto Storage::Maintenance() -> StorageMaintenance& { return maintenance_; }
 auto Storage::GetElementStore() -> ElementStore& { return element_store_; }
 
 auto Storage::GetFolderEntryStore() -> FolderEntryStore& { return folder_entry_store_; }
+
+auto Storage::GetPhotoStackStore() -> PhotoStackStore& { return photo_stack_store_; }
 
 auto Storage::GetImageStore() -> ImageStore& { return image_store_; }
 

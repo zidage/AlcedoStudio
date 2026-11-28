@@ -550,6 +550,34 @@ void FileSystem::MarkWritten(std::span<const std::shared_ptr<SleeveElement>> wri
   }
 }
 
+void FileSystem::RestoreAfterFailedSync(
+    std::span<const std::shared_ptr<SleeveElement>> affected) {
+  auto  session = storage_service_.OpenSession();
+  auto& store   = storage_service_.GetElementStore();
+  auto& entries = storage_service_.GetFolderEntryStore();
+  resolver_.InvalidateAll();
+  for (const auto& element : affected) {
+    if (store.RestoreElement(*element)) {
+      continue;
+    }
+    if (element == root_) {
+      root_->Clear();
+      root_->MarkContentSynced();
+      root_->SetSyncFlag(SyncFlag::UNSYNC);
+    } else {
+      element->SetSyncFlag(SyncFlag::DELETED);
+      nodes_.Erase(element->element_id_);
+    }
+  }
+  for (const auto& element : affected) {
+    if (element->type_ == ElementType::FOLDER && element->SyncState() == SyncFlag::SYNCED) {
+      auto& folder = static_cast<SleeveFolder&>(*element);
+      folder.RestoreChildFolders(entries.ReadChildFolderIds(folder.element_id_),
+                                 [this](sl_element_id_t id) { return nodes_.Find(id); });
+    }
+  }
+}
+
 void FileSystem::SyncToDB() {
   auto& element_ctrl = storage_service_.GetElementStore();
   for (const auto& element : nodes_.DirtyElements()) {

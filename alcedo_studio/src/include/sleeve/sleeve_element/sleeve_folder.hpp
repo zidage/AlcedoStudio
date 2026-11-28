@@ -5,9 +5,11 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -95,6 +97,12 @@ class SleeveFolder : public SleeveElement {
    */
   void AddElementToMap(const std::shared_ptr<SleeveElement> element, bool change_sync,
                        bool increment_ref_count);
+  /// Restores committed child folders in entry order, preserving their reference counts and
+  /// sync flags. Clears pending membership and cached filter results. The caller holds the
+  /// FileSystem lock and must prevent further access if restoration throws.
+  void RestoreChildFolders(
+      std::span<const sl_element_id_t> child_ids,
+      const std::function<std::shared_ptr<SleeveElement>(sl_element_id_t)>& resolve);
   void ReplaceChild(const sl_element_id_t from, const sl_element_id_t to);
   /// Replaces the child folder @p old_id under @p name with @p new_id (copy-on-write).
   void UpdateElementMap(const file_name_t& name, const sl_element_id_t old_id,

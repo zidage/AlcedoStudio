@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -32,6 +33,7 @@
 #include <vector>
 
 #include "app/import_service.hpp"
+#include "app/photo_stack_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "image/image.hpp"
@@ -1238,13 +1240,18 @@ TEST_F(MountServiceTest, FileOutsideTheMountIsRefusedForLocate) {
   EXPECT_EQ(HomeFoldersOf(mount_id, file_id), std::vector<std::wstring>{L"Day2"});
 }
 
-TEST_F(MountServiceTest, RemoveMissingPhotosRemovesExactlyTheMissingPhotos) {
+TEST_F(MountServiceTest, RemoveMissingPhotosRepairsStacksAndKeepsOtherPhotos) {
   WriteTrip(L"Japan");
   WriteTrip(L"Italy");
   const auto japan       = MountAndScan(L"Japan");
   const auto italy       = MountAndScan(L"Italy");
   const auto files       = FilesOf(japan);
   const auto italy_files = FilesOf(italy);
+  const auto stacks      = project_->GetPhotoStackService();
+  const std::array members{files.at(L"a.jpg"), files.at(L"Day1/b.jpg"),
+                           files.at(L"Day2/d.jpg"), italy_files.at(L"a.jpg")};
+  const auto stack = stacks->CreateStack(members, members.front());
+  ASSERT_TRUE(stack.Changed());
   stdfs::remove(disk_ / "Japan" / "a.jpg");
   stdfs::remove(disk_ / "Japan" / "Day2" / "d.jpg");
   stdfs::remove(disk_ / "Italy" / "a.jpg");
@@ -1273,6 +1280,9 @@ TEST_F(MountServiceTest, RemoveMissingPhotosRemovesExactlyTheMissingPhotos) {
     auto session = project_->GetStorage()->OpenSession();
     EXPECT_FALSE(session.CommitGraph().LoadGraph(id).has_value());
   }
+  EXPECT_EQ(stacks->ReadMemberIds(stack.stack_id),
+            (std::vector<sl_element_id_t>{members[1], members[3]}));
+  test::ExpectStorageInvariants(*project_->GetStorage());
   EXPECT_EQ(FilesOf(japan), (std::map<std::wstring, sl_element_id_t>{
                                 {L"Day1/b.jpg", files.at(L"Day1/b.jpg")},
                                 {L"Day1/Morning/c.jpg", files.at(L"Day1/Morning/c.jpg")}}));

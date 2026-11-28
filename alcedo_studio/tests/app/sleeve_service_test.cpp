@@ -8,7 +8,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <map>
@@ -34,6 +36,8 @@
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/storage.hpp"
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/store/mount/mount_store.hpp"
 #include "support/test_temp_directory.hpp"
 #include "type/mount_records.hpp"
@@ -223,6 +227,12 @@ void WriteStoredExposure(Storage& storage, sl_element_id_t id, float exposure_ev
 
 TEST(ProjectVersionTests, MiniGitSchemaBumpRejectsPreviousProjectVersion) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
+  EXPECT_EQ(project_pack::kProjectFileVersion, "0.13.0");
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.10.0"));
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.11.0"));
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.12.0"));
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.13.0"));
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.14.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.5"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.4"));
 }
@@ -1197,6 +1207,61 @@ TEST_F(SleeveServiceTests, FolderMoveAndRenameRefuseOwnSubtreeAndTakenNames) {
   EXPECT_NE(service->ResolveFolder(L"/B/Same"), nullptr);
 }
 
+TEST_F(SleeveServiceTests, PublicSyncCommitsPendingFolderChangesAndPreservesIdentity) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     service = project.GetSleeveService();
+  const auto     parent  = service->CreateFolder(L"/", L"Parent").first;
+  const auto     child   = service->Write_NoSync<std::shared_ptr<SleeveElement>>(
+      [](FileSystem& fs) { return fs.Create(L"/Parent", L"Child", ElementType::FOLDER); });
+  EXPECT_EQ(parent->SyncState(), SyncFlag::MODIFIED);
+  EXPECT_EQ(child->SyncState(), SyncFlag::UNSYNC);
+  const auto result = service->Sync();
+  ASSERT_TRUE(result.success_) << result.message_;
+  EXPECT_EQ(result.elements_synced_, 2);
+  EXPECT_EQ(service->ResolveFolder(L"/Parent"), parent);
+  EXPECT_EQ(service->ResolveElement(L"/Parent/Child"), child);
+  EXPECT_EQ(parent->SyncState(), SyncFlag::SYNCED);
+  EXPECT_EQ(child->SyncState(), SyncFlag::SYNCED);
+  EXPECT_TRUE(parent->ContentAddedSinceSync().empty());
+  EXPECT_EQ(project.GetStorage()->GetElementStore().GetFolderContent(parent->element_id_),
+            std::vector<sl_element_id_t>{child->element_id_});
+  EXPECT_EQ(service->Sync().elements_synced_, 0);
+}
+
+TEST_F(SleeveServiceTests, FailedFirstSyncKeepsRootUsableAndDoesNotReuseDiscardedIds) {
+  ProjectService project(db_path_, meta_path_);
+  const auto     service = project.GetSleeveService();
+  const auto     root    = service->ResolveFolder(L"/");
+  {
+    auto guard = StorageTestAccess::GetDatabase(*project.GetStorage()).GetConnectionGuard();
+    auto lock  = guard.Lock();
+    duckorm::execute(guard.conn_, duckorm::expr::raw("DROP TABLE FileImage"));
+    duckorm::execute(
+        guard.conn_,
+        duckorm::expr::raw(
+            "CREATE TABLE FileImage (file_id BIGINT, image_id BIGINT CHECK(image_id <> 0))"));
+  }
+  const auto rejected = service->CreateFileInLibrary(L"Rejected.jpg");
+  ASSERT_FALSE(rejected.second.success_);
+  EXPECT_EQ(rejected.first->SyncState(), SyncFlag::DELETED);
+  EXPECT_THROW(project.GetStorage()->GetElementStore().GetElementById(0), std::runtime_error);
+  EXPECT_THROW(project.GetStorage()->GetElementStore().GetElementById(rejected.first->element_id_),
+               std::runtime_error);
+  EXPECT_TRUE(project.GetStorage()->GetElementStore().GetFolderContent(0).empty());
+  EXPECT_EQ(service->ResolveFolder(L"/"), root);
+  EXPECT_EQ(root->SyncState(), SyncFlag::UNSYNC);
+  EXPECT_TRUE(root->ListElements().empty());
+  EXPECT_TRUE(root->ContentAddedSinceSync().empty());
+  EXPECT_TRUE(service->Read<std::vector<sl_element_id_t>>(
+      [](FileSystem& fs) { return fs.ListFileIds(0); }).empty());
+  const auto next = service->CreateFolder(L"/", L"Next");
+  ASSERT_TRUE(next.second.success_) << next.second.message_;
+  EXPECT_GT(next.first->element_id_, rejected.first->element_id_);
+  EXPECT_EQ(service->ResolveFolder(L"/"), root);
+  EXPECT_EQ(root->SyncState(), SyncFlag::SYNCED);
+  EXPECT_TRUE(root->HoldsChildFolder(next.first->element_id_));
+}
+
 // Read-only structure of a mounted folder (mounted_folder_plan.md, MF5). The tests set the mount
 // id through the sleeve tree and the source records through MountStore; MountService is not
 // needed for the check.
@@ -1296,6 +1361,30 @@ void ExpectSleeveError(SleeveError expected, Operation&& operation) {
   } catch (const SleeveOperationError& error) {
     EXPECT_EQ(error.Code(), expected) << error.what();
   }
+}
+
+TEST_F(MountedFolderStructureTest, FailedMountRemovalRestoresFileMountIdsAndLinks) {
+  const auto before = Tree();
+  {
+    auto guard = StorageTestAccess::GetDatabase(*project_->GetStorage()).GetConnectionGuard();
+    auto lock  = guard.Lock();
+    duckorm::execute(
+        guard.conn_,
+        duckorm::expr::raw("CREATE TABLE ProtectedMountRoot (id BIGINT REFERENCES Element(id))"));
+    duckorm::execute(guard.conn_, {"INSERT INTO ProtectedMountRoot VALUES (?)",
+                                  {static_cast<std::int64_t>(mount_root_id_)}});
+  }
+
+  const std::array files{present_file_id_, missing_file_id_};
+  const auto failed = Sleeve().RemoveMountTree(mount_root_id_, kMount, files);
+
+  ASSERT_FALSE(failed.success_);
+  EXPECT_NE(failed.message_.find("Constraint"), std::string::npos);
+  EXPECT_EQ(Tree(), before);
+  Sleeve().Read<void>([&](FileSystem& fs) {
+    EXPECT_EQ(fs.Get(present_file_id_)->mount_id_, kMount);
+    EXPECT_EQ(fs.Get(missing_file_id_)->mount_id_, kMount);
+  });
 }
 
 TEST_F(MountedFolderStructureTest, EachStructureOperationOnAMountedFolderReturnsTheNamedError) {
@@ -1606,7 +1695,7 @@ TEST_F(SleeveServiceTests, SyncOnASecondThreadKeepsTheNodeCacheWhole) {
             ids);
 }
 
-TEST_F(SleeveServiceTests, FailedSyncLeavesDatabaseUnchangedAndRetrySucceeds) {
+TEST_F(SleeveServiceTests, FailedSyncRestoresCommittedStateAndExplicitRetrySucceeds) {
   ProjectService project(db_path_, meta_path_);
   auto           service              = project.GetSleeveService();
   const auto [folder, folder_created] = service->CreateFolder(L"/", L"Old");
@@ -1621,11 +1710,12 @@ TEST_F(SleeveServiceTests, FailedSyncLeavesDatabaseUnchangedAndRetrySucceeds) {
   // fails after the insert and the update ran in the same transaction.
   ExecuteOnProjectDatabase(project, "ALTER TABLE SourceFile RENAME TO SourceFileAside");
   sl_element_id_t added_id      = 0;
-  const auto      failed_result = service->Write<void>([&](FileSystem& fs) {
+  const auto      edit = [&](FileSystem& fs) {
     added_id = fs.CreateFileInLibrary(L"Added.ARW")->element_id_;
     fs.RenameFolder(L"/Old", L"New");
     fs.DeleteFileEverywhere(removed_id);
-  });
+  };
+  const auto failed_result = service->Write<void>(edit);
   ASSERT_FALSE(failed_result.success_);
   EXPECT_NE(failed_result.message_.find("SourceFile"), std::string::npos) << failed_result.message_;
 
@@ -1635,21 +1725,14 @@ TEST_F(SleeveServiceTests, FailedSyncLeavesDatabaseUnchangedAndRetrySucceeds) {
   EXPECT_EQ(FolderContentRowIds(project, 0).count(added_id), 0u);
   EXPECT_EQ(FolderContentRowIds(project, 0).count(removed_id), 1u);
 
-  const auto dirty = service->Read<std::map<sl_element_id_t, SyncFlag>>([](FileSystem& fs) {
-    std::map<sl_element_id_t, SyncFlag> flags;
-    for (const auto& element : fs.DirtyElements()) {
-      flags[element->element_id_] = element->SyncState();
-    }
-    return flags;
-  });
-  EXPECT_EQ(dirty, (std::map<sl_element_id_t, SyncFlag>{{0, SyncFlag::MODIFIED},
-                                                        {folder_id, SyncFlag::MODIFIED},
-                                                        {removed_id, SyncFlag::DELETED},
-                                                        {added_id, SyncFlag::UNSYNC}}))
-      << "each element keeps its flag and its place in the dirty list";
+  EXPECT_EQ(service->Read<std::size_t>([](FileSystem& fs) { return fs.Nodes().DirtyCount(); }), 0u);
+  EXPECT_EQ(service->ResolveFolder(L"/Old"), folder);
+  EXPECT_EQ(removed->SyncState(), SyncFlag::SYNCED);
 
   ExecuteOnProjectDatabase(project, "ALTER TABLE SourceFileAside RENAME TO SourceFile");
-  const auto retry_result = service->Write<void>([](FileSystem&) {});
+  const auto discarded_id = added_id;
+  const auto retry_result = service->Write<void>(edit);
+  EXPECT_GT(added_id, discarded_id);
   ASSERT_TRUE(retry_result.success_) << retry_result.message_;
   EXPECT_EQ(retry_result.elements_synced_, 4u);
 

@@ -67,6 +67,9 @@ class FolderEntryStore {
    */
   auto ReadFolderFiles(sl_element_id_t folder_id) const -> std::vector<sl_element_id_t>;
 
+  /// Stored child folder ids in entry order. Loads no elements.
+  auto ReadChildFolderIds(sl_element_id_t folder_id) const -> std::vector<sl_element_id_t>;
+
   /**
    * @brief The ids of @p file_ids that name a file element with a `FolderContent` row in
    *        @p folder_id, in id order, with one statement. Loads no element. An empty
@@ -89,9 +92,9 @@ class FolderEntryStore {
   auto ReadMountFileFolders(mount_id_t mount_id) const -> std::vector<MountFileFolderRow>;
 
  private:
-  /// The file ids of the rows of @p folder_id that @p condition also selects (an extra
+  /// The child ids of @p type under @p folder_id that @p condition also selects (an extra
   /// predicate on `fc.element_id`, or an empty fragment).
-  auto ReadFileRows(sl_element_id_t folder_id, duckorm::SqlFragment condition) const
+  auto ReadChildIds(sl_element_id_t folder_id, ElementType type, duckorm::SqlFragment condition) const
       -> std::vector<sl_element_id_t>;
 
   Database& database_;

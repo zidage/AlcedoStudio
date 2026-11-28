@@ -252,6 +252,10 @@ class ElementStore {
  public:
   explicit ElementStore(Database& database);
 
+  /// Restore the committed fields and file binding on an existing identity. The caller holds
+  /// the FileSystem lock. Returns false if the element has no stored row. Propagates SQL errors.
+  auto RestoreElement(SleeveElement& element) -> bool;
+
   void AddElement(const std::shared_ptr<SleeveElement>& element);
   // Bulk-insert a batch of elements (and their file/folder-content child
   // rows) in a single transaction. Import sync should prefer this over the per-row
@@ -263,8 +267,11 @@ class ElementStore {
   void RemoveFolderContent(sl_element_id_t folder_id, sl_element_id_t content_id);
   auto GetFolderContent(const sl_element_id_t folder_id) -> std::vector<sl_element_id_t>;
 
+  /// Removes only the Element row. Full file removal uses the overload below.
   void RemoveElement(const sl_element_id_t id);
+  /// Full removal on one transaction, including File bindings, folder links, and stack repair.
   void RemoveElement(const std::shared_ptr<SleeveElement> element);
+  /// Full batch removal and stack repair in the same transaction.
   void RemoveElements(std::span<const std::shared_ptr<SleeveElement>> elements);
   void UpdateElement(const std::shared_ptr<SleeveElement>& element);
   // Bulk-update a batch of elements in a single transaction.

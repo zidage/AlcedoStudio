@@ -162,42 +162,48 @@ auto SleeveServiceImpl::Sync() -> SyncResult {
 }
 
 auto SleeveServiceImpl::SyncLocked() -> SyncResult {
-  SyncResult result{true, 0, ""};
-  try {
-    // The dirty list holds each changed element once with its current flag, so the three
-    // groups do not overlap. An element that a write created and deleted is in the deletes.
-    const auto                                  dirty = fs_->DirtyElements();
-    std::vector<std::shared_ptr<SleeveElement>> inserts;
-    std::vector<std::shared_ptr<SleeveElement>> updates;
-    std::vector<std::shared_ptr<SleeveElement>> deletes;
-    for (const auto& element : dirty) {
-      switch (element->SyncState()) {
-        case SyncFlag::UNSYNC:
-          LogSyncElement("Unsynced", element);
-          inserts.push_back(element);
-          break;
-        case SyncFlag::MODIFIED:
-          LogSyncElement("Modified", element);
-          updates.push_back(element);
-          break;
-        case SyncFlag::DELETED:
-          LogSyncElement("Deleted", element);
-          deletes.push_back(element);
-          break;
-        case SyncFlag::SYNCED:
-          break;
-      }
-    }
-    // One transaction: a failure leaves the database and the dirty list unchanged, and the
-    // next sync writes the same elements.
-    storage_->GetElementStore().WriteSync(inserts, updates, deletes);
-    fs_->MarkWritten(dirty);
-    result.elements_synced_ = static_cast<uint32_t>(dirty.size());
-  } catch (std::exception& e) {
-    result.success_ = false;
-    result.message_ = e.what();
+  if (!sync_restore_error_.empty()) {
+    return {false, 0, sync_restore_error_};
   }
-  return result;
+
+  const auto dirty = fs_->DirtyElements();
+  std::vector<std::shared_ptr<SleeveElement>> inserts;
+  std::vector<std::shared_ptr<SleeveElement>> updates;
+  std::vector<std::shared_ptr<SleeveElement>> deletes;
+  for (const auto& element : dirty) {
+    switch (element->SyncState()) {
+      case SyncFlag::UNSYNC:
+        LogSyncElement("Unsynced", element);
+        inserts.push_back(element);
+        break;
+      case SyncFlag::MODIFIED:
+        LogSyncElement("Modified", element);
+        updates.push_back(element);
+        break;
+      case SyncFlag::DELETED:
+        LogSyncElement("Deleted", element);
+        deletes.push_back(element);
+        break;
+      case SyncFlag::SYNCED:
+        break;
+    }
+  }
+
+  try {
+    storage_->GetElementStore().WriteSync(inserts, updates, deletes);
+  } catch (const std::exception& error) {
+    try {
+      fs_->RestoreAfterFailedSync(dirty);
+    } catch (const std::exception& restore_error) {
+      sync_restore_error_ =
+          std::string(error.what()) + "\nFileSystem restoration failed: " + restore_error.what();
+      return {false, 0, sync_restore_error_};
+    }
+    return {false, 0, error.what()};
+  }
+
+  fs_->MarkWritten(dirty);
+  return {true, static_cast<uint32_t>(dirty.size()), ""};
 }
 
 auto SleeveServiceImpl::CanEditFolderStructure(const SleeveElement& folder) -> bool {
@@ -374,6 +380,10 @@ auto SleeveServiceImpl::DuplicateFileToFolder(sl_element_id_t file_id,
                                               sl_element_id_t folder_id)
     -> std::pair<std::shared_ptr<SleeveFile>, SyncResult> {
   std::lock_guard<std::mutex> lock(fs_lock_);
+
+  if (!sync_restore_error_.empty()) {
+    throw std::runtime_error(sync_restore_error_);
+  }
 
   RequireEditableFolder(*fs_, folder_id);
   auto       duplicated  = fs_->DuplicateFileToFolder(file_id, folder_id);

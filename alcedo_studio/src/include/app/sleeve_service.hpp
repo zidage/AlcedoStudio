@@ -11,6 +11,8 @@
 #include <memory>
 #include <mutex>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -62,9 +64,10 @@ class SleeveServiceImpl final : public SleeveService {
 
   mutable std::mutex fs_lock_;  // Use a fat lock for now, but I have no plan to design a
                                 // fine-grained concurrency model for FS
+  std::string sync_restore_error_;
 
   /// The sync itself. The caller holds `fs_lock_`: it reads the dirty list of the node cache and
-  /// moves the written elements to the clean list.
+  /// moves the written elements to the clean list. On SQL failure it restores committed state.
   auto SyncLocked() -> SyncResult;
 
  public:
@@ -80,6 +83,9 @@ class SleeveServiceImpl final : public SleeveService {
   template <typename TResult>
   auto Read(std::function<TResult(FileSystem&)> operation) -> TResult {
     std::lock_guard<std::mutex> lock(fs_lock_);
+    if (!sync_restore_error_.empty()) {
+      throw std::runtime_error(sync_restore_error_);
+    }
     if constexpr (std::is_void_v<TResult>) {
       operation(*fs_);
       fs_->EvictToLimit();
@@ -97,6 +103,10 @@ class SleeveServiceImpl final : public SleeveService {
                             std::pair<TResult, SyncResult>> {
     std::lock_guard<std::mutex> lock(fs_lock_);
 
+    if (!sync_restore_error_.empty()) {
+      throw std::runtime_error(sync_restore_error_);
+    }
+
     if constexpr (std::is_void_v<TResult>) {
       operation(*fs_);
       SyncResult sync_result = SyncLocked();  // void: only return SyncResult
@@ -113,6 +123,9 @@ class SleeveServiceImpl final : public SleeveService {
   template <typename TResult>
   auto Write_NoSync(std::function<TResult(FileSystem&)> operation) -> TResult {
     std::lock_guard<std::mutex> lock(fs_lock_);
+    if (!sync_restore_error_.empty()) {
+      throw std::runtime_error(sync_restore_error_);
+    }
 
     if constexpr (std::is_void_v<TResult>) {
       operation(*fs_);
@@ -127,7 +140,7 @@ class SleeveServiceImpl final : public SleeveService {
 
 
   /// Writes the changed elements to the database in one `fs_lock_` scope. A caller on any
-  /// thread can call it; a caller that holds `fs_lock_` uses SyncLocked.
+  /// thread can call it. If restoration fails, further access requires reopening the project.
   auto Sync() -> SyncResult override;
 
   /**

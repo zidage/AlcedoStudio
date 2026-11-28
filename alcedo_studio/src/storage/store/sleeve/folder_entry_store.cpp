@@ -71,7 +71,7 @@ auto FolderEntryStore::ReadFolderTree() const -> FolderTreeRows {
 
 auto FolderEntryStore::ReadFolderFiles(sl_element_id_t folder_id) const
     -> std::vector<sl_element_id_t> {
-  return ReadFileRows(folder_id, duckorm::SqlFragment{});
+  return ReadChildIds(folder_id, ElementType::FILE, duckorm::SqlFragment{});
 }
 
 auto FolderEntryStore::ReadHeldFiles(sl_element_id_t                  folder_id,
@@ -82,7 +82,7 @@ auto FolderEntryStore::ReadHeldFiles(sl_element_id_t                  folder_id,
   }
   auto condition = duckorm::SqlFragment{" AND ", {}};
   condition.append(duckorm::expr::in_list(duckorm::expr::col("fc.element_id"), file_ids));
-  return ReadFileRows(folder_id, std::move(condition));
+  return ReadChildIds(folder_id, ElementType::FILE, std::move(condition));
 }
 
 auto FolderEntryStore::ReadMountFileFolders(mount_id_t mount_id) const
@@ -115,7 +115,13 @@ auto FolderEntryStore::ReadMountFileFolders(mount_id_t mount_id) const
   return links;
 }
 
-auto FolderEntryStore::ReadFileRows(sl_element_id_t folder_id, duckorm::SqlFragment condition) const
+auto FolderEntryStore::ReadChildFolderIds(sl_element_id_t folder_id) const
+    -> std::vector<sl_element_id_t> {
+  return ReadChildIds(folder_id, ElementType::FOLDER, {});
+}
+
+auto FolderEntryStore::ReadChildIds(sl_element_id_t folder_id, ElementType type,
+                                    duckorm::SqlFragment condition) const
     -> std::vector<sl_element_id_t> {
   duckorm::SqlFragment query{
       "SELECT fc.folder_id, fc.element_id FROM FolderContent fc "
@@ -123,19 +129,19 @@ auto FolderEntryStore::ReadFileRows(sl_element_id_t folder_id, duckorm::SqlFragm
       {}};
   query.append(duckorm::expr::param(static_cast<int64_t>(folder_id)));
   query.append(duckorm::SqlFragment{" AND e.type = ", {}});
-  query.append(duckorm::expr::param(static_cast<int64_t>(ElementType::FILE)));
+  query.append(duckorm::expr::param(static_cast<int64_t>(type)));
   query.append(std::move(condition));
   query.append(duckorm::SqlFragment{" ORDER BY fc.element_id", {}});
 
   auto                         guard   = database_.GetConnectionGuard();
   auto                         db_lock = guard.Lock();
   const auto                   rows    = FolderMapper(guard.conn_).GetByQuery(query);
-  std::vector<sl_element_id_t> file_ids;
-  file_ids.reserve(rows.size());
-  for (const auto& [_, file_id] : rows) {
-    file_ids.push_back(file_id);
+  std::vector<sl_element_id_t> child_ids;
+  child_ids.reserve(rows.size());
+  for (const auto& [_, child_id] : rows) {
+    child_ids.push_back(child_id);
   }
-  return file_ids;
+  return child_ids;
 }
 
 }  // namespace alcedo

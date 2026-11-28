@@ -17,6 +17,7 @@
 #include "storage/store/semantic/semantic_vector_search.hpp"
 #include "storage/store/sleeve/element_store.hpp"
 #include "storage/store/sleeve/folder_entry_store.hpp"
+#include "storage/store/sleeve/photo_stack_store.hpp"
 #include "storage/store/storage_maintenance.hpp"
 #include "storage/store/storage_session.hpp"
 #include "type/type.hpp"
@@ -35,6 +36,7 @@ class Storage {
   Database                                                              database_;
   ElementStore                                                         element_store_;
   FolderEntryStore                                                     folder_entry_store_;
+  PhotoStackStore                                                      photo_stack_store_;
   ImageStore                                                         image_store_;
   SourceFileStore                                                       source_file_store_;
   MountStore                                                           mount_store_;
@@ -65,6 +67,8 @@ class Storage {
   auto GetElementStore() -> ElementStore&;
   /// Folder structure reads that load no file element (see FolderEntryStore).
   auto GetFolderEntryStore() -> FolderEntryStore&;
+  /// Project-owned stack operations; callers never retain a connection or mutable membership.
+  auto GetPhotoStackStore() -> PhotoStackStore&;
   auto GetImageStore() -> ImageStore&;
   auto GetSourceFileStore() -> SourceFileStore&;
   /// MountRoot and SourceFile rows (mounted folders).

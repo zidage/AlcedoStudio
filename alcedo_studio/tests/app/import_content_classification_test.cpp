@@ -389,14 +389,26 @@ TEST_F(ImportProjectTest, ThrowingProgressCallbackDoesNotBlockImportCompletion) 
 TEST_F(ImportProjectTest, SyncFailureIsReportedWithoutSourceRecords) {
   ProjectService project(db_path_, meta_path_);
   auto           sleeve = project.GetSleeveService();
+  ASSERT_TRUE(sleeve->Sync().success_);
+  const auto root = sleeve->ResolveFolder(L"/");
+  // The saved root has the same element type as the pending folder. Reject the insert while
+  // leaving the committed rows readable for FileSystem restoration.
+  ExecuteStorageSql(project, "CREATE UNIQUE INDEX ImportSyncUniqueElementType ON Element(type)");
   sleeve->Write_NoSync<void>(
       [](FileSystem& fs) { fs.Create(L"/", L"Pending", ElementType::FOLDER); });
   ImportServiceImpl importer(sleeve, project.GetImagePoolService(),
                              std::make_shared<PipelineMgmtService>(project.GetStorage()));
-  ExecuteStorageSql(project, "ALTER TABLE Element RENAME TO ElementsDuringImportTest");
   EXPECT_THROW(importer.SyncImports({}, L""), std::runtime_error);
-  ExecuteStorageSql(project, "ALTER TABLE ElementsDuringImportTest RENAME TO Element");
-  EXPECT_TRUE(sleeve->Sync().success_);
+  EXPECT_EQ(sleeve->ResolveFolder(L"/"), root);
+  EXPECT_THROW(sleeve->ResolveFolder(L"/Pending"), std::runtime_error);
+  EXPECT_EQ(CountRows(project, "Element"), 1);
+  EXPECT_EQ(CountRows(project, "SourceFile"), 0);
+
+  ExecuteStorageSql(project, "DROP INDEX ImportSyncUniqueElementType");
+  const auto retried = sleeve->CreateFolder(L"/", L"Pending");
+  ASSERT_TRUE(retried.second.success_) << retried.second.message_;
+  EXPECT_EQ(sleeve->ResolveFolder(L"/Pending"), retried.first);
+  EXPECT_EQ(CountRows(project, "Element"), 2);
 }
 
 TEST_F(ImportContentClassificationTest, NikonCfaAndCameraTaggedRgbTiffImportAsDistinctTypes) {

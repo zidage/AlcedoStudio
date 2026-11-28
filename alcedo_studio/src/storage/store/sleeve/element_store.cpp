@@ -36,6 +36,7 @@
 #include "storage/store/semantic/semantic_vector_search.hpp"
 #include "storage/store/sleeve/album_edit_state_sql.hpp"
 #include "storage/store/sleeve/album_query_sql.hpp"
+#include "storage/store/sleeve/photo_stack_store.hpp"
 #include "type/type.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 #include "utils/string/convert.hpp"
@@ -729,7 +730,11 @@ ElementStore::ElementStore(Database& database) : database_(database) {}
 void ElementStore::AddElement(const std::shared_ptr<SleeveElement>& element) {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
-  InsertElementRows(guard.conn_, element);
+  {
+    duckorm::Transaction transaction(guard.conn_);
+    InsertElementRows(guard.conn_, element);
+    transaction.commit();
+  }
   MarkFolderContentsSynced(std::span<const std::shared_ptr<SleeveElement>>(&element, 1));
   element->SetSyncFlag(SyncFlag::SYNCED);
 }
@@ -791,6 +796,26 @@ void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> e
   for (const auto& element : elements) {
     element->SetSyncFlag(SyncFlag::SYNCED);
   }
+}
+
+auto ElementStore::RestoreElement(SleeveElement& element) -> bool {
+  auto       guard = database_.GetConnectionGuard();
+  auto       lock  = guard.Lock();
+  const auto row   = ElementMapper(guard.conn_).GetById(element.element_id_);
+  if (!row) {
+    return false;
+  }
+  std::optional<image_id_t> image_id;
+  if (element.type_ == ElementType::FILE) {
+    const auto binding = FileMapper(guard.conn_).GetById(element.element_id_);
+    image_id = binding ? binding->image_id : 0;
+  }
+  ElementMapper::RestoreFields(element, *row);
+  if (image_id) {
+    static_cast<SleeveFile&>(element).image_id_ = *image_id;
+  }
+  element.SetSyncFlag(SyncFlag::SYNCED);
+  return true;
 }
 
 /**
@@ -890,11 +915,8 @@ auto ElementStore::GetFolderContent(const sl_element_id_t folder_id)
  *
  * Low-level row delete: removes the Element row only. It does NOT cascade
  * AI / semantic / pipeline / file-binding rows — that orchestration
- * lives at the service layer (SleeveServiceImpl::DeleteElement flows through
- * Write -> Sync -> RemoveElements / RemoveElement(shared_ptr), which call
- * DeleteSemanticAndAiRowsForFiles on the same connection). Keep this primitive
- * a pure row delete so the storage-controller layer does not reach back up
- * into element-fetch / cascade orchestration.
+ * runs in RemoveElementBatchRows, shared by WriteSync and full standalone removal. It repairs
+ * stacks and removes file-owned rows on the same transaction connection.
  *
  * @param id
  */
@@ -905,21 +927,7 @@ void ElementStore::RemoveElement(const sl_element_id_t id) {
 }
 
 void ElementStore::RemoveElement(const std::shared_ptr<SleeveElement> element) {
-  auto guard   = database_.GetConnectionGuard();
-  auto db_lock = guard.Lock();
-  if (element->type_ == ElementType::FILE) {
-    auto file = std::static_pointer_cast<SleeveFile>(element);
-    DeleteSemanticAndAiRowsForFiles(guard.conn_,
-                                    std::span<const sl_element_id_t>(&file->element_id_, 1));
-    PipelineMapper(guard.conn_).RemoveById(file->element_id_);
-    SourceFileMapper(guard.conn_).RemoveById(file->element_id_);
-    FileMapper(guard.conn_).RemoveById(file->element_id_);
-    FolderMapper(guard.conn_).RemoveContentById(file->element_id_);
-  } else if (element->type_ == ElementType::FOLDER) {
-    auto folder = std::static_pointer_cast<SleeveFolder>(element);
-    FolderMapper(guard.conn_).RemoveById(folder->element_id_);
-  }
-  ElementMapper(guard.conn_).RemoveById(element->element_id_);
+  RemoveElements(std::span<const std::shared_ptr<SleeveElement>>(&element, 1));
 }
 
 void ElementStore::RemoveElements(std::span<const std::shared_ptr<SleeveElement>> elements) {
@@ -959,16 +967,17 @@ void ElementStore::RemoveElementBatchRows(
 
   FolderMapper folder_mapper(conn);
   if (!file_ids.empty()) {
+    PhotoStackStore::RemoveFileMemberships(conn, file_ids);
     DeleteSemanticAndAiRowsForFiles(conn, file_ids);
     PipelineMapper(conn).RemoveByIds(file_ids);
     SourceFileMapper(conn).RemoveByIds(file_ids);
     FileMapper(conn).RemoveByIds(file_ids);
-    folder_mapper.RemoveContentByIds(file_ids);
   }
   if (!folder_ids.empty()) {
     folder_mapper.RemoveByIds(folder_ids);
   }
   if (!element_ids.empty()) {
+    folder_mapper.RemoveContentByIds(element_ids);
     ElementMapper(conn).RemoveByIds(element_ids);
   }
 }
@@ -981,7 +990,11 @@ void ElementStore::RemoveElementBatchRows(
 void ElementStore::UpdateElement(const std::shared_ptr<SleeveElement>& element) {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
-  UpdateElementRows(guard.conn_, element);
+  {
+    duckorm::Transaction transaction(guard.conn_);
+    UpdateElementRows(guard.conn_, element);
+    transaction.commit();
+  }
   MarkFolderContentsSynced(std::span<const std::shared_ptr<SleeveElement>>(&element, 1));
   element->SetSyncFlag(SyncFlag::SYNCED);
 }

@@ -5,6 +5,8 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 
 #include <algorithm>
+#include <functional>
+#include <span>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -109,6 +111,22 @@ void SleeveFolder::AddElementToMap(const std::shared_ptr<SleeveElement> element,
   RecordContentAdded(element->element_id_);
   // Mark this folder as modified so the content change is persisted on next sync.
   MarkModified();
+}
+
+void SleeveFolder::RestoreChildFolders(
+    std::span<const sl_element_id_t> child_ids,
+    const std::function<std::shared_ptr<SleeveElement>(sl_element_id_t)>& resolve) {
+  child_folders_.Clear();
+  indicies_cache_.clear();
+  for (const auto id : child_ids) {
+    const auto child = resolve(id);
+    if (!child || child->element_id_ != id || child->type_ != ElementType::FOLDER ||
+        !child->IsLive()) {
+      throw std::runtime_error("SleeveFolder: Cannot restore an invalid child folder");
+    }
+    AddElementToMap(child, false, false);
+  }
+  MarkContentSynced();
 }
 
 void SleeveFolder::RecordContentAdded(sl_element_id_t element_id) {

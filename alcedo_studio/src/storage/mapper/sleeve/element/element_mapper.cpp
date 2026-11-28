@@ -23,6 +23,22 @@
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
+namespace {
+
+auto ReadMountId(const ElementMapperParams& row) -> std::optional<mount_id_t> {
+  if (!row.mount_id.has_value()) {
+    return std::nullopt;
+  }
+  if (*row.mount_id < 0 || *row.mount_id > std::numeric_limits<mount_id_t>::max()) {
+    throw std::runtime_error(std::format(
+        "ElementMapper: element {} has the mount id {}, which is not a valid mount id", row.id,
+        *row.mount_id));
+  }
+  return static_cast<mount_id_t>(*row.mount_id);
+}
+
+}  // namespace
+
 auto ElementMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> ElementMapperParams {
   if (data.size() != FieldCount()) {
     throw std::runtime_error("Invalid DuckFieldDesc for SleeveElement");
@@ -78,14 +94,7 @@ auto ElementMapper::FromParams(ElementMapperParams&& param) -> std::shared_ptr<S
   element->last_modified_time_ =
       param.modified_time ? ParseUtcTimestampText(*param.modified_time) : 0;
   element->ref_count_ = param.ref_count;
-  if (param.mount_id.has_value()) {
-    if (*param.mount_id < 0 || *param.mount_id > std::numeric_limits<mount_id_t>::max()) {
-      throw std::runtime_error(std::format(
-          "ElementMapper: element {} has the mount id {}, which is not a valid mount id", id,
-          *param.mount_id));
-    }
-    element->mount_id_ = static_cast<mount_id_t>(*param.mount_id);
-  }
+  element->mount_id_  = ReadMountId(param);
 
   return element;
 }
@@ -97,6 +106,22 @@ auto ElementMapper::GetElementById(const sl_element_id_t id) -> std::shared_ptr<
         std::format("ElementMapper: No element with id {} is stored in DB", id));
   }
   return FromParams(std::move(*row));
+}
+
+void ElementMapper::RestoreFields(SleeveElement& element, const ElementMapperParams& param) {
+  if (element.element_id_ != param.id || element.type_ != static_cast<ElementType>(param.type) ||
+      !param.element_name) {
+    throw std::runtime_error("ElementMapper: stored element identity does not match live element");
+  }
+  auto       name     = conv::FromBytes(*param.element_name);
+  const auto added    = param.added_time ? ParseUtcTimestampText(*param.added_time) : 0;
+  const auto modified = param.modified_time ? ParseUtcTimestampText(*param.modified_time) : 0;
+  const auto mount_id = ReadMountId(param);
+  element.element_name_       = std::move(name);
+  element.added_time_         = added;
+  element.last_modified_time_ = modified;
+  element.ref_count_          = param.ref_count;
+  element.mount_id_           = mount_id;
 }
 
 auto ElementMapper::GetElementByName(const std::wstring& name)
