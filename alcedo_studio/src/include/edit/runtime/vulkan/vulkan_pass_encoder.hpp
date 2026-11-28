@@ -10,6 +10,7 @@
 #include "edit/runtime/vulkan/vulkan_develop_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_display_to_ap1_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_geometry_camera_pass.hpp"
+#include "edit/runtime/vulkan/vulkan_mask_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_primary_grade_pass.hpp"
 
 namespace alcedo {
@@ -54,6 +55,23 @@ struct PassEncoder<VulkanBackend, GpuPassKind::DisplayToAp1> {
   static void Encode(VulkanRenderDevice& device, const ExecutionPlan& plan,
                      const PreparedRawInput& input, const PipelineDocument& document) {
     ExecuteVulkanDisplayToAp1(device, plan, input, document);
+  }
+};
+
+template <>
+struct PassEncoder<VulkanBackend, GpuPassKind::MaskEvaluate> {
+  static void Encode(VulkanRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                     const CompiledMaskSource& source, const FrameSceneBinding& scene) {
+    (void)ExecuteVulkanMask(device, plan, document, compiled_grade, source, scene);
+  }
+};
+
+template <>
+struct PassEncoder<VulkanBackend, GpuPassKind::MaskUnion> {
+  static void Encode(VulkanRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade) {
+    (void)ExecuteVulkanMaskUnion(device, plan, document, compiled_grade);
   }
 };
 

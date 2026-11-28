@@ -412,9 +412,20 @@ class MaskCoverageTextureCache {
     entry.lru_tick             = lru_clock_;
   }
 
-  /// Allocate one texture of this owner; the error names the size and format.
-  static auto Allocate(Extent2D extent, TextureFormat format, Backend& backend) -> Texture2D {
+  /// Allocate one texture of this owner; the error names the size and format. @p entry: a coverage
+  /// texture of an entry, else a work texture.
+  /// A backend with `CreateCacheTexture2D` (Vulkan) gives an entry the memory priority of a cache
+  /// entry; the work textures and the other backends use `CreateTexture2D`.
+  static auto Allocate(Extent2D extent, TextureFormat format, Backend& backend, bool entry = false)
+      -> Texture2D {
     try {
+      if constexpr (requires {
+                      backend.CreateCacheTexture2D(extent.width, extent.height, format);
+                    }) {
+        if (entry) {
+          return backend.CreateCacheTexture2D(extent.width, extent.height, format);
+        }
+      }
       return backend.CreateTexture2D(extent.width, extent.height, format);
     } catch (const std::exception& error) {
       throw std::runtime_error("AI Mask coverage: allocating the " + std::to_string(extent.width) +
@@ -428,7 +439,7 @@ class MaskCoverageTextureCache {
               Backend& backend, CommandContext& command_context) -> Entry {
     auto image        = std::make_shared<Image>();
     image->descriptor = descriptor;
-    image->texture    = Allocate(descriptor.extent, TextureFormat::R8, backend);
+    image->texture    = Allocate(descriptor.extent, TextureFormat::R8, backend, true);
     try {
       backend.UploadTexture2D(image->texture,
                               std::span<const std::byte>(
@@ -457,7 +468,7 @@ class MaskCoverageTextureCache {
     const auto dispatch = MakeAiMaskEdgeDispatch(work);
     auto       image    = std::make_shared<Image>();
     image->descriptor   = work.OutputDescriptor();
-    image->texture      = Allocate(dispatch.output_extent, TextureFormat::R8, backend);
+    image->texture      = Allocate(dispatch.output_extent, TextureFormat::R8, backend, true);
 
     AiMaskEdgeTextures<Texture2D> textures;
     textures.source       = &original.texture;

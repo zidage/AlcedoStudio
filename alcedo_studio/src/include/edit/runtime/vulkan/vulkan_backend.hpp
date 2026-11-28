@@ -146,6 +146,9 @@ class VulkanBackend {
     [[nodiscard]] auto Format() const -> TextureFormat { return format_; }
     [[nodiscard]] auto ResourceId() const -> std::uint64_t { return resource_id_; }
     [[nodiscard]] auto Empty() const -> bool { return image_ == VK_NULL_HANDLE; }
+    /// The `VK_EXT_memory_priority` value of the allocation (plan section 4.2): @ref
+    /// kWorkingSetPriority, or @ref kCachePriority for a cache entry; 0 when empty.
+    [[nodiscard]] auto MemoryPriority() const -> float { return memory_priority_; }
     /// Gives the image back to the backend; see the lifetime rule of `VulkanBackend`.
     void               Reset() noexcept;
 
@@ -153,17 +156,18 @@ class VulkanBackend {
     friend class VulkanBackend;
     Texture2D(VulkanBackend* owner, VkImage image, VkImageView view, VmaAllocation allocation,
               std::size_t bytes, std::uint32_t width, std::uint32_t height, TextureFormat format,
-              std::uint64_t resource_id);
+              std::uint64_t resource_id, float memory_priority);
 
-    VulkanBackend* owner_       = nullptr;
-    VkImage        image_       = VK_NULL_HANDLE;
-    VkImageView    view_        = VK_NULL_HANDLE;
-    VmaAllocation  allocation_  = VK_NULL_HANDLE;
-    std::size_t    bytes_       = 0;
-    std::uint32_t  width_       = 0;
-    std::uint32_t  height_      = 0;
-    TextureFormat  format_      = TextureFormat::R8;
-    std::uint64_t  resource_id_ = 0;
+    VulkanBackend* owner_           = nullptr;
+    VkImage        image_           = VK_NULL_HANDLE;
+    VkImageView    view_            = VK_NULL_HANDLE;
+    VmaAllocation  allocation_      = VK_NULL_HANDLE;
+    std::size_t    bytes_           = 0;
+    std::uint32_t  width_           = 0;
+    std::uint32_t  height_          = 0;
+    TextureFormat  format_          = TextureFormat::R8;
+    std::uint64_t  resource_id_     = 0;
+    float          memory_priority_ = 0.0F;
   };
 
   /// RGBA32F row-major buffer used only as a scene-work member (as in the OpenCL backend).
@@ -233,6 +237,13 @@ class VulkanBackend {
    */
   [[nodiscard]] auto CreateTexture2D(std::uint32_t width, std::uint32_t height,
                                      TextureFormat format) -> Texture2D;
+  /**
+   * @brief @ref CreateTexture2D for an entry of a cache that keeps it after the render, with the
+   * memory priority @ref kCachePriority (plan section 4.2, VX5: Windows evicts the low priority
+   * first). The AI Mask coverage cache allocates its coverage textures with it (phase VK11).
+   */
+  [[nodiscard]] auto CreateCacheTexture2D(std::uint32_t width, std::uint32_t height,
+                                          TextureFormat format) -> Texture2D;
   /// One RGBA32F scene-work member as a row-major buffer.
   [[nodiscard]] auto CreateSceneWorkImage(std::uint32_t width, std::uint32_t height)
       -> SceneWorkImage;
@@ -283,10 +294,20 @@ class VulkanBackend {
                          CommandContext& command_context);
 
   /**
-   * @brief The AI Mask Feather and Expand of the workspace coverage cache (SM8.3).
+   * @brief Records the AI Mask Feather and Expand of the workspace coverage cache (SM8.3): the
+   * passes of @p dispatch into @p textures, the form of `OpenClBackend::RecordAiMaskEdge`
+   * (phase VK11, kernel group `ai_mask_coverage`).
    *
-   * The Vulkan kernels of this work come with phase VK11. Until then the call fails.
-   * @throws std::logic_error Always, with the phase that adds the kernels.
+   * The Expand steps run the morphology kernel into the work textures (the last one into the
+   * output without Feather); the Feather runs the horizontal pass into `feather_rows` and the
+   * vertical pass into the output. The Feather half kernel goes to a buffer of this call that is
+   * given back at the end of the call; the lifetime rule keeps it until its batch completes.
+   * Records into the open recording of @p command_context; does not submit or wait.
+   *
+   * @throws std::runtime_error "VulkanBackend::RecordAiMaskEdge: ..." for a dispatch without work,
+   *         a Feather radius above `kAiMaskFeatherMaximumRadius`, or a missing texture or a texture
+   *         of the wrong size or format; nothing is recorded. Errors of the upload or the pipeline
+   *         cache propagate.
    */
   void RecordAiMaskEdge(const AiMaskEdgeDispatch&            dispatch,
                         const AiMaskEdgeTextures<Texture2D>& textures,
@@ -445,6 +466,9 @@ class VulkanBackend {
                                             const std::string& message) const;
   [[nodiscard]] auto ReadHeapBudget() const -> VmaBudget;
   [[nodiscard]] auto ConsumeInjectedFailure(std::optional<std::uint32_t>& calls_to_pass) -> bool;
+  /// @ref CreateTexture2D with the memory priority @p priority.
+  [[nodiscard]] auto CreateTexture2DWithPriority(std::uint32_t width, std::uint32_t height,
+                                                 TextureFormat format, float priority) -> Texture2D;
   /// @ref CreateBuffer with the memory priority @p priority.
   [[nodiscard]] auto CreateBufferWithPriority(std::size_t bytes, float priority) -> Buffer;
   /// Removes least recently used LUT cache entries until @p incoming more bytes fit in the budget.

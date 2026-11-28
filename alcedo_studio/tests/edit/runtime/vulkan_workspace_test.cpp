@@ -543,13 +543,14 @@ TEST_F(VulkanWorkspaceFixture, SecondCommandContextCannotRecordWhileTheFirstReco
   EXPECT_EQ(readback, std::vector<std::byte>(64, std::byte{4}));
 }
 
-TEST_F(VulkanWorkspaceFixture, AiMaskEdgeReportsThatItsVulkanKernelsAreNotBuilt) {
+TEST_F(VulkanWorkspaceFixture, AiMaskEdgeWithoutWorkFailsAndRecordsNothing) {
   VulkanRenderDevice device;
   try {
     device.Workspace().Device().RecordAiMaskEdge({}, {}, device.CommandContext());
     FAIL() << "RecordAiMaskEdge did not throw";
-  } catch (const std::logic_error& error) {
-    EXPECT_NE(std::string(error.what()).find("VK11"), std::string::npos) << error.what();
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("the dispatch has no work"), std::string::npos)
+        << error.what();
   }
   EXPECT_FALSE(device.CommandContext().IsRecording());
 }

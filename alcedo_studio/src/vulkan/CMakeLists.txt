@@ -125,6 +125,22 @@ alcedo_add_slang_kernels(AlcedoVulkanKernels
     INCLUDE_DIRS "${ALCEDO_INCLUDE_ROOT}" "${ALCEDO_SRC_ROOT}"
 )
 
+# Phase VK11: MaskEvaluate, MaskUnion, and the coverage displays of a Color Grade Mask (OpenCL
+# program opencl_dag_mask, mask.cl), and the AI Mask Feather and Expand (opencl_dag_ai_mask_coverage,
+# ai_mask_coverage.cl).
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP mask
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/shader/mask.slang"
+    KERNELS mask_analytic_r8 mask_raster_r8 mask_raster_rgba32f mask_fill_zero_r8
+            mask_union_max_r8 mask_value_display_rgba32f
+    INCLUDE_DIRS "${ALCEDO_INCLUDE_ROOT}" "${ALCEDO_SRC_ROOT}"
+)
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP ai_mask_coverage
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/shader/ai_mask_coverage.slang"
+    KERNELS ai_mask_morphology_r8 ai_mask_feather_rows_r32f ai_mask_feather_columns_r8
+)
+
 set(_alcedo_vulkan_context_sources
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_api_counters.cpp"
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_compute_pipeline_cache.cpp"

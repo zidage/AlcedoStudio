@@ -116,7 +116,7 @@ void VulkanBackend::Buffer::Reset() noexcept {
 VulkanBackend::Texture2D::Texture2D(VulkanBackend* owner, VkImage image, VkImageView view,
                                     VmaAllocation allocation, std::size_t bytes,
                                     std::uint32_t width, std::uint32_t height, TextureFormat format,
-                                    std::uint64_t resource_id)
+                                    std::uint64_t resource_id, float memory_priority)
     : owner_(owner),
       image_(image),
       view_(view),
@@ -125,7 +125,8 @@ VulkanBackend::Texture2D::Texture2D(VulkanBackend* owner, VkImage image, VkImage
       width_(width),
       height_(height),
       format_(format),
-      resource_id_(resource_id) {}
+      resource_id_(resource_id),
+      memory_priority_(memory_priority) {}
 
 VulkanBackend::Texture2D::~Texture2D() { Reset(); }
 
@@ -138,20 +139,22 @@ VulkanBackend::Texture2D::Texture2D(Texture2D&& other) noexcept
       width_(std::exchange(other.width_, 0)),
       height_(std::exchange(other.height_, 0)),
       format_(std::exchange(other.format_, TextureFormat::R8)),
-      resource_id_(std::exchange(other.resource_id_, 0)) {}
+      resource_id_(std::exchange(other.resource_id_, 0)),
+      memory_priority_(std::exchange(other.memory_priority_, 0.0F)) {}
 
 auto VulkanBackend::Texture2D::operator=(Texture2D&& other) noexcept -> Texture2D& {
   if (this != &other) {
     Reset();
-    owner_       = std::exchange(other.owner_, nullptr);
-    image_       = std::exchange(other.image_, VK_NULL_HANDLE);
-    view_        = std::exchange(other.view_, VK_NULL_HANDLE);
-    allocation_  = std::exchange(other.allocation_, VK_NULL_HANDLE);
-    bytes_       = std::exchange(other.bytes_, 0);
-    width_       = std::exchange(other.width_, 0);
-    height_      = std::exchange(other.height_, 0);
-    format_      = std::exchange(other.format_, TextureFormat::R8);
-    resource_id_ = std::exchange(other.resource_id_, 0);
+    owner_           = std::exchange(other.owner_, nullptr);
+    image_           = std::exchange(other.image_, VK_NULL_HANDLE);
+    view_            = std::exchange(other.view_, VK_NULL_HANDLE);
+    allocation_      = std::exchange(other.allocation_, VK_NULL_HANDLE);
+    bytes_           = std::exchange(other.bytes_, 0);
+    width_           = std::exchange(other.width_, 0);
+    height_          = std::exchange(other.height_, 0);
+    format_          = std::exchange(other.format_, TextureFormat::R8);
+    resource_id_     = std::exchange(other.resource_id_, 0);
+    memory_priority_ = std::exchange(other.memory_priority_, 0.0F);
   }
   return *this;
 }
@@ -345,6 +348,16 @@ auto VulkanBackend::CreateBufferWithPriority(std::size_t bytes, float priority) 
 
 auto VulkanBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, TextureFormat format)
     -> Texture2D {
+  return CreateTexture2DWithPriority(width, height, format, kWorkingSetPriority);
+}
+
+auto VulkanBackend::CreateCacheTexture2D(std::uint32_t width, std::uint32_t height,
+                                         TextureFormat format) -> Texture2D {
+  return CreateTexture2DWithPriority(width, height, format, kCachePriority);
+}
+
+auto VulkanBackend::CreateTexture2DWithPriority(std::uint32_t width, std::uint32_t height,
+                                                TextureFormat format, float priority) -> Texture2D {
   const auto bytes = static_cast<std::size_t>(width) * height * TextureFormatBytesPerPixel(format);
   if (bytes == 0) {
     return {};
@@ -384,7 +397,7 @@ auto VulkanBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, T
   image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   VmaAllocationCreateInfo allocation_info{};
   allocation_info.usage        = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-  allocation_info.priority     = kWorkingSetPriority;
+  allocation_info.priority     = priority;
   VkImage           image      = VK_NULL_HANDLE;
   VmaAllocation     allocation = VK_NULL_HANDLE;
   VmaAllocationInfo result{};
@@ -412,8 +425,8 @@ auto VulkanBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, T
   NoteAllocation(static_cast<std::size_t>(result.size));
   ++texture_create_count_;
   vulkan::NoteVulkanImageCreation();
-  return Texture2D{this,  image,  view,   allocation,         bytes,
-                   width, height, format, next_resource_id_++};
+  return Texture2D{this,  image,  view,   allocation,          bytes,
+                   width, height, format, next_resource_id_++, priority};
 }
 
 auto VulkanBackend::CreateSceneWorkImage(std::uint32_t width, std::uint32_t height)
@@ -836,14 +849,6 @@ auto VulkanBackend::DummyStorageImage(TextureFormat format) -> const Texture2D& 
     *image = CreateTexture2D(1, 1, format);
   }
   return *image;
-}
-
-void VulkanBackend::RecordAiMaskEdge(const AiMaskEdgeDispatch& /*dispatch*/,
-                                     const AiMaskEdgeTextures<Texture2D>& /*textures*/,
-                                     CommandContext& /*command_context*/) {
-  throw std::logic_error(
-      "VulkanBackend::RecordAiMaskEdge: the Vulkan kernels of the AI Mask Feather and Expand are "
-      "not in this build (plan phase VK11, #1036)");
 }
 
 // ---- Submission -----------------------------------------------------------------------------
