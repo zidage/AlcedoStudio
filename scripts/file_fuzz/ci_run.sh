@@ -67,6 +67,16 @@ esac
   echo "| --- | --- | --- | --- | --- |"
 } >> "${summary}"
 
+# Writes the first 64 KB of the file $2 into a group of the job log named $1.
+print_head() {
+  if [ -f "$2" ]; then
+    echo "::group::$1"
+    head -c 65536 "$2"
+    echo
+    echo "::endgroup::"
+  fi
+}
+
 failed=0
 for phase in "${phases[@]}"; do
   IFS=: read -r name phase_mode share <<< "${phase}"
@@ -101,6 +111,9 @@ for phase in "${phases[@]}"; do
   ran="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["step"])' \
     "${run_dir}/failure.json" 2>/dev/null || echo "${ran}")"
   reproduce="\`python3 ${driver} run --seed ${seed} --steps ${ran} --mode ${phase_mode} ${extra[*]}\`"
+  # The failure and the logs also go to the job log, so a run without the artifact (a
+  # canceled job) still shows them.
+  print_head "Failure: ${name}" "${run_dir}/failure.json"
   echo "::group::Shrink and confirm: ${name}"
   python3 "${driver}" shrink "${run_dir}/ops.jsonl" --out "${run_dir}/shrink" \
     --build-dir "${build_dir}" --time-limit 600
@@ -117,6 +130,8 @@ for phase in "${phases[@]}"; do
     fi
   fi
   echo "::endgroup::"
+  print_head "Shrunk log: ${name}" "${run_dir}/shrink/shrunk.jsonl"
+  print_head "Failure of the confirming replay: ${name}" "${run_dir}/confirm/failure.json"
   echo "| ${name} | ${phase_mode} | ${ran} | **failed** at ${check}; ${confirmed} | ${reproduce}, or \`python3 ${driver} replay ${name}/shrink/shrunk.jsonl\` from the artifact |" >> "${summary}"
 done
 
