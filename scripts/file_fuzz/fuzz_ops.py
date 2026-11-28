@@ -145,14 +145,17 @@ def _disk_names(op: dict) -> list[str]:
             if isinstance(op.get(key), str)]
 
 
-KNOWN_ISSUES: list[tuple[int, str, Callable[[dict], bool]]] = [
+KNOWN_ISSUES: list[tuple[int, str, Callable[[dict, RunOptions], bool]]] = [
     (1214, "a folder name with ':' loses its parent path on Windows",
-     lambda op: IS_WINDOWS and any(":" in name for name in _folder_names(op))),
+     lambda op, options: IS_WINDOWS and any(":" in name for name in _folder_names(op))),
     (1215, "a scan never imports a mounted file whose name is not in NFC on Windows",
-     lambda op: IS_WINDOWS and any(not unicodedata.is_normalized("NFC", name)
+     lambda op, options: IS_WINDOWS and any(not unicodedata.is_normalized("NFC", name)
                                    for name in _disk_names(op))),
     (1218, "on NTFS the directory entry of a hard link keeps an old size and time",
-     lambda op: IS_WINDOWS and op["op"] == "disk_hardlink"),
+     lambda op, options: IS_WINDOWS and op["op"] == "disk_hardlink"),
+    (1232, "on Windows the watcher does not notice a rename of a mount root",
+     lambda op, options: IS_WINDOWS and options.mode == "watcher-on" and
+     op["op"] == "root_away"),
 ]
 
 
@@ -921,9 +924,12 @@ class Driver:
     # M2 and M3: disk changes -------------------------------------------------------------
 
     def touched(self, *paths: Path) -> None:
+        """Watcher-on mode: the directory watcher scans the mount of each path. A scan that finds
+        a mount offline ends its watch (MountScanCoordinator::UpdateWatch), so a change in an
+        offline mount starts no scan."""
         for path in paths:
             mount = self.model.mount_of_path(path)
-            if mount is not None:
+            if mount is not None and mount.state != "offline":
                 self.touched_mounts.add(mount.handle)
 
     def do_disk_add(self, op: dict) -> bool:
@@ -1134,6 +1140,10 @@ class Driver:
         os.rename(mount.root, away)
         self.follow_rename(Path(mount.root), away)
         self.touched_mounts.add(mount.handle)
+        if self.options.mode == "watcher-on":
+            # The scan of the watcher finds the mount offline and ends its watch; the settle
+            # here puts that scan before the next operations.
+            self.do_settle({})
         return False
 
     def do_root_back(self, op: dict) -> bool:
@@ -1147,7 +1157,9 @@ class Driver:
             return False
         os.rename(away, mount.root)
         self.follow_rename(away, Path(mount.root))
-        self.touched_mounts.add(mount.handle)
+        # An offline mount has no watch: its root comes back at the next sync or open.
+        if mount.state != "offline":
+            self.touched_mounts.add(mount.handle)
         return False
 
     def do_settle(self, op: dict) -> bool:
@@ -1803,7 +1815,7 @@ class Generator:
             kind = self.rng.choices(kinds, weights=[self.weights[k] for k in kinds])[0]
             op = getattr(self, f"gen_{kind}")()
             if op is not None and options.avoid_known_issues and \
-                    any(covers(op) for _, _, covers in KNOWN_ISSUES):
+                    any(covers(op, options) for _, _, covers in KNOWN_ISSUES):
                 op = None
             if op is not None:
                 if kind in DISK_KINDS:
