@@ -32,12 +32,13 @@ Item {
     readonly property int total: handler.importTotal
     readonly property int completed: handler.importCompleted
     readonly property int failed: handler.importFailed
-    readonly property int expected: Math.max(0, total - failed)
+    readonly property int duplicates: handler.importDuplicates
+    readonly property int expected: Math.max(0, total - failed - duplicates)
 
     readonly property int rawTotal: Math.min(handler.importRawTotal, total)
     readonly property int rawCompleted: Math.min(handler.importRawCompleted, completed)
-    readonly property int rawExpected: Math.max(0, rawTotal - Math.min(handler.importRawFailed,
-                                                                       failed))
+    readonly property int rawExpected: Math.max(0, rawTotal - handler.importRawFailed
+                                                - handler.importRawDuplicates)
     readonly property int otherTotal: total - rawTotal
     readonly property int otherCompleted: completed - rawCompleted
     readonly property int otherExpected: Math.max(0, expected - rawExpected)
@@ -45,7 +46,7 @@ Item {
     readonly property bool finalizing: phase === "finalizing"
     readonly property bool progressUnknown: finalizing
                                             || (phase === "preparing"
-                                                && completed + failed === 0)
+                                                && completed + failed + duplicates === 0)
     readonly property bool canCancel: !canceling && !finalizing
 
     readonly property real ringsSize: 176

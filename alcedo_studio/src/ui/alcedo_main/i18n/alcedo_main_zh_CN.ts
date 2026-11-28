@@ -1847,12 +1847,12 @@ Alcedo 将改用 %1。</translation>
         <translation>正在将 %1 张导入的照片保存到图库…</translation>
     </message>
     <message>
-        <source>Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed</source>
-        <translation>导入完成：已导入 %1 张，未选择类型 %2 个，不受支持 %3 个，失败 %4 个</translation>
+        <source>Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 failed</source>
+        <translation>导入完成：已导入 %1 张，跳过重复项 %2 个，未选择类型 %3 个，不受支持 %4 个，失败 %5 个</translation>
     </message>
     <message>
-        <source>Import canceled: %1 imported, %2 not read, %3 not selected, %4 unsupported, %5 failed</source>
-        <translation>导入已取消：已导入 %1 张，未读取 %2 个，未选择类型 %3 个，不受支持 %4 个，失败 %5 个</translation>
+        <source>Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 unsupported, %6 failed</source>
+        <translation>导入已取消：已导入 %1 张，跳过重复项 %2 个，未读取 %3 个，未选择类型 %4 个，不受支持 %5 个，失败 %6 个</translation>
     </message>
     <message>
         <source>Cancelling import...</source>
@@ -8647,6 +8647,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>Ask every time</source>
         <translation>每次询问</translation>
+    </message>
+    <message>
+        <source>Skip duplicate imports</source>
+        <translation>跳过重复导入</translation>
     </message>
     <message>
         <source>Import</source>

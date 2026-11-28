@@ -13,7 +13,9 @@
 
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/store/database.hpp"
+#include "storage/store/image/source_file_store.hpp"
 #include "type/mount_records.hpp"
+#include "type/source_file_record.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -32,7 +34,7 @@ namespace alcedo {
  */
 class MountStore {
  public:
-  explicit MountStore(Database& database);
+  MountStore(Database& database, SourceFileStore& sources);
 
   /**
    * @brief Insert the row of a new mount.
@@ -119,6 +121,7 @@ class MountStore {
       -> std::vector<FileLocationRecord>;
 
   Database& database_;
+  SourceFileStore& sources_;
 };
 
 }  // namespace alcedo

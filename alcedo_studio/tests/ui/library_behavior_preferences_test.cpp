@@ -79,5 +79,19 @@ TEST_F(LibraryBehaviorPreferencesTest, UnknownStoredImportFolderActionReadsAsAsk
   EXPECT_EQ(preferences.import_folder_action(), QStringLiteral("ask"));
 }
 
+TEST_F(LibraryBehaviorPreferencesTest, DuplicateSkippingDefaultsOnAndPersistsOptOut) {
+  LibraryBehaviorPreferences preferences;
+  EXPECT_TRUE(preferences.property("skipDuplicateImports").toBool());
+  QSignalSpy changed(&preferences, &LibraryBehaviorPreferences::skipDuplicateImportsChanged);
+  preferences.setSkipDuplicateImports(false);
+  preferences.setSkipDuplicateImports(false);
+  EXPECT_EQ(changed.count(), 1);
+  LibraryBehaviorPreferences reopened;
+  EXPECT_FALSE(reopened.property("skipDuplicateImports").toBool());
+  EXPECT_FALSE(QSettings{}.value("import/skipDuplicates", true).toBool());
+  reopened.setSkipDuplicateImports(true);
+  EXPECT_TRUE(LibraryBehaviorPreferences::LoadSkipDuplicateImports());
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test

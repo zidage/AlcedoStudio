@@ -138,9 +138,10 @@ class SleeveServiceImpl final : public SleeveService {
    * folder where this is false; the scan entry (the mounted folder group) does not use it.
    */
   [[nodiscard]] static auto CanEditFolderStructure(const SleeveElement& folder) -> bool;
-  /// Throws SleeveOperationError when the folder at @p folder_path is mounted. A path that names
-  /// no folder passes: the operation that follows reports it.
-  void                      CheckFolderStructureEditable(const std::filesystem::path& folder_path);
+  /// Return the folder ID, or an empty value if the path names no folder.
+  /// Throws SleeveOperationError when the folder at @p folder_path is mounted.
+  auto                      CheckFolderStructureEditable(const std::filesystem::path& folder_path)
+      -> std::optional<sl_element_id_t>;
 
   auto GetCurrentID() const -> sl_element_id_t;
   auto ResolveElement(const std::filesystem::path& path) -> std::shared_ptr<SleeveElement>;

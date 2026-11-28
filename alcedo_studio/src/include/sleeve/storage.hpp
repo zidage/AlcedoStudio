@@ -9,6 +9,7 @@
 #include "storage/store/ai/ai_store.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/image/image_store.hpp"
+#include "storage/store/image/source_file_store.hpp"
 #include "storage/store/mount/mount_store.hpp"
 #include "storage/store/semantic/semantic_embedding_store.hpp"
 #include "storage/store/semantic/semantic_label_store.hpp"
@@ -35,6 +36,7 @@ class Storage {
   ElementStore                                                         element_store_;
   FolderEntryStore                                                     folder_entry_store_;
   ImageStore                                                         image_store_;
+  SourceFileStore                                                       source_file_store_;
   MountStore                                                           mount_store_;
   SemanticModelRegistry                                                 semantic_models_;
   SemanticEmbeddingStore                                                semantic_embeddings_;
@@ -64,6 +66,7 @@ class Storage {
   /// Folder structure reads that load no file element (see FolderEntryStore).
   auto GetFolderEntryStore() -> FolderEntryStore&;
   auto GetImageStore() -> ImageStore&;
+  auto GetSourceFileStore() -> SourceFileStore&;
   /// MountRoot and SourceFile rows (mounted folders).
   auto GetMountStore() -> MountStore&;
   auto GetSemanticModelRegistry() -> SemanticModelRegistry&;

@@ -20,6 +20,7 @@
 #include "storage/store/mount/mount_store.hpp"
 #include "support/test_temp_directory.hpp"
 #include "type/mount_records.hpp"
+#include "type/source_file_record.hpp"
 #include "utils/clock/time_provider.hpp"
 
 namespace alcedo {

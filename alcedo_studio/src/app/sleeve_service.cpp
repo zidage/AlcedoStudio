@@ -11,6 +11,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "storage/store/mount/mount_store.hpp"
 #include "type/mount_records.hpp"
+#include "type/source_file_record.hpp"
 #include "utils/logging/log.hpp"
 #include "utils/string/convert.hpp"
 
@@ -203,18 +204,22 @@ auto SleeveServiceImpl::CanEditFolderStructure(const SleeveElement& folder) -> b
   return !folder.mount_id_.has_value();
 }
 
-void SleeveServiceImpl::CheckFolderStructureEditable(const std::filesystem::path& folder_path) {
-  Read<void>([&folder_path](FileSystem& fs) {
-    std::shared_ptr<SleeveElement> folder;
-    try {
-      folder = fs.Get(folder_path, false);
-    } catch (const std::runtime_error&) {
-      return;
-    }
-    if (folder && folder->type_ == ElementType::FOLDER) {
-      RequireEditableStructure(*folder);
-    }
-  });
+auto SleeveServiceImpl::CheckFolderStructureEditable(const std::filesystem::path& folder_path)
+    -> std::optional<sl_element_id_t> {
+  return Read<std::optional<sl_element_id_t>>(
+      [&folder_path](FileSystem& fs) -> std::optional<sl_element_id_t> {
+        std::shared_ptr<SleeveElement> folder;
+        try {
+          folder = fs.Get(folder_path, false);
+        } catch (const std::runtime_error&) {
+          return std::nullopt;
+        }
+        if (folder && folder->type_ == ElementType::FOLDER) {
+          RequireEditableStructure(*folder);
+          return folder->element_id_;
+        }
+        return std::nullopt;
+      });
 }
 
 auto SleeveServiceImpl::GetCurrentID() const -> sl_element_id_t {

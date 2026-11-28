@@ -1332,11 +1332,11 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed</source>
+        <source>Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 failed</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Import canceled: %1 imported, %2 not read, %3 not selected, %4 unsupported, %5 failed</source>
+        <source>Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 unsupported, %6 failed</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -5821,6 +5821,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <source>Ask every time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Skip duplicate imports</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

@@ -28,6 +28,8 @@ class LibraryBehaviorPreferences final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QString importFolderAction READ import_folder_action WRITE setImportFolderAction NOTIFY
                  importFolderActionChanged)
+  Q_PROPERTY(bool skipDuplicateImports READ LoadSkipDuplicateImports WRITE setSkipDuplicateImports
+                 NOTIFY skipDuplicateImportsChanged)
 
  public:
   static constexpr auto kImportFolderActionSettingKey = "library/importFolderAction";
@@ -45,9 +47,12 @@ class LibraryBehaviorPreferences final : public QObject {
   Q_INVOKABLE bool   setImportFolderAction(const QString& action);
 
   [[nodiscard]] static auto IsImportFolderAction(const QString& action) -> bool;
+  [[nodiscard]] static auto LoadSkipDuplicateImports() -> bool;
+  Q_INVOKABLE void          setSkipDuplicateImports(bool enabled);
 
  signals:
   void importFolderActionChanged();
+  void skipDuplicateImportsChanged();
 
  private:
   QString import_folder_action_;

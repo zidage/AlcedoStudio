@@ -63,6 +63,7 @@ class ImportExportHandler final : public QObject {
   Q_PROPERTY(int importPrepared READ ImportPrepared NOTIFY ImportStateChanged)
   Q_PROPERTY(int importCompleted READ ImportCompleted NOTIFY ImportStateChanged)
   Q_PROPERTY(int importFailed READ ImportFailed NOTIFY ImportStateChanged)
+  Q_PROPERTY(int importDuplicates READ ImportDuplicates NOTIFY ImportStateChanged)
   /// Subset of importFailed: files that are not a supported RAW or raster image.
   Q_PROPERTY(int importUnsupported READ ImportUnsupported NOTIFY ImportStateChanged)
   /// Subset of importFailed: supported files whose type was not selected for the import.
@@ -81,6 +82,7 @@ class ImportExportHandler final : public QObject {
   Q_PROPERTY(int importRawTotal READ ImportRawTotal NOTIFY ImportStateChanged)
   Q_PROPERTY(int importRawCompleted READ ImportRawCompleted NOTIFY ImportStateChanged)
   Q_PROPERTY(int importRawFailed READ ImportRawFailed NOTIFY ImportStateChanged)
+  Q_PROPERTY(int importRawDuplicates READ ImportRawDuplicates NOTIFY ImportStateChanged)
   Q_PROPERTY(QString importStatus READ ImportStatus NOTIFY ImportStateChanged)
   Q_PROPERTY(bool exportInFlight READ ExportInFlight NOTIFY ExportStateChanged)
   Q_PROPERTY(QString exportStatus READ ExportStatus NOTIFY ExportStateChanged)
@@ -219,6 +221,8 @@ class ImportExportHandler final : public QObject {
   [[nodiscard]] int  ImportRawTotal() const { return import_raw_total_; }
   [[nodiscard]] int  ImportRawCompleted() const { return import_raw_completed_; }
   [[nodiscard]] int  ImportRawFailed() const { return import_raw_failed_; }
+  [[nodiscard]] int  ImportDuplicates() const { return import_duplicates_; }
+  [[nodiscard]] int  ImportRawDuplicates() const { return import_raw_duplicates_; }
   [[nodiscard]] bool import_running() const { return import_running_; }
   [[nodiscard]] int  ImportTotal() const { return import_total_; }
   [[nodiscard]] int  import_total() const { return import_total_; }
@@ -378,6 +382,8 @@ class ImportExportHandler final : public QObject {
   int                           import_raw_total_     = 0;
   int                           import_raw_completed_ = 0;
   int                           import_raw_failed_    = 0;
+  int                           import_duplicates_     = 0;
+  int                           import_raw_duplicates_ = 0;
   bool                          import_canceling_   = false;
   i18n::LocalizedText           import_status_text_{};
   bool                          export_inflight_ = false;

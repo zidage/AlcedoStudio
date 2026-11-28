@@ -28,7 +28,7 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/mapper/duckorm/duckdb_select.hpp"
-#include "storage/mapper/mount/source_file_mapper.hpp"
+#include "storage/mapper/image/source_file_mapper.hpp"
 #include "storage/query/filter_compiler.hpp"
 #include "storage/query/stats_dimension.hpp"
 #include "storage/store/ai/ai_store.hpp"

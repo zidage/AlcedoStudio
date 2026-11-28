@@ -13,6 +13,7 @@
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "storage/store/mask_asset/mask_asset_store.hpp"
 #include "storage/store/store_types.hpp"
+#include "type/source_file_record.hpp"
 
 namespace alcedo {
 
@@ -48,6 +49,10 @@ class StorageSession {
 
   /// AI Segmentation Mask R8 assets (MaskAsset).
   auto MaskAssets() -> MaskAssetStore&;
+
+  /// Locations of library files with a stored image and edit history root. An incomplete import
+  /// without a root cannot match a later import.
+  auto ReadImportedFileLocations() -> std::vector<FileLocationRecord>;
 
   /**
    * @brief Write the history root of each image in @p roots and its element pipeline JSON

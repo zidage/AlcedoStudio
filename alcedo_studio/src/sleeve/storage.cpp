@@ -10,7 +10,8 @@ Storage::Storage(std::filesystem::path db_path)
       element_store_(database_),
       folder_entry_store_(database_),
       image_store_(database_.GetConnectionGuard()),
-      mount_store_(database_),
+      source_file_store_(database_),
+      mount_store_(database_, source_file_store_),
       semantic_models_(database_),
       semantic_embeddings_(database_),
       semantic_labels_(database_),
@@ -27,6 +28,8 @@ auto Storage::GetElementStore() -> ElementStore& { return element_store_; }
 auto Storage::GetFolderEntryStore() -> FolderEntryStore& { return folder_entry_store_; }
 
 auto Storage::GetImageStore() -> ImageStore& { return image_store_; }
+
+auto Storage::GetSourceFileStore() -> SourceFileStore& { return source_file_store_; }
 
 auto Storage::GetMountStore() -> MountStore& { return mount_store_; }
 

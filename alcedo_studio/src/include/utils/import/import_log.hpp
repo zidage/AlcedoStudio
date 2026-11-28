@@ -5,14 +5,17 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include "utils/import/import_error_code.hpp"
+#include "type/source_file_record.hpp"
 #include "type/type.hpp"
+#include "utils/import/import_error_code.hpp"
 
 namespace alcedo {
 
@@ -31,10 +34,22 @@ struct ImportLogSnapshot {
   std::vector<image_id_t>     metadata_ok_{};
   std::vector<ImportLogEntry> metadata_failed_{};
   std::vector<ImportLogEntry> unsupported_nikon_he_{};
+  /// Completed measurements shared with the save worker. Null if no source was measured.
+  std::shared_ptr<const std::vector<SourceFileRecord>> source_records;
 };
 
 class ImportLog {
  public:
+  /// Publish immutable measurements once the workers finish. Snapshots keep them alive for save.
+  void PublishSourceRecords(std::vector<SourceFileRecord> records) {
+    if (records.empty()) {
+      return;
+    }
+    auto completed = std::make_shared<const std::vector<SourceFileRecord>>(std::move(records));
+    std::lock_guard<std::mutex> lock(mtx_);
+    source_records_ = std::move(completed);
+  }
+
   void AddPlaceholder(const image_id_t image_id, const sl_element_id_t element_id,
                       const file_name_t& file_name, const std::filesystem::path& source_path) {
     std::lock_guard<std::mutex> lock(mtx_);
@@ -76,6 +91,7 @@ class ImportLog {
     snapshot.metadata_ok_.reserve(metadata_ok_.size());
     snapshot.metadata_failed_.reserve(entries_.size());
     snapshot.unsupported_nikon_he_.reserve(entries_.size());
+    snapshot.source_records = source_records_;
 
     for (const auto& [id, entry] : entries_) {
       snapshot.created_.push_back(entry);
@@ -91,9 +107,10 @@ class ImportLog {
   }
 
  private:
-  mutable std::mutex                                      mtx_{};
-  std::unordered_map<image_id_t, ImportLogEntry>          entries_{};
-  std::unordered_set<image_id_t>                          metadata_ok_{};
+  mutable std::mutex                             mtx_{};
+  std::unordered_map<image_id_t, ImportLogEntry> entries_{};
+  std::unordered_set<image_id_t>                 metadata_ok_{};
+  std::shared_ptr<const std::vector<SourceFileRecord>> source_records_;
 };
 
 }  // namespace alcedo

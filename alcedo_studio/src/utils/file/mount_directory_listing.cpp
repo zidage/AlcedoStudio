@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "type/supported_file_type.hpp"
+#include "utils/file/source_file.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -24,8 +25,6 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#else
-#include <sys/stat.h>
 #endif
 
 namespace alcedo {
@@ -43,45 +42,6 @@ auto NfcName(std::wstring name) -> std::wstring {
 
 auto JoinRelative(const std::wstring& parent, const std::wstring& name) -> std::wstring {
   return parent.empty() ? name : parent + L'/' + name;
-}
-
-struct FileAttributes {
-  std::uint64_t byte_size   = 0;
-  std::int64_t  modified_ns = 0;
-};
-
-/// Byte size and modification time of a regular file entry.
-///
-/// Windows: the directory entry holds both values from the directory read
-/// (`FindNextFileW`), so no further file system call runs. The MSVC file clock counts 100 ns
-/// ticks from 1601-01-01.
-/// POSIX: one `lstat` reads both values. The directory entry would run one `stat` for each
-/// value.
-auto ReadFileAttributes(const stdfs::directory_entry& entry) -> std::optional<FileAttributes> {
-#ifdef _WIN32
-  std::error_code ec;
-  const auto      byte_size = entry.file_size(ec);
-  if (ec) return std::nullopt;
-  const auto write_time = entry.last_write_time(ec);
-  if (ec) return std::nullopt;
-  constexpr std::int64_t kTicksFrom1601To1970 = 116444736000000000LL;
-  const std::int64_t     ticks                = write_time.time_since_epoch().count();
-  return FileAttributes{.byte_size   = byte_size,
-                        .modified_ns = (ticks - kTicksFrom1601To1970) * 100};
-#else
-  struct stat info{};
-  if (::lstat(entry.path().c_str(), &info) != 0 || !S_ISREG(info.st_mode) || info.st_size < 0) {
-    return std::nullopt;
-  }
-#ifdef __APPLE__
-  const auto& time = info.st_mtimespec;
-#else
-  const auto& time = info.st_mtim;
-#endif
-  return FileAttributes{
-      .byte_size   = static_cast<std::uint64_t>(info.st_size),
-      .modified_ns = static_cast<std::int64_t>(time.tv_sec) * 1'000'000'000LL + time.tv_nsec};
-#endif
 }
 
 auto StopRequested(const std::atomic<bool>* stop_requested) -> bool {
@@ -158,7 +118,7 @@ auto ListMountDirectory(const stdfs::path& root, const std::atomic<bool>* stop_r
           CategoryForPath(entry.path()) == ImportFileCategory::Other) {
         continue;
       }
-      const auto attributes = ReadFileAttributes(entry);
+      const auto attributes = ReadSourceFileAttributes(entry);
       if (!attributes) {
         incomplete = true;
         continue;
@@ -276,7 +236,7 @@ auto ReadMountDirectoryFile(const stdfs::path& root, const stdfs::path& path)
   if (ec) {
     return std::nullopt;
   }
-  const auto attributes = ReadFileAttributes(entry);
+  const auto attributes = ReadSourceFileAttributes(entry);
   if (!attributes) {
     return std::nullopt;
   }

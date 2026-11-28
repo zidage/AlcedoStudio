@@ -26,6 +26,7 @@
 #include "support/test_temp_directory.hpp"
 #include "type/hash_type.hpp"
 #include "type/mount_records.hpp"
+#include "type/source_file_record.hpp"
 
 namespace alcedo {
 namespace {
