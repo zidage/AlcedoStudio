@@ -18,6 +18,22 @@
 
 namespace alcedo {
 
+void SourceFileMapper::ClearChangeMarks(std::span<const sl_element_id_t> element_ids) {
+  if (!element_ids.empty()) {
+    duckorm::remove(conn_, "SourceFileChanged",
+                    duckorm::expr::in_list(duckorm::expr::col("element_id"), element_ids));
+  }
+}
+
+void SourceFileMapper::RemoveByIds(std::span<const sl_element_id_t> element_ids) {
+  ClearChangeMarks(element_ids);
+  Mapper::RemoveByIds(element_ids);
+}
+
+void SourceFileMapper::RemoveById(const sl_element_id_t& element_id) {
+  RemoveByIds(std::span(&element_id, 1));
+}
+
 auto SourceFileMapper::FromRawData(std::vector<duckorm::VarTypes>&& data)
     -> SourceFileMapperParams {
   if (data.size() != FieldCount()) {

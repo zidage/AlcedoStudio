@@ -8,6 +8,7 @@
 #include <QPointer>
 #include <QString>
 #include <cstdint>
+#include <functional>
 
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
@@ -42,6 +43,12 @@ class ApplicationCloseCoordinator final : public QObject {
   void               BindMountScans(MountScanCoordinator* mount_scans);
 
   [[nodiscard]] auto waiting() const -> bool { return mode_ != Mode::kIdle; }
+  /// Application-owned project work: cancel scan on close, then await the worker/apply before
+  /// closing any project owners. Callbacks run on the UI thread and must outlive the close.
+  void SetProjectWorkCallbacks(std::function<void()> begin, std::function<bool()> busy) {
+    begin_project_close_ = std::move(begin);
+    project_work_busy_   = std::move(busy);
+  }
 
   /// True when the application must ask the user before it quits: a close already waits, the
   /// editor session persists or closes an image, or the Editor workspace shows an image.
@@ -98,6 +105,8 @@ class ApplicationCloseCoordinator final : public QObject {
   // False when the close only waits for a running persist (no editor finalize started).
   bool                              awaiting_seal_         = false;
   bool                              project_close_persist_ = true;
+  std::function<void()>             begin_project_close_;
+  std::function<bool()>             project_work_busy_;
 };
 
 }  // namespace alcedo::ui

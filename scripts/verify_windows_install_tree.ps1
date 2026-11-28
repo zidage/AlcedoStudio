@@ -189,6 +189,22 @@ Assert-FileContains `
     -Path (Join-Path $noticeDir 'QuickQanava-bezier-LICENSE.txt') `
     -Needle 'Permission is hereby granted'
 
+Assert-FileContains -Path (Join-Path $binDir 'NOTICE') -Needle 'Tabler Icons'
+Assert-FileContains -Path (Join-Path $binDir 'THIRD_PARTY_NOTICE.txt') -Needle 'Tabler Icons'
+Assert-FileContains `
+    -Path (Join-Path $binDir 'THIRD_PARTY_NOTICE.txt') `
+    -Needle 'third_party_licenses/Tabler-Icons-LICENSE.txt'
+Assert-FileContains -Path (Join-Path $noticeDir 'Tabler-Icons-LICENSE.txt') -Needle 'MIT License'
+Assert-FileContains `
+    -Path (Join-Path $noticeDir 'Tabler-Icons-LICENSE.txt') `
+    -Needle 'Copyright (c) 2020-2026 Pawe'
+Assert-FileContains `
+    -Path (Join-Path $noticeDir 'Tabler-Icons-LICENSE.txt') `
+    -Needle 'The above copyright notice and this permission notice shall be included'
+Assert-FileContains `
+    -Path (Join-Path $noticeDir 'Tabler-Icons-LICENSE.txt') `
+    -Needle 'THE SOFTWARE IS PROVIDED "AS IS"'
+
 $mainExe = Join-Path $binDir 'alcedo_main.exe'
 $qmlStdoutPath = Join-Path $installRoot 'qml_import_probe_stdout.txt'
 $qmlStderrPath = Join-Path $installRoot 'qml_import_probe_stderr.txt'

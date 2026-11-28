@@ -272,6 +272,12 @@ void StorageMaintenance::DropHnswIndexesOfOlderProject() {
   }
 }
 
+void StorageMaintenance::Checkpoint() {
+  auto guard = database_.GetConnectionGuard();
+  auto lock  = guard.Lock();
+  duckorm::execute(guard.conn_, expr::raw("CHECKPOINT"));
+}
+
 void StorageMaintenance::WriteSnapshot(const std::filesystem::path& snapshot_path) {
   auto guard = database_.GetConnectionGuard();
   auto lock  = guard.Lock();

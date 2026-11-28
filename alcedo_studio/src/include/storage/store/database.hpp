@@ -135,7 +135,8 @@ class Database {
       "fingerprint VARCHAR NOT NULL,"
       "fingerprint_version INTEGER NOT NULL,"
       "state UTINYINT NOT NULL,"
-      "missing_since TIMESTAMP);";
+      "missing_since TIMESTAMP);"
+      "CREATE TABLE IF NOT EXISTS SourceFileChanged (element_id BIGINT PRIMARY KEY);";
 
   constexpr static const char* semantic_table_query =
       "CREATE TABLE IF NOT EXISTS SemanticModel ("

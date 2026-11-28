@@ -57,6 +57,7 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/preset_controller.hpp"
 #include "ui/alcedo_main/album_backend/preset_preview_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_launch_coordinator.hpp"
+#include "ui/alcedo_main/album_backend/project_maintenance_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/raw_import_look_settings_model.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
@@ -80,6 +81,7 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(ImportExportHandler* importExport READ import_export CONSTANT)
   Q_PROPERTY(NikonHeRecoveryController* nikonHeRecovery READ nikon_he_recovery CONSTANT)
   Q_PROPERTY(BackgroundTaskController* backgroundTasks READ background_tasks CONSTANT)
+  Q_PROPERTY(ProjectMaintenanceController* maintenance READ maintenance CONSTANT)
   Q_PROPERTY(InteractionPolicyController* interactionPolicy READ interaction_policy CONSTANT)
   /// Turn-taking control between the user and an automation agent in the GUI session.
   Q_PROPERTY(AgentControlOwner* agentControl READ agent_control CONSTANT)
@@ -184,6 +186,7 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto background_tasks() -> BackgroundTaskController* {
     return background_tasks_.get();
   }
+  [[nodiscard]] auto maintenance() -> ProjectMaintenanceController* { return maintenance_.get(); }
   [[nodiscard]] auto interaction_policy() -> InteractionPolicyController* {
     return interaction_policy_.get();
   }
@@ -349,6 +352,8 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<LogFolderController>                 log_folder_;
   std::unique_ptr<ProjectLaunchCoordinator>            project_launch_;
   std::unique_ptr<ApplicationCloseCoordinator>         application_close_;
+  std::unique_ptr<ProjectMaintenanceService>           maintenance_service_;
+  std::unique_ptr<ProjectMaintenanceController>        maintenance_;
   std::unique_ptr<LibraryMutationOperations>           library_mutations_;
   // Holds the mount service and the import service of the project while a scan runs, so it
   // stops before the project closes and is destroyed before the modules above.

@@ -57,6 +57,9 @@ class StorageMaintenance {
    */
   [[nodiscard]] auto ReadDataSummary() -> std::vector<StorageTableSummary>;
 
+  /// Flush committed database changes to its file under the database lock before packaging.
+  void               Checkpoint();
+
   /**
    * @brief The largest element id and image id that any row holds (#1015).
    *

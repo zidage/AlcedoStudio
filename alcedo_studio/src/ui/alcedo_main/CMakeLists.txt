@@ -191,6 +191,10 @@ def_library(EditorPlotPane
 )
 
 add_library(AlbumBackendLib STATIC
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_maintenance_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_maintenance_model.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_maintenance_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_maintenance_model.hpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/application_module_host.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_module.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/library_module.cpp"
@@ -436,6 +440,7 @@ target_link_libraries(AlbumBackendLib
         Qt6::Qml
         Qt6::QuickControls2
         ProjectService
+        ProjectMaintenanceService
         ImportService
         # Import defaults settings: the look of RAW history roots (#918).
         RawImportLookSettings
@@ -553,6 +558,7 @@ def_library(AutomationHostLib
         "${ALCEDO_UI_SHELL_ROOT}/automation/automation_command_support.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_command_support.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/commands/project_commands.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/automation/commands/maintenance_commands.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_project_commands.hpp"
         "${ALCEDO_UI_SHELL_ROOT}/automation/automation_task_tracker.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/automation/automation_task_tracker.hpp"
@@ -986,11 +992,13 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailEditMark.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailColorLabelDots.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailDeleteMark.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/SourceChangedThumbnailIcon.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailPinBinding.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailLayoutAnimation.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/JustifiedThumbnailTile.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTaskBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTasksDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ProjectMaintenanceDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AgentSessionCard.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/RotatingTaskBorder.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WorkspaceHost.qml"

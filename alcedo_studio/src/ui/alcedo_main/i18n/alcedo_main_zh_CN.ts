@@ -2456,6 +2456,14 @@ Alcedo 将改用 %1。</translation>
         <translation>其他任务</translation>
     </message>
     <message>
+        <source>Project Maintenance</source>
+        <translation>项目维护</translation>
+    </message>
+    <message>
+        <source>%1 working</source>
+        <translation>%1 个任务正在进行</translation>
+    </message>
+    <message>
         <source>Ratings</source>
         <translation>评分</translation>
     </message>
@@ -2974,6 +2982,18 @@ Alcedo 将改用 %1。</translation>
     <message>
         <source>Rename</source>
         <translation>重命名</translation>
+    </message>
+    <message>
+        <source>Project Maintenance</source>
+        <translation>项目维护</translation>
+    </message>
+    <message>
+        <source>Review duplicate and invalid project entries</source>
+        <translation>检查重复和无效的项目条目</translation>
+    </message>
+    <message>
+        <source>Open a project to use Project Maintenance</source>
+        <translation>请打开项目以使用项目维护</translation>
     </message>
     <message>
         <source>Library</source>
@@ -10397,6 +10417,289 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>ProjectMaintenanceDialog</name>
+    <message>
+        <source>Choose maintenance backup folder</source>
+        <translation>选择项目维护备份文件夹</translation>
+    </message>
+    <message>
+        <source>Project Maintenance</source>
+        <translation>项目维护</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>Scan project</source>
+        <translation>扫描项目</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>取消扫描</translation>
+    </message>
+    <message>
+        <source>All findings</source>
+        <translation>全部结果</translation>
+    </message>
+    <message>
+        <source>Duplicates</source>
+        <translation>重复条目</translation>
+    </message>
+    <message>
+        <source>Missing sources</source>
+        <translation>源文件丢失</translation>
+    </message>
+    <message>
+        <source>Source problems</source>
+        <translation>源文件问题</translation>
+    </message>
+    <message>
+        <source>Project problems</source>
+        <translation>项目问题</translation>
+    </message>
+    <message>
+        <source>Finding filter</source>
+        <translation>结果筛选</translation>
+    </message>
+    <message>
+        <source>Search full path or entry ID</source>
+        <translation>搜索完整路径或条目 ID</translation>
+    </message>
+    <message>
+        <source>Select entry %1</source>
+        <translation>选择条目 %1</translation>
+    </message>
+    <message>
+        <source>Entry ID: %1</source>
+        <translation>条目 ID：%1</translation>
+    </message>
+    <message>
+        <source>Rating: %1</source>
+        <translation>评分：%1</translation>
+    </message>
+    <message>
+        <source>Retained entry: %1</source>
+        <translation>保留条目：%1</translation>
+    </message>
+    <message>
+        <source>Previous</source>
+        <translation>上一页</translation>
+    </message>
+    <message>
+        <source>Page %1</source>
+        <translation>第 %1 页</translation>
+    </message>
+    <message>
+        <source>Next</source>
+        <translation>下一页</translation>
+    </message>
+    <message>
+        <source>Select removable duplicates</source>
+        <translation>选择可移除的重复条目</translation>
+    </message>
+    <message>
+        <source>Select removable missing entries</source>
+        <translation>选择可移除的丢失条目</translation>
+    </message>
+    <message>
+        <source>Clear selection</source>
+        <translation>清除选择</translation>
+    </message>
+    <message>
+        <source>Selected: %1 entries (including hidden rows)</source>
+        <translation>已选择 %1 个条目（包含隐藏的行）</translation>
+    </message>
+    <message>
+        <source>Verified backup: %1</source>
+        <translation>已验证的备份：%1</translation>
+    </message>
+    <message>
+        <source>Backup path: %1</source>
+        <translation>备份路径：%1</translation>
+    </message>
+    <message>
+        <source>Remove %1 duplicate entries and %2 missing entries? Original image files stay untouched. Rated and edited entries are protected. A verified backup is required.</source>
+        <translation>移除 %1 个重复条目和 %2 个丢失条目？原始图像文件保持不变。已评分和已编辑的条目受到保护。必须先创建并验证备份。</translation>
+    </message>
+    <message>
+        <source>Choose backup folder</source>
+        <translation>选择备份文件夹</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Confirm removal</source>
+        <translation>确认移除</translation>
+    </message>
+    <message>
+        <source>Remove selected</source>
+        <translation>移除所选条目</translation>
+    </message>
+    <message>
+        <source>Close Project Maintenance</source>
+        <translation>关闭项目维护</translation>
+    </message>
+    <message>
+        <source>%1 findings</source>
+        <translation>%1 个发现项</translation>
+    </message>
+    <message>
+        <source>Backup folder: %1</source>
+        <translation>备份文件夹：%1</translation>
+    </message>
+    <message>
+        <source>Backup folder: project folder</source>
+        <translation>备份文件夹：项目所在文件夹</translation>
+    </message>
+    <message>
+        <source>Project Maintenance progress</source>
+        <translation>项目维护进度</translation>
+    </message>
+    <message>
+        <source>%1 / %2</source>
+        <translation>%1 / %2</translation>
+    </message>
+    <message>
+        <source>Entries processed</source>
+        <translation>已处理条目</translation>
+    </message>
+    <message>
+        <source>Save source-change icons on Library thumbnails</source>
+        <translation>在资料库缩略图上保存源文件更改图标</translation>
+    </message>
+    <message>
+        <source>The review lists detected changes either way. This option saves or clears thumbnail icons when you scan.</source>
+        <translation>检查结果始终列出检测到的源文件更改。此选项会在扫描时保存或清除缩略图图标。</translation>
+    </message>
+    <message>
+        <source>Changed sources</source>
+        <translation>已更改的源文件</translation>
+    </message>
+    <message>
+        <source>Unverified source history</source>
+        <translation>未验证的源文件历史</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::ProjectMaintenanceController</name>
+    <message>
+        <source>Scanning the complete project</source>
+        <translation>正在扫描整个项目</translation>
+    </message>
+    <message>
+        <source>Project Maintenance</source>
+        <translation>项目维护</translation>
+    </message>
+    <message>
+        <source>Inspected %1 entries</source>
+        <translation>已检查 %1 个条目</translation>
+    </message>
+    <message>
+        <source>No duplicate or invalid entries found</source>
+        <translation>未发现重复或无效条目</translation>
+    </message>
+    <message>
+        <source>%1 findings. Select entries to remove.</source>
+        <translation>发现 %1 个条目。请选择要移除的条目。</translation>
+    </message>
+    <message>
+        <source>Scan canceled</source>
+        <translation>扫描已取消</translation>
+    </message>
+    <message>
+        <source>Waiting for existing project work</source>
+        <translation>正在等待现有项目任务完成</translation>
+    </message>
+    <message>
+        <source>Project Maintenance is applying reviewed removals.</source>
+        <translation>项目维护正在移除已审核的条目。</translation>
+    </message>
+    <message>
+        <source>Saving and verifying the maintenance backup</source>
+        <translation>正在保存并验证项目维护备份</translation>
+    </message>
+    <message>
+        <source>Creating the maintenance backup</source>
+        <translation>正在创建项目维护备份</translation>
+    </message>
+    <message>
+        <source>Removing reviewed entries in the working package</source>
+        <translation>正在工作副本中移除已审核的条目</translation>
+    </message>
+    <message>
+        <source>Writing and reopening the result package</source>
+        <translation>正在写入并重新打开结果包</translation>
+    </message>
+    <message>
+        <source>Publishing the verified result</source>
+        <translation>正在保存已验证的结果</translation>
+    </message>
+    <message>
+        <source>Restoring the verified backup</source>
+        <translation>正在恢复已验证的备份</translation>
+    </message>
+    <message>
+        <source>Reopening the verified project</source>
+        <translation>正在重新打开已验证的项目</translation>
+    </message>
+    <message>
+        <source>Backup restored, but project reopening could not start.</source>
+        <translation>已恢复备份，但无法开始重新打开项目。</translation>
+    </message>
+    <message>
+        <source>Cleaned project reopening could not start.</source>
+        <translation>无法开始重新打开清理后的项目。</translation>
+    </message>
+    <message>
+        <source>
+The verified backup was restored and reopened.</source>
+        <translation>
+已恢复并重新打开经过验证的备份。</translation>
+    </message>
+    <message>
+        <source>Removed %1 project entries. Retained %2 entries.</source>
+        <translation>已移除 %1 个项目条目，保留 %2 个条目。</translation>
+    </message>
+    <message>
+        <source>Project Maintenance failed</source>
+        <translation>项目维护失败</translation>
+    </message>
+    <message>
+        <source>Project recovery required</source>
+        <translation>项目需要恢复</translation>
+    </message>
+    <message>
+        <source>Wait for Project Maintenance to finish.</source>
+        <translation>请等待项目维护完成。</translation>
+    </message>
+    <message>
+        <source>Entry IDs must be nonzero 32-bit integers.</source>
+        <translation>条目 ID 必须是非零的 32 位整数。</translation>
+    </message>
+    <message>
+        <source>Scanning ordinary photos</source>
+        <translation>正在扫描普通照片</translation>
+    </message>
+    <message>
+        <source>Could not save source-change marks</source>
+        <translation>无法保存源文件更改标记</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::ProjectMaintenanceModel</name>
+    <message>
+        <source>%1 commits; %2 Versions</source>
+        <translation>%1 个提交；%2 个版本</translation>
+    </message>
+    <message>
+        <source>Source changed since import</source>
+        <translation>源文件在导入后已更改</translation>
+    </message>
+</context>
+<context>
     <name>alcedo::ui::LibraryViewPreferences</name>
     <message>
         <source>Red</source>
@@ -10754,6 +11057,13 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <source>Select Folder to Import</source>
         <translation>选择要导入的文件夹</translation>
+    </message>
+</context>
+<context>
+    <name>SourceChangedThumbnailIcon</name>
+    <message>
+        <source>Source changed since import</source>
+        <translation>源文件在导入后已更改</translation>
     </message>
 </context>
 </TS>

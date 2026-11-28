@@ -17,11 +17,16 @@ Storage::Storage(std::filesystem::path db_path)
       semantic_labels_(database_),
       semantic_vector_search_(database_),
       ai_store_(database_),
-      maintenance_(database_) {}
+      maintenance_(database_),
+      project_maintenance_(database_) {}
 
 auto Storage::OpenSession() -> StorageSession { return StorageSession(database_); }
 
 auto Storage::Maintenance() -> StorageMaintenance& { return maintenance_; }
+
+auto Storage::GetProjectMaintenanceStore() -> ProjectMaintenanceStore& {
+  return project_maintenance_;
+}
 
 auto Storage::GetElementStore() -> ElementStore& { return element_store_; }
 

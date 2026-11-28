@@ -1699,6 +1699,14 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished">Other Tasks</translation>
     </message>
     <message>
+        <source>Project Maintenance</source>
+        <translation>Project Maintenance</translation>
+    </message>
+    <message>
+        <source>%1 working</source>
+        <translation>%1 working</translation>
+    </message>
+    <message>
         <source>AI Denoise</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1920,6 +1928,18 @@ Alcedo will use %1 instead.</translation>
         <location line="+49"/>
         <source>Import Images</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Project Maintenance</source>
+        <translation>Project Maintenance</translation>
+    </message>
+    <message>
+        <source>Review duplicate and invalid project entries</source>
+        <translation>Review duplicate and invalid project entries</translation>
+    </message>
+    <message>
+        <source>Open a project to use Project Maintenance</source>
+        <translation>Open a project to use Project Maintenance</translation>
     </message>
 </context>
 <context>
@@ -7010,6 +7030,296 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
             <numerusform>Edited %n hour ago</numerusform>
             <numerusform>Edited %n hours ago</numerusform>
         </translation>
+    </message>
+</context>
+<context>
+    <name>ProjectMaintenanceDialog</name>
+    <message>
+        <source>Choose maintenance backup folder</source>
+        <translation>Choose maintenance backup folder</translation>
+    </message>
+    <message>
+        <source>Project Maintenance</source>
+        <translation>Project Maintenance</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>Close</translation>
+    </message>
+    <message>
+        <source>Scan project</source>
+        <translation>Scan project</translation>
+    </message>
+    <message>
+        <source>Cancel scan</source>
+        <translation>Cancel scan</translation>
+    </message>
+    <message>
+        <source>All findings</source>
+        <translation>All findings</translation>
+    </message>
+    <message>
+        <source>Duplicates</source>
+        <translation>Duplicates</translation>
+    </message>
+    <message>
+        <source>Missing sources</source>
+        <translation>Missing sources</translation>
+    </message>
+    <message>
+        <source>Source problems</source>
+        <translation>Source problems</translation>
+    </message>
+    <message>
+        <source>Project problems</source>
+        <translation>Project problems</translation>
+    </message>
+    <message>
+        <source>Finding filter</source>
+        <translation>Finding filter</translation>
+    </message>
+    <message>
+        <source>Search full path or entry ID</source>
+        <translation>Search full path or entry ID</translation>
+    </message>
+    <message>
+        <source>Select entry %1</source>
+        <translation>Select entry %1</translation>
+    </message>
+    <message>
+        <source>Entry ID: %1</source>
+        <translation>Entry ID: %1</translation>
+    </message>
+    <message>
+        <source>Rating: %1</source>
+        <translation>Rating: %1</translation>
+    </message>
+    <message>
+        <source>Retained entry: %1</source>
+        <translation>Retained entry: %1</translation>
+    </message>
+    <message>
+        <source>Previous</source>
+        <translation>Previous</translation>
+    </message>
+    <message>
+        <source>Page %1</source>
+        <translation>Page %1</translation>
+    </message>
+    <message>
+        <source>Next</source>
+        <translation>Next</translation>
+    </message>
+    <message>
+        <source>Select removable duplicates</source>
+        <translation>Select removable duplicates</translation>
+    </message>
+    <message>
+        <source>Select removable missing entries</source>
+        <translation>Select removable missing entries</translation>
+    </message>
+    <message>
+        <source>Clear selection</source>
+        <translation>Clear selection</translation>
+    </message>
+    <message>
+        <source>Selected: %1 entries (including hidden rows)</source>
+        <translation>Selected: %1 entries (including hidden rows)</translation>
+    </message>
+    <message>
+        <source>Verified backup: %1</source>
+        <translation>Verified backup: %1</translation>
+    </message>
+    <message>
+        <source>Backup path: %1</source>
+        <translation>Backup path: %1</translation>
+    </message>
+    <message>
+        <source>Remove %1 duplicate entries and %2 missing entries? Original image files stay untouched. Rated and edited entries are protected. A verified backup is required.</source>
+        <translation>Remove %1 duplicate entries and %2 missing entries? Original image files stay untouched. Rated and edited entries are protected. A verified backup is required.</translation>
+    </message>
+    <message>
+        <source>Choose backup folder</source>
+        <translation>Choose backup folder</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <source>Confirm removal</source>
+        <translation>Confirm removal</translation>
+    </message>
+    <message>
+        <source>Remove selected</source>
+        <translation>Remove selected</translation>
+    </message>
+    <message>
+        <source>Close Project Maintenance</source>
+        <translation>Close Project Maintenance</translation>
+    </message>
+    <message>
+        <source>%1 findings</source>
+        <translation>%1 findings</translation>
+    </message>
+    <message>
+        <source>Backup folder: %1</source>
+        <translation>Backup folder: %1</translation>
+    </message>
+    <message>
+        <source>Backup folder: project folder</source>
+        <translation>Backup folder: project folder</translation>
+    </message>
+    <message>
+        <source>Project Maintenance progress</source>
+        <translation>Project Maintenance progress</translation>
+    </message>
+    <message>
+        <source>%1 / %2</source>
+        <translation>%1 / %2</translation>
+    </message>
+    <message>
+        <source>Entries processed</source>
+        <translation>Entries processed</translation>
+    </message>
+    <message>
+        <source>Save source-change icons on Library thumbnails</source>
+        <translation>Save source-change icons on Library thumbnails</translation>
+    </message>
+    <message>
+        <source>The review lists detected changes either way. This option saves or clears thumbnail icons when you scan.</source>
+        <translation>The review lists detected changes either way. This option saves or clears thumbnail icons when you scan.</translation>
+    </message>
+    <message>
+        <source>Changed sources</source>
+        <translation>Changed sources</translation>
+    </message>
+    <message>
+        <source>Unverified source history</source>
+        <translation>Unverified source history</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::ProjectMaintenanceController</name>
+    <message>
+        <source>Scanning the complete project</source>
+        <translation>Scanning the complete project</translation>
+    </message>
+    <message>
+        <source>Project Maintenance</source>
+        <translation>Project Maintenance</translation>
+    </message>
+    <message>
+        <source>Inspected %1 entries</source>
+        <translation>Inspected %1 entries</translation>
+    </message>
+    <message>
+        <source>No duplicate or invalid entries found</source>
+        <translation>No duplicate or invalid entries found</translation>
+    </message>
+    <message>
+        <source>%1 findings. Select entries to remove.</source>
+        <translation>%1 findings. Select entries to remove.</translation>
+    </message>
+    <message>
+        <source>Scan canceled</source>
+        <translation>Scan canceled</translation>
+    </message>
+    <message>
+        <source>Waiting for existing project work</source>
+        <translation>Waiting for existing project work</translation>
+    </message>
+    <message>
+        <source>Project Maintenance is applying reviewed removals.</source>
+        <translation>Project Maintenance is applying reviewed removals.</translation>
+    </message>
+    <message>
+        <source>Saving and verifying the maintenance backup</source>
+        <translation>Saving and verifying the maintenance backup</translation>
+    </message>
+    <message>
+        <source>Creating the maintenance backup</source>
+        <translation>Creating the maintenance backup</translation>
+    </message>
+    <message>
+        <source>Removing reviewed entries in the working package</source>
+        <translation>Removing reviewed entries in the working package</translation>
+    </message>
+    <message>
+        <source>Writing and reopening the result package</source>
+        <translation>Writing and reopening the result package</translation>
+    </message>
+    <message>
+        <source>Publishing the verified result</source>
+        <translation>Publishing the verified result</translation>
+    </message>
+    <message>
+        <source>Restoring the verified backup</source>
+        <translation>Restoring the verified backup</translation>
+    </message>
+    <message>
+        <source>Reopening the verified project</source>
+        <translation>Reopening the verified project</translation>
+    </message>
+    <message>
+        <source>Backup restored, but project reopening could not start.</source>
+        <translation>Backup restored, but project reopening could not start.</translation>
+    </message>
+    <message>
+        <source>Cleaned project reopening could not start.</source>
+        <translation>Cleaned project reopening could not start.</translation>
+    </message>
+    <message>
+        <source>
+The verified backup was restored and reopened.</source>
+        <translation>
+The verified backup was restored and reopened.</translation>
+    </message>
+    <message>
+        <source>Removed %1 project entries. Retained %2 entries.</source>
+        <translation>Removed %1 project entries. Retained %2 entries.</translation>
+    </message>
+    <message>
+        <source>Project Maintenance failed</source>
+        <translation>Project Maintenance failed</translation>
+    </message>
+    <message>
+        <source>Project recovery required</source>
+        <translation>Project recovery required</translation>
+    </message>
+    <message>
+        <source>Wait for Project Maintenance to finish.</source>
+        <translation>Wait for Project Maintenance to finish.</translation>
+    </message>
+    <message>
+        <source>Entry IDs must be nonzero 32-bit integers.</source>
+        <translation>Entry IDs must be nonzero 32-bit integers.</translation>
+    </message>
+    <message>
+        <source>Scanning ordinary photos</source>
+        <translation>Scanning ordinary photos</translation>
+    </message>
+    <message>
+        <source>Could not save source-change marks</source>
+        <translation>Could not save source-change marks</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::ProjectMaintenanceModel</name>
+    <message>
+        <source>%1 commits; %2 Versions</source>
+        <translation>%1 commits; %2 Versions</translation>
+    </message>
+    <message>
+        <source>Source changed since import</source>
+        <translation>Source changed since import</translation>
+    </message>
+</context>
+<context>
+    <name>SourceChangedThumbnailIcon</name>
+    <message>
+        <source>Source changed since import</source>
+        <translation>Source changed since import</translation>
     </message>
 </context>
 </TS>

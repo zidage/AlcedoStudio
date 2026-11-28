@@ -11,6 +11,9 @@
 #include "ui/alcedo_main/automation/automation_command_registry.hpp"
 
 namespace alcedo::automation {
+/// Register the explicit maintenance scan, bounded findings, and removal commands.
+auto RegisterAutomationMaintenanceCommands(AutomationCommandRegistry& registry,
+                                           ui::ApplicationModuleHost* host, QString* error) -> bool;
 
 /// The project summary that `project.open` and `project.create` return: `path`, `name`,
 /// `entered`, and `photo_count` (the photo count read when the project loaded).

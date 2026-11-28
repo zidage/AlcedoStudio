@@ -305,6 +305,20 @@ assert_file_contains \
   "${resources_dir}/third_party_licenses/QuickQanava-bezier-LICENSE.txt" \
   "Permission is hereby granted"
 
+assert_file_contains "${resources_dir}/NOTICE" "Tabler Icons"
+assert_file_contains "${resources_dir}/THIRD_PARTY_NOTICE.txt" "Tabler Icons"
+assert_file_contains "${resources_dir}/THIRD_PARTY_NOTICE.txt" "third_party_licenses/Tabler-Icons-LICENSE.txt"
+assert_file_contains "${resources_dir}/third_party_licenses/Tabler-Icons-LICENSE.txt" "MIT License"
+assert_file_contains \
+  "${resources_dir}/third_party_licenses/Tabler-Icons-LICENSE.txt" \
+  "Copyright (c) 2020-2026 Pawe"
+assert_file_contains \
+  "${resources_dir}/third_party_licenses/Tabler-Icons-LICENSE.txt" \
+  "The above copyright notice and this permission notice shall be included"
+assert_file_contains \
+  "${resources_dir}/third_party_licenses/Tabler-Icons-LICENSE.txt" \
+  'THE SOFTWARE IS PROVIDED "AS IS"'
+
 qml_probe_out="$(mktemp "${TMPDIR:-/tmp}/alcedo_qml_import.XXXXXX")"
 if ! "$main_exe" --verify-qml-imports >"$qml_probe_out" 2>&1; then
   fail "installed app --verify-qml-imports failed: $(cat "$qml_probe_out")"

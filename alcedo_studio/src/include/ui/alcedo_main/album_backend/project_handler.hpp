@@ -5,7 +5,6 @@
 #pragma once
 
 #include <QVariantList>
-
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -14,16 +13,17 @@
 #include <optional>
 #include <vector>
 
-#include "ui/alcedo_main/i18n.hpp"
 #include "app/export_service.hpp"
 #include "app/import_service.hpp"
 #include "app/mask_thumbnail_service.hpp"
-#include "app/project_package_backend.hpp"
 #include "app/pipeline_service.hpp"
+#include "app/project_maintenance_package.hpp"
+#include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "app/thumbnail_service.hpp"
 #include "concurrency/thread_pool.hpp"
 #include "storage/store/sleeve/element_store.hpp"
+#include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
 
@@ -81,6 +81,14 @@ class ProjectHandler {
   /// keeps its own references to the project and paths, so a worker thread can run it
   /// without this handler. It packs under the same lock as PackageCurrentProjectFiles.
   [[nodiscard]] auto MakeSaveAndPackageJob() const -> std::function<bool(QString*)>;
+  /// Capture only owner references and explicit removals for one maintenance package job.
+  /// The worker shares package write exclusion with all normal saves. No history cleanup.
+  auto MakeMaintenanceJob(std::shared_ptr<ProjectMaintenancePackage> operation,
+                          std::vector<MaintenanceRemoval>            removals,
+                          std::filesystem::path backup_directory) const -> std::function<void()>;
+  /// Restoration shares the same write exclusion and requires the installed digest.
+  auto MakeMaintenanceRestoreJob(std::shared_ptr<ProjectMaintenancePackage> operation) const
+      -> std::function<void()>;
   void SetProjectLoadingState(bool loading, const i18n::LocalizedText& message);
   void ClearProjectData();
 

@@ -33,6 +33,9 @@ class ProjectService {
   ~ProjectService();
 
   void SaveProject(const std::filesystem::path& meta_path);
+  /// Update only the data summary of staged package metadata through its existing owner.
+  /// Keeps project identity and counters. Throws on invalid JSON or a failed checked write.
+  static void RefreshPackageDataSummary(const std::filesystem::path& meta_path, Storage& storage);
   void LoadProject(const std::filesystem::path& meta_path);
 
   auto GetStorage() const -> std::shared_ptr<Storage> { return storage_; }

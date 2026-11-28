@@ -545,6 +545,11 @@ def_ui_test(EditorViewportPlaceholderTest editor_viewport_placeholder_test.cpp)
 alcedo_register_test_target(EditorViewportPlaceholderTest ui)
 
 def_ui_test(AlbumBackendImportTest   album_backend_import_test.cpp)
+def_ui_test(ProjectMaintenanceModelTest project_maintenance_model_test.cpp)
+alcedo_register_test_target(ProjectMaintenanceModelTest ui)
+def_ui_test(ProjectMaintenanceControllerTest project_maintenance_controller_test.cpp)
+target_link_libraries(ProjectMaintenanceControllerTest PRIVATE AutomationHostLib)
+alcedo_register_test_target(ProjectMaintenanceControllerTest ui)
 alcedo_register_test_target(AlbumBackendImportTest ui)
 
 def_ui_test(AlbumBackendProjectTest  album_backend_project_test.cpp)

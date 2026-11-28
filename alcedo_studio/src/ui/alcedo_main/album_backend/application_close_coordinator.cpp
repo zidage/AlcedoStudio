@@ -5,6 +5,7 @@
 #include "ui/alcedo_main/album_backend/application_close_coordinator.hpp"
 
 #include <QMetaObject>
+#include <QTimer>
 
 #include "app/editor_session_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
@@ -134,6 +135,7 @@ auto ApplicationCloseCoordinator::BeginProjectClose(bool persist) -> QString {
   if (project_ == nullptr) {
     return tr("No project is loaded yet.");
   }
+  if (begin_project_close_) begin_project_close_();
   // The editor image is finalized below, so only the project rules decide here.
   if (const QString reason = project_->ProjectCloseBlockReason(); !reason.isEmpty()) {
     return reason;
@@ -162,6 +164,10 @@ void ApplicationCloseCoordinator::ScheduleEvaluation() {
 
 void ApplicationCloseCoordinator::EvaluateEditorClose() {
   if (!waiting()) {
+    return;
+  }
+  if (project_work_busy_ && project_work_busy_()) {
+    QTimer::singleShot(25, this, &ApplicationCloseCoordinator::EvaluateEditorClose);
     return;
   }
   if (editor_session_ == nullptr) {

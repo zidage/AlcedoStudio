@@ -29,6 +29,7 @@ import "ColorLabelNames.js" as ColorLabelNames
 // jump to the end of the running animation.
 Item {
     id: root
+    property var sourceChangedEntries: ({})
     objectName: "thumbnailGridView"
     clip: true
     readonly property color cardBg: appTheme.cardSurfaceColor
@@ -1619,6 +1620,12 @@ Item {
                     radius: root.columns >= 11 ? 5 : 10
                     marked: cardDelegate.deleteMark
                     compact: root.columns >= 8
+                }
+                SourceChangedThumbnailIcon {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.margins: appTheme.spaceXs
+                    visible: root.sourceChangedEntries[String(cardDelegate.elementId >>> 0)] === true
                 }
                 // Edit mark: a chip on the top-right corner of the photo.
                 ThumbnailEditMark {

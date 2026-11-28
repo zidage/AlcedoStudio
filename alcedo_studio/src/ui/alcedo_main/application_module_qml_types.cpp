@@ -11,12 +11,18 @@
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
 #include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
+#include "ui/alcedo_main/album_backend/project_maintenance_controller.hpp"
+#include "ui/alcedo_main/album_backend/project_maintenance_model.hpp"
 #include "ui/alcedo_main/shortcut_registry.hpp"
 
 namespace alcedo::ui {
 
 void RegisterApplicationModuleTypes() {
   RegisterShortcutRegistryQmlType();
+  qmlRegisterUncreatableType<ProjectMaintenanceController>(
+      "Alcedo.Main", 1, 0, "ProjectMaintenanceController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<ProjectMaintenanceModel>(
+      "Alcedo.Main", 1, 0, "ProjectMaintenanceModel", "Owned by ProjectMaintenanceController");
   qmlRegisterUncreatableType<ProjectModule>("Alcedo.Main", 1, 0, "ProjectModule",
                                             "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<LibraryModule>("Alcedo.Main", 1, 0, "LibraryModule",

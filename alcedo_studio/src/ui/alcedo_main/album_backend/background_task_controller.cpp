@@ -318,6 +318,10 @@ auto BackgroundTaskController::KindToString(BackgroundTaskKind kind) -> QString 
       return QStringLiteral("libraryMarkUpdate");
     case BackgroundTaskKind::ImageDelete:
       return QStringLiteral("imageDelete");
+    case BackgroundTaskKind::MaintenanceScan:
+      return QStringLiteral("maintenanceScan");
+    case BackgroundTaskKind::MaintenanceApply:
+      return QStringLiteral("maintenanceApply");
     case BackgroundTaskKind::AgentControl:
       return QStringLiteral("agentControl");
     case BackgroundTaskKind::MountScan:

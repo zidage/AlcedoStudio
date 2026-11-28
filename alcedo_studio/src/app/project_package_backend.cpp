@@ -1031,7 +1031,13 @@ auto WritePackedProject(const std::filesystem::path& packedPath,
   }
 
   if (std::filesystem::exists(packedPath, ec) && !ec) {
-    std::filesystem::remove(packedPath, ec);
+#ifdef _WIN32
+    if (!ReplaceFileW(packedPath.c_str(), temp_path.c_str(), nullptr, 0, nullptr, nullptr)) {
+      ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+    }
+#else
+    std::filesystem::rename(temp_path, packedPath, ec);
+#endif
     if (ec) {
       if (errorOut) {
         *errorOut = Tr("Failed to replace existing packed project file: %1")
@@ -1040,6 +1046,7 @@ auto WritePackedProject(const std::filesystem::path& packedPath,
       std::filesystem::remove(temp_path, ec);
       return false;
     }
+    return true;
   }
   ec.clear();
   std::filesystem::rename(temp_path, packedPath, ec);

@@ -75,7 +75,7 @@ Item {
     readonly property int panelGap: appTheme.spaceSm
 
     // Visual fold progress (0 closed → 1 open). Drives layout width + body
-    // opacity, the same contract as EditorFilmstrip.dockExpandProgress.
+    // opacity, the same behavior as EditorFilmstrip.dockExpandProgress.
     property real panelOpenProgress: 0
     property bool foldManualDrive: false
     property bool _motionArmed: false

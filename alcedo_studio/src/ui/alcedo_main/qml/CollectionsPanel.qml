@@ -21,6 +21,7 @@ ColumnLayout {
     property bool backendInteractive: false
     property bool sortDescending: false
     property string activeUtilityTab: "search"
+    property var maintenanceController: null
     readonly property var utilityTabs: [
         {
             tabId: "search",
@@ -31,6 +32,11 @@ ColumnLayout {
             tabId: "background-tasks",
             label: qsTr("Background Tasks"),
             iconSource: "qrc:/panel_icons/clock-play.svg"
+        },
+        {
+            tabId: "maintenance",
+            label: qsTr("Project Maintenance"),
+            iconSource: "qrc:/panel_icons/database-cog.svg"
         }
     ]
     signal importRequested()
@@ -43,6 +49,7 @@ ColumnLayout {
     signal filesDropped(var urls, int folderId)
     signal searchRequested()
     signal backgroundTasksRequested()
+    signal projectMaintenanceRequested()
 
     readonly property var foldersModule: folderController
     readonly property int currentFolderId: foldersModule ? Number(foldersModule.currentFolderId) : 0
@@ -934,7 +941,17 @@ ColumnLayout {
 
                 delegate: NavRow {
                     required property var modelData
-                    objectName: "collectionsUtility_" + modelData.tabId
+                    objectName: modelData.tabId === "maintenance"
+                                ? "projectMaintenanceLauncher"
+                                : "collectionsUtility_" + modelData.tabId
+                    enabled: modelData.tabId !== "maintenance"
+                             || (!!panel.maintenanceController
+                                 && panel.maintenanceController.available)
+                    activeFocusOnTab: enabled && modelData.tabId === "maintenance"
+                    Keys.onReturnPressed: activated()
+                    Keys.onSpacePressed: activated()
+                    Accessible.onPressAction: if (enabled) activated()
+                    border.width: activeFocus ? 1 : 0
                     iconSource: modelData.iconSource
                     label: modelData.label
                     onActivated: {
@@ -943,6 +960,8 @@ ColumnLayout {
                             panel.searchRequested()
                         } else if (modelData.tabId === "background-tasks") {
                             panel.backgroundTasksRequested()
+                        } else if (modelData.tabId === "maintenance") {
+                            panel.projectMaintenanceRequested()
                         }
                     }
                 }

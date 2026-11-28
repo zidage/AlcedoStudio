@@ -162,6 +162,12 @@ void AutomationCommandRegistry::SetStateChangeControl(AutomationStateChangeContr
 
 auto AutomationCommandRegistry::AdmitStateChange() const
     -> std::optional<AutomationCommandRefusal> {
+  if (project_write_refusal_) {
+    if (const auto reason = project_write_refusal_(); !reason.isEmpty()) {
+      return AutomationCommandRefusal{AutomationErrorCode::Busy, reason,
+                                      QJsonObject{{"reason", reason}}};
+    }
+  }
   if (!state_change_control_.admit) {
     return std::nullopt;
   }

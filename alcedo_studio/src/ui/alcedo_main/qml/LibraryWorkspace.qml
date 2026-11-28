@@ -1055,6 +1055,7 @@ RowLayout {
         id: sectionComp
         AlbumSectionView {
             objectName: "libraryAlbumSectionView"
+            sourceChangedEntries: appModules.maintenance ? appModules.maintenance.sourceChangedEntries : ({})
             zoomLevel: root.gridZoomLevel
             // Leaving the library (or the grouped view) keeps the photo at the top of the view.
             Component.onDestruction: {
@@ -1095,6 +1096,7 @@ RowLayout {
         id: gridComp
         ThumbnailGridView {
             objectName: "libraryThumbnailGridView"
+            sourceChangedEntries: appModules.maintenance ? appModules.maintenance.sourceChangedEntries : ({})
             zoomLevel: root.gridZoomLevel
             // Ctrl+wheel: the grid asks for the level, so the zoomLevel binding stays.
             onZoomLevelRequested: function(level) { root.gridZoomLevel = level }

@@ -533,6 +533,9 @@ ApplicationWindow {
     function openBackgroundTasksDialog() {
         appDialogs.openBackgroundTasksDialog()
     }
+    function openProjectMaintenanceDialog() {
+        appDialogs.openProjectMaintenanceDialog()
+    }
 
     // ── Library file drop (issue #757) ──────────────────────────────────────
     // A drop of files and folders from the system file manager imports into one collection
@@ -821,6 +824,8 @@ ApplicationWindow {
                     }
                     onSearchRequested: root.globalSearchDialog.openFromCollection()
                     onBackgroundTasksRequested: root.openBackgroundTasksDialog()
+                    maintenanceController: appModules.maintenance
+                    onProjectMaintenanceRequested: root.openProjectMaintenanceDialog()
                     onHoveredChanged: collectionsPeekCloseTimer.restart()
                     onPopupOpenChanged: collectionsPeekCloseTimer.restart()
                     onBusyChanged: collectionsPeekCloseTimer.restart()

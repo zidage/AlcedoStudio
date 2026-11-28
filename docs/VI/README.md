@@ -6,6 +6,59 @@ complements the global token, spacing, typography, icon, and motion rules in
 remains the runtime source of truth for values. This file records how each QML
 surface must use those values.
 
+## Project Maintenance
+
+- Put the default-on **Save source-change icons on Library thumbnails** checkbox below the
+  scan action. Use `ThemeCheckBox`. Explain that the review lists source changes in both
+  modes. A review-only scan keeps the saved icons visible.
+- In the classic, justified, and grouped Library layouts, show the crossed-photo icon at the
+  top-left of the photo with the tooltip **Source changed since import**. Keep the thumbnail
+  visible. Use `SourceChangedThumbnailIcon.qml` and the existing thumbnail scrim and icon tokens.
+
+### `CollectionsPanel.qml`
+
+- Put Project Maintenance directly below Background Tasks in the same utility-row delegate as Search and Background Tasks. All three share the icon slot, label edge, row height, and vertical centering.
+- Keep one Project Maintenance launcher in the project/library sidebar. It opens the application-owned `ProjectMaintenanceDialog.qml` and controller.
+- Disable the launcher without a loaded project. Explain the disabled sidebar action in its tooltip.
+- Use the existing body/caption fonts, neutral text, compact control height, and focus outline.
+  Project Maintenance uses the user-approved Tabler `database-cog` SVG, normalized to a 24 x 24 viewBox, white source stroke, and 1.5 px stroke width. Source and MIT license remain in the SVG.
+
+### `ProjectMaintenanceDialog.qml`
+
+- Use `cardSurfaceColor` for the dialog and `bgBaseColor` for review rows.
+- Place Scan project at the body's left edge, above the full `.alcd` project path.
+- Wrap full paths above a wrapping metadata row of entry ID, rating, history counts, and retained ID. Put reasons below that row. Each value keeps its own label; no separator characters join independent values.
+- Use `ThemeCheckBox` for row selection. A selected row has a neutral `textColor` outline.
+- Use `DialogActionButton` for scan, selection, paging, confirmation, and backup-folder actions. Put the three selection actions in equal-width columns; paging stays left and the matching count stays right. The backup-folder action stays left of the right-aligned confirmation actions.
+- Use the Search palette X (`IconActionButton`, compact and transparent) at the right of the title row. The same margins align the header, fields, results, and footer. Filter and search fields share a height.
+- During removal, show the compact import-style progress view: shared ImportProgressRing, RotatingTaskBorder, current owner stage, and processed/selected counts. Actual transaction work drives the ring; saving, verification, publication, activation, and restoration remain indeterminate. The count is work progress, not a durable removal result. Closing hides the view and leaves the task running.
+- Use `AlertBadge` only for actual source/project errors. Neutral duplicate findings use plain text.
+- A page has at most 100 rows. The complete selected count remains visible across filters and pages.
+- Hiding the dialog preserves the task and selection. Removal requires a separate confirmation.
+- Review both themes, keyboard access, long paths, narrow windows, cancellation, hidden selection,
+  backup failure, successful reopening, and recovery errors before recording manual acceptance.
+
+### Review evidence (2026-11-09)
+
+The native Windows test host showed the real dialog in Alcedo and Classic at 1200 x 760.
+Long Unicode paths wrap; the rated survivor stays unselected; a missing source uses AlertBadge.
+Space toggles a row. A search hiding all rows preserves the 105-entry count and the confirmation's
+104-duplicate / one-missing split. Cancel applies no removal. The editor launcher reopens the same
+review. Scanning from an empty selected album still finds all 106 project entries.
+
+The filter reuses AdjustmentCombo; search text, placeholder, selection, and selected text use theme
+tokens. The initial editor text action used zero button padding; the subsequent icon revision uses the standard editor RailButton.
+The native host did not resize during this review, so 960 x 640 appearance is not yet verified.
+Backup/restore error states and scan cancellation were verified through C++ owner/controller tests.
+
+
+The revised dialog was reviewed natively in Alcedo and Classic after the UI revision. Sidebar icons,
+labels, and vertical centers align; the X closes and reopening retains the scan. The compact progress
+card showed the real backup stage and `0 / 105`; successful reopening reported 105 removed and one
+retained, with a verified backup. The four-star survivor remained, and a repeat scan had no findings.
+The editor caption `Maintenance` was too wide for its fixed rail, so the compact caption is `Maintain`;
+accessibility and the tooltip retain the full feature name. All testing used a disposable copy. The final rebuilt rail caption was checked natively on one line, with the full accessible action name unchanged.
+
 Update the relevant file entry whenever an approved visual decision changes.
 Do not add automated tests whose purpose is to freeze colors, fills, borders,
 icon tint, shadows, or screenshots. Functional tests can verify interaction,

@@ -35,6 +35,9 @@
 
 ## Still Planned
 
+- [ ] Add Project Maintenance below Background Tasks to scan and review duplicate, missing, and
+      invalid project entries, then remove selected eligible entries after a verified backup; see
+      the [Project Maintenance Plan](alcedo_studio/storage/project_maintenance_plan.md).
 - [ ] Add the film print DRT method: spectral film and print tables on the host, then CUDA, Metal, and
       OpenCL passes; see the [Film Print DRT Plan](alcedo_studio/edit/film_print_drt_plan.md).
 - [ ] Fix the review findings of the executor ownership refactor, starting with history moves

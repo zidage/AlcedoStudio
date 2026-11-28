@@ -8,7 +8,7 @@ def_library(DuckORM
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_expr.cpp"
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_select.cpp"
     PUBLIC_DEPS DuckDB
-    PRIVATE_DEPS AppDiagnostics
+    PRIVATE_DEPS AppDiagnostics SourceFileUtils
 )
 
 # Query definitions: the SQL of the stats dimensions and of the library search, and the
@@ -65,6 +65,7 @@ set(STORAGE_SRCS
     "${ALCEDO_SRC_ROOT}/storage/store/ai/ai_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/element_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/folder_entry_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/sleeve/project_maintenance_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/album_query.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/album_edit_state_sql.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/edit_history/commit_graph_store.cpp"

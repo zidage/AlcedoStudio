@@ -122,6 +122,7 @@ Dialog {
         if (kind === "ratingUpdate") return qsTr("Ratings")
         if (kind === "libraryMarkUpdate") return qsTr("Labels and Marks")
         if (kind === "imageDelete") return qsTr("Delete Images")
+        if (kind === "maintenanceScan" || kind === "maintenanceApply") return qsTr("Project Maintenance")
         if (kind === "agentControl") return qsTr("Agent")
         if (kind === "mountScan") return qsTr("Folder Scan")
         if (kind === "aiDenoiseSwitch") return qsTr("AI Denoise")
@@ -132,7 +133,7 @@ Dialog {
         if (taskCount === 0)
             return qsTr("No active work")
         if (runningCount > 0)
-            return qsTr("%1 total · %2 working").arg(taskCount).arg(runningCount)
+            return qsTr("%1 working").arg(runningCount)
         return qsTr("%1 total").arg(taskCount)
     }
 

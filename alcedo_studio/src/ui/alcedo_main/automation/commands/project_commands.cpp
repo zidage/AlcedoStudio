@@ -235,7 +235,7 @@ auto RegisterAutomationProjectCommands(AutomationCommandRegistry& registry,
   };
   RegisterOrFail(registry, std::move(close), &ok, error);
 
-  return ok;
+  return ok && RegisterAutomationMaintenanceCommands(registry, host, error);
 }
 
 }  // namespace alcedo::automation

@@ -2,6 +2,28 @@
 set(ALCEDO_TEST_APP_ROOT "${ALCEDO_TEST_ROOT}/app")
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 
+add_executable(ProjectMaintenanceServiceTest ${ALCEDO_TEST_ROOT}/app/project_maintenance_service_test.cpp)
+target_include_directories(ProjectMaintenanceServiceTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ProjectMaintenanceServiceTest PRIVATE ProjectMaintenanceService GTest::gtest_main)
+gtest_discover_tests(ProjectMaintenanceServiceTest TEST_PREFIX "ProjectMaintenanceServiceTest.")
+alcedo_copy_duckdb_fts_extension(ProjectMaintenanceServiceTest)
+alcedo_register_test_target(ProjectMaintenanceServiceTest app ci_core)
+
+add_executable(ProjectMaintenanceStorageTest ${ALCEDO_TEST_ROOT}/app/project_maintenance_storage_test.cpp)
+target_include_directories(ProjectMaintenanceStorageTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ProjectMaintenanceStorageTest PRIVATE ProjectMaintenanceService GTest::gtest_main)
+gtest_discover_tests(ProjectMaintenanceStorageTest TEST_PREFIX "ProjectMaintenanceStorageTest.")
+alcedo_copy_duckdb_fts_extension(ProjectMaintenanceStorageTest)
+alcedo_register_test_target(ProjectMaintenanceStorageTest app ci_core)
+
+add_executable(ProjectMaintenanceApplyTest ${ALCEDO_TEST_ROOT}/app/project_maintenance_apply_test.cpp)
+target_include_directories(ProjectMaintenanceApplyTest PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(ProjectMaintenanceApplyTest PRIVATE ProjectMaintenanceService ImportService GTest::gtest_main)
+target_compile_definitions(ProjectMaintenanceApplyTest PRIVATE ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")
+gtest_discover_tests(ProjectMaintenanceApplyTest TEST_PREFIX "ProjectMaintenanceApplyTest.")
+alcedo_copy_duckdb_fts_extension(ProjectMaintenanceApplyTest)
+alcedo_register_test_target(ProjectMaintenanceApplyTest app ci_core)
+
 add_executable(UpdateManifestTest ${ALCEDO_TEST_ROOT}/app/update_manifest_test.cpp)
 target_include_directories(UpdateManifestTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(UpdateManifestTest PRIVATE UpdateService unofficial::ed25519::ed25519

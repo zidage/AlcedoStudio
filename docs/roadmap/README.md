@@ -31,6 +31,7 @@ use their own top-level category.
   a disk directory through a one-way scan; tracking issue #991
 - [Sleeve Node Cache Plan](alcedo_studio/storage/sleeve_node_cache_plan.md): resident folder
   tree, file entries on demand, and a dirty list for the sleeve file system; tracking issue #1148
+- [Project Maintenance Plan](alcedo_studio/storage/project_maintenance_plan.md)
 
 ## Alcedo Studio — Image editing pipeline
 

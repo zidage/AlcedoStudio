@@ -1086,10 +1086,10 @@ function(alcedo_install_opencl_sources destination)
 endfunction()
 
 # Ship Alcedo LICENSE/NOTICE plus gathered third-party texts, including the
-# QuickQanava BSD-3-Clause and vendored bezier MIT notices required for binary
-# redistribution. @p destination is next to the Windows executable or inside
-# the macOS bundle Resources directory so THIRD_PARTY_NOTICE.txt relative paths
-# to third_party_licenses/ remain valid.
+# QuickQanava BSD-3-Clause, vendored bezier MIT, and Tabler Icons MIT notices
+# required for binary redistribution. @p destination is next to the Windows
+# executable or inside the macOS bundle Resources directory so THIRD_PARTY_NOTICE.txt
+# relative paths to third_party_licenses/ remain valid.
 function(alcedo_install_legal_notices destination)
     set(_alcedo_notice_root "${CMAKE_SOURCE_DIR}")
     set(_alcedo_required_notices
@@ -1098,6 +1098,7 @@ function(alcedo_install_legal_notices destination)
         "${_alcedo_notice_root}/THIRD_PARTY_NOTICE.txt"
         "${_alcedo_notice_root}/third_party_licenses/QuickQanava-licence.txt"
         "${_alcedo_notice_root}/third_party_licenses/QuickQanava-bezier-LICENSE.txt"
+        "${_alcedo_notice_root}/third_party_licenses/Tabler-Icons-LICENSE.txt"
     )
     foreach(_alcedo_notice IN LISTS _alcedo_required_notices)
         if(NOT EXISTS "${_alcedo_notice}")

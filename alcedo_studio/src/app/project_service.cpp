@@ -444,7 +444,22 @@ void ProjectService::SaveProject(const std::filesystem::path& meta_path) {
     throw std::runtime_error("Failed to open meta file for writing");
   }
   file << metadata.dump(4);
+  file.flush();
+  if (!file) throw std::runtime_error("Failed to write project metadata");
   file.close();
+}
+
+void ProjectService::RefreshPackageDataSummary(const std::filesystem::path& meta_path,
+                                               Storage&                     storage) {
+  std::ifstream input(meta_path);
+  if (!input) throw std::runtime_error("Cannot read staged project metadata");
+  auto metadata = nlohmann::json::parse(input);
+  input.close();
+  metadata["data_summary"] = ComputeProjectDataSummary(storage);
+  std::ofstream output(meta_path, std::ios::trunc);
+  output << metadata.dump(4);
+  output.flush();
+  if (!output) throw std::runtime_error("Cannot write staged project metadata");
 }
 
 void ProjectService::LoadProject(const std::filesystem::path& meta_path) {

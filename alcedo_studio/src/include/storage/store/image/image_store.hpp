@@ -36,6 +36,10 @@ class ImageStore {
   /// library file, so nothing can display or edit it. Runs one DELETE under the connection
   /// lock; throws when DuckDB rejects the statement.
   void RemoveImagesWithoutFileBinding();
+  /// Remove only the nominated Images whose last file binding is gone, including optional
+  /// source identities. The caller owns the connection, database lock, and transaction.
+  static void RemoveUnreferencedImagesInTransaction(duckdb_connection&          connection,
+                                                    std::span<const image_id_t> ids);
   void RemoveImageByType(const ImageType type);
 
   void UpdateImage(const std::shared_ptr<Image> image);

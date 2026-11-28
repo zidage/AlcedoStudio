@@ -660,13 +660,18 @@ void CommitGraphStore::VisitStoredHistoryJsonContaining(
 }
 
 void CommitGraphStore::DeleteGraphForElement(sl_element_id_t element_id) {
+  duckorm::Transaction transaction(conn_);
+  DeleteGraphForElementInTransaction(element_id);
+  transaction.commit();
+}
+
+void CommitGraphStore::DeleteGraphForElementInTransaction(sl_element_id_t element_id) {
   const auto state = GetImageEditState(element_id);
   if (!state.has_value()) {
     return;
   }
 
-  const auto           root_equals = expr::column_eq("root_id", state->root_id.ToString());
-  duckorm::Transaction transaction(conn_);
+  const auto root_equals = expr::column_eq("root_id", state->root_id.ToString());
   version_ref_mapper_.RemoveWhere(ElementIdEquals(element_id));
   auto delete_attribution = expr::raw(
       "DELETE FROM EditCommitAttribution WHERE commit_hash IN "
@@ -679,7 +684,6 @@ void CommitGraphStore::DeleteGraphForElement(sl_element_id_t element_id) {
   auto delete_root = expr::raw("DELETE FROM PipelineRoot WHERE ");
   delete_root.append(ElementIdEquals(element_id));
   duckorm::execute(conn_, delete_root);
-  transaction.commit();
 }
 
 auto CommitGraphStore::CreateEmptyPersisted(sl_element_id_t element_id,

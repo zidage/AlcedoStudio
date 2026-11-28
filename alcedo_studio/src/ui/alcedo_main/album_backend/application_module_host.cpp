@@ -739,6 +739,18 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   application_close_ = std::make_unique<ApplicationCloseCoordinator>(
       editor_session_.get(), workspace_router_.get(), project_.get(), this);
   RecordConstruction("ApplicationCloseCoordinator", application_close_.get());
+  maintenance_service_ = std::make_unique<ProjectMaintenanceService>();
+  RecordConstruction("ProjectMaintenanceService", maintenance_service_.get());
+  maintenance_ = std::make_unique<ProjectMaintenanceController>(
+      *maintenance_service_, *project_, *project_launch_, *editor_session_, *background_tasks_,
+      *interaction_policy_, this);
+  RecordConstruction("ProjectMaintenanceController", maintenance_.get());
+  application_close_->SetProjectWorkCallbacks([this] { maintenance_->RequestProjectClose(); },
+                                              [this] { return maintenance_->Busy(); });
+  connect(application_close_.get(), &ApplicationCloseCoordinator::WaitingChanged,
+          maintenance_.get(), [this] {
+            if (!application_close_->waiting()) maintenance_->CancelProjectCloseRequest();
+          });
   library_mutations_ = std::make_unique<LibraryMutationOperations>(
       images_.get(), library_->selection(), folders_.get(), editor_session_.get(),
       workspace_router_.get(), this);
@@ -757,7 +769,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     library->RequestLibraryContentRefresh();
     folders->RefreshImageCounts();
   };
-  mount_scan_dependencies.on_scan_ended = [library = library_.get(), folders = folders_.get()](
+  mount_scan_dependencies.on_scan_ended = [library = library_.get(), folders = folders_.get(),
+                                           maintenance = maintenance_.get()](
                                               mount_id_t, const MountScanResult& result) {
     const bool folders_changed = result.folders_added_count + result.folders_removed_count > 0;
     if (folders_changed) {
@@ -765,6 +778,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
     if (folders_changed || MountScanChangedPhotos(result)) {
       library->RequestLibraryContentRefresh();
+    }
+    if (result.adopted_count > 0 || result.status == MountScanStatus::kStorageFailure) {
+      maintenance->RefreshSourceChangedEntries();
     }
     // The count read also reads the mount states: an offline or relocated mount changes its
     // rows with no photo change.
@@ -803,7 +819,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   nikon_he_recovery_->BindCollaborators(import_export_.get(), semantic_generation_.get());
 
   ProjectLifecycleHooks lifecycle_hooks;
-  lifecycle_hooks.project_switch_block_reason = [import_export = import_export_.get()] {
+  lifecycle_hooks.project_switch_block_reason = [import_export = import_export_.get(),
+                                                 maintenance   = maintenance_.get()] {
+    if (const auto reason = maintenance->ProjectSwitchBlockReason(); !reason.isEmpty())
+      return reason;
     // ImportRunning() stays true while the finished import is written to the project.
     if (import_export && (import_export->ImportRunning() ||
                           (import_export->current_import_job() &&
@@ -1100,6 +1119,8 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   };
   destroy(mount_scans_, "MountScanCoordinator");
   destroy(library_mutations_, "LibraryMutationOperations");
+  destroy(maintenance_, "ProjectMaintenanceController");
+  destroy(maintenance_service_, "ProjectMaintenanceService");
   destroy(application_close_, "ApplicationCloseCoordinator");
   destroy(project_launch_, "ProjectLaunchCoordinator");
   destroy(log_folder_, "LogFolderController");

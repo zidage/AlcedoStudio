@@ -811,6 +811,12 @@ def_library(ImportService
     PRIVATE_DEPS AlcedoLog Qt6::Core SourceFileUtils
 )
 
+def_library(ProjectMaintenanceService
+    SOURCES "${ALCEDO_APP_ROOT}/project_maintenance_service.cpp"
+            "${ALCEDO_APP_ROOT}/project_maintenance_package.cpp"
+    PUBLIC_DEPS ProjectService Storage SourceFileUtils
+)
+
 def_library(ThumbnailService
     SOURCES "${ALCEDO_APP_ROOT}/thumbnail_service.cpp"
     # Thumbnails decode RAW sources (EditInput, ImageLoader) on their own CPU workers.

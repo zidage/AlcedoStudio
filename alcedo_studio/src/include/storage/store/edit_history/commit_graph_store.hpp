@@ -185,6 +185,10 @@ class CommitGraphStore {
   /// in one transaction.
   void DeleteGraphForElement(sl_element_id_t element_id);
 
+  /// Delete one entry's history inside the caller's transaction and database lock.
+  /// Throws on a write failure; the caller must roll back the complete operation.
+  void DeleteGraphForElementInTransaction(sl_element_id_t element_id);
+
   /// Persist an empty image edit state (infrastructure bootstrap helper).
   auto CreateEmptyPersisted(sl_element_id_t element_id,
                             std::string default_display_name = "Default") -> CommitGraph;

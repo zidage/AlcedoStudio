@@ -97,6 +97,7 @@ def_library(LutMetadata
 # listings, and volume identity.
 set(ALCEDO_SOURCE_FILE_UTILS_SOURCES
     ${ALCEDO_SRC_ROOT}/utils/file/source_file.cpp
+    ${ALCEDO_SRC_ROOT}/utils/file/source_image_status.cpp
     ${ALCEDO_SRC_ROOT}/utils/file/source_file_fingerprint.cpp
     ${ALCEDO_SRC_ROOT}/utils/file/mount_directory_listing.cpp
     ${ALCEDO_SRC_ROOT}/include/utils/file/source_file_fingerprint.hpp

@@ -19,6 +19,7 @@ import "ThumbnailTier.js" as ThumbnailTier
 // they are.
 Item {
     id: root
+    property var sourceChangedEntries: ({})
     objectName: "albumSectionView"
     clip: true
 
@@ -1013,6 +1014,12 @@ Item {
                     compact: root.compactText
                 }
 
+                SourceChangedThumbnailIcon {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.margins: appTheme.spaceXs
+                    visible: root.sourceChangedEntries[String(cell.fileId >>> 0)] === true
+                }
                 // Edit mark: a chip on the top-right corner of the photo.
                 ThumbnailEditMark {
                     image: cellImage

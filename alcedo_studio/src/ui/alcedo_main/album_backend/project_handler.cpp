@@ -538,6 +538,7 @@ bool ProjectHandler::PackageCurrentProjectFiles(QString* errorOut) const {
 auto ProjectHandler::MakeSaveAndPackageJob() const -> std::function<bool(QString*)> {
   return [project = project_, db_path = db_path_, meta_path = meta_path_,
           package_path = project_package_path_, mutex = package_mutex_](QString* errorOut) {
+    std::lock_guard lock(*mutex);
     if (!project) {
       return false;
     }
@@ -548,8 +549,27 @@ auto ProjectHandler::MakeSaveAndPackageJob() const -> std::function<bool(QString
     } catch (...) {
       return false;
     }
-    std::lock_guard lock(*mutex);
     return PackageProjectFiles(project, db_path, meta_path, package_path, errorOut);
+  };
+}
+
+auto ProjectHandler::MakeMaintenanceJob(std::shared_ptr<ProjectMaintenancePackage> operation,
+                                        std::vector<MaintenanceRemoval>            removals,
+                                        std::filesystem::path backup_directory) const
+    -> std::function<void()> {
+  return [project = project_, path = project_package_path_, mutex = package_mutex_,
+          operation = std::move(operation), removals = std::move(removals),
+          backup_directory = std::move(backup_directory)] {
+    std::lock_guard lock(*mutex);
+    operation->Apply(project, path, removals, backup_directory);
+  };
+}
+
+auto ProjectHandler::MakeMaintenanceRestoreJob(
+    std::shared_ptr<ProjectMaintenancePackage> operation) const -> std::function<void()> {
+  return [operation = std::move(operation), mutex = package_mutex_] {
+    std::lock_guard lock(*mutex);
+    operation->Restore();
   };
 }
 

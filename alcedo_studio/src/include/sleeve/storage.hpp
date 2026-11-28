@@ -17,6 +17,7 @@
 #include "storage/store/semantic/semantic_vector_search.hpp"
 #include "storage/store/sleeve/element_store.hpp"
 #include "storage/store/sleeve/folder_entry_store.hpp"
+#include "storage/store/sleeve/project_maintenance_store.hpp"
 #include "storage/store/storage_maintenance.hpp"
 #include "storage/store/storage_session.hpp"
 #include "type/type.hpp"
@@ -44,6 +45,7 @@ class Storage {
   SemanticVectorSearch                                                  semantic_vector_search_;
   AiStore                                                               ai_store_;
   StorageMaintenance                                                    maintenance_;
+  ProjectMaintenanceStore                                               project_maintenance_;
 
   /// Test fixtures write rows that no store writes (old schemas, broken rows); see
   /// tests/support/storage_test_access.hpp. Production code does not define this type.
@@ -62,6 +64,8 @@ class Storage {
   auto OpenSession() -> StorageSession;
   /// Diagnostics summary, package snapshot, and HNSW index removal (see StorageMaintenance).
   auto Maintenance() -> StorageMaintenance&;
+  /// Project-entry inspection and removal through scoped storage operations.
+  auto GetProjectMaintenanceStore() -> ProjectMaintenanceStore&;
   auto GetElementStore() -> ElementStore&;
   /// Folder structure reads that load no file element (see FolderEntryStore).
   auto GetFolderEntryStore() -> FolderEntryStore&;

@@ -123,6 +123,11 @@ class AutomationCommandRegistry {
   /// Sets the agent control rules of the state-changing commands. Call before the first
   /// dispatch.
   void               SetStateChangeControl(AutomationStateChangeControl control);
+  /// Shared project write admission, including headless clients. Read-only commands remain
+  /// available. The callback runs before every state-changing command and batch step.
+  void               SetProjectWriteRefusal(std::function<QString()> refusal) {
+    project_write_refusal_ = std::move(refusal);
+  }
   /// The refusal of a state-changing command now, or nothing. Batch handlers call it again
   /// between their steps.
   [[nodiscard]] auto AdmitStateChange() const -> std::optional<AutomationCommandRefusal>;
@@ -130,6 +135,7 @@ class AutomationCommandRegistry {
  private:
   std::map<QString, AutomationCommandSpec> commands_;
   AutomationStateChangeControl             state_change_control_;
+  std::function<QString()>                 project_write_refusal_;
 };
 
 }  // namespace alcedo::automation
