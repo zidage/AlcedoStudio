@@ -414,11 +414,13 @@ if(ALCEDO_VULKAN_ENABLED)
     )
     # The pass encoders of the Vulkan backend (#1036): the Develop pass from phase VK6; the
     # geometry resample, the camera color, and the raster input passes from phase VK7; the point
-    # stages of the Color Grade from phase VK8.
+    # stages of the Color Grade from phase VK8; the neighborhood kernels (Clarity, Sharpen,
+    # Halation) from phase VK9.
     def_library(EditRuntimeVulkanPasses
         SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_develop_pass.cpp
                 ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_display_to_ap1_pass.cpp
                 ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_geometry_camera_pass.cpp
+                ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_neighbor_dispatch.cpp
                 ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_primary_grade_pass.cpp
         PUBLIC_DEPS EditRuntimeVulkan EditInput
         PRIVATE_DEPS RawProcessorOpVulkan EditRuntimeLensVulkan EditRuntimeLens PreviewPerformance

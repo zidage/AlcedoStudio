@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -56,6 +57,37 @@ struct VulkanSceneView {
     throw std::runtime_error("Vulkan scene image is not RGBA32F");
   }
   return VulkanSceneView{&texture, 0, texture.Width(), texture.Height()};
+}
+
+/// The image of @p view for its storage image binding: the cached image, or the dummy RGBA32F
+/// image when the kernel reads the buffer.
+[[nodiscard]] inline auto VulkanSceneImageBinding(VulkanBackend&         backend,
+                                                  const VulkanSceneView& view)
+    -> const VulkanBackend::Texture2D* {
+  return view.image != nullptr ? view.image : &backend.DummyStorageImage(TextureFormat::Rgba32f);
+}
+
+/**
+ * @brief The R8 mask @p mask_id of the workspace of @p device, after a check of its format and
+ * of its size against @p width x @p height.
+ * @throws std::runtime_error "<error_prefix>: compiled mask output is missing" or "... is not an
+ *         R8 image of the Grade size".
+ */
+[[nodiscard]] inline auto VulkanRequireSceneMask(VulkanRenderDevice& device,
+                                                 const GraphValueId& mask_id, std::uint32_t width,
+                                                 std::uint32_t height, const char* error_prefix)
+    -> const VulkanBackend::Texture2D& {
+  auto* mask = device.Workspace().Images().Find(mask_id);
+  if (mask == nullptr || mask->Empty()) {
+    throw std::runtime_error(std::string(error_prefix) + ": compiled mask output is missing");
+  }
+  const auto& texture = mask->Texture();
+  if (texture.Format() != TextureFormat::R8 || texture.Width() < width ||
+      texture.Height() < height) {
+    throw std::runtime_error(std::string(error_prefix) +
+                             ": compiled mask output is not an R8 image of the Grade size");
+  }
+  return texture;
 }
 
 }  // namespace alcedo

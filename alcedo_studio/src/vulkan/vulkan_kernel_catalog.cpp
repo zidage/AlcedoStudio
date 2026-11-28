@@ -13,6 +13,7 @@
 #include "vulkan/vulkan_highlight_kernels.hpp"
 #include "vulkan/vulkan_lens_calib_kernels.hpp"
 #include "vulkan/vulkan_primary_grade_kernels.hpp"
+#include "vulkan/vulkan_primary_grade_neighbor_kernels.hpp"
 #include "vulkan/vulkan_raw_core_kernels.hpp"
 #include "vulkan/vulkan_raw_pack_kernels.hpp"
 #include "vulkan/vulkan_test_fill_kernels.hpp"
@@ -45,6 +46,8 @@ auto VulkanKernelCatalog() -> std::vector<VulkanKernelDescriptor> {
       display_to_ap1_kernels::DisplayToAp1Descriptor(display_to_ap1_kernels::kDisplayToAp0Linear),
       primary_grade_kernels::PointwiseSceneDescriptor(),
       primary_grade_kernels::CurveInputHistogramDescriptor(),
+      primary_grade_neighbor_kernels::BlurDescriptor(),
+      primary_grade_neighbor_kernels::ApplyDescriptor(),
   };
   for (const auto kernel : debayer_rcd_kernels::kRcdKernels) {
     catalog.push_back(debayer_rcd_kernels::Descriptor(kernel));
