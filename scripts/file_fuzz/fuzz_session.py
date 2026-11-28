@@ -88,23 +88,29 @@ class Answer:
 
 def find_host_binaries(cli: Path | None, build_dir: Path | None) -> tuple[Path, Path]:
     """The alcedo-cli and alcedo_main executables: next to @p cli, or in the build tree
-    @p build_dir (`alcedo_studio/src/`), or in an installed tree (`bin/`)."""
+    @p build_dir, or in an installed tree (`bin/`). A build tree has alcedo-cli in
+    `alcedo_studio/src/`; alcedo_main is there on Windows and in
+    `alcedo_studio/src/ui/alcedo_main/` on the other platforms."""
     exe = ".exe" if IS_WINDOWS else ""
-    candidates: list[Path] = []
+    directories: list[Path] = []
     if cli is not None:
-        candidates.append(cli.parent)
+        directories.append(cli.parent)
     if build_dir is not None:
-        candidates += [build_dir / "alcedo_studio" / "src", build_dir / "bin", build_dir]
-    for directory in candidates:
-        cli_path = cli if cli is not None else directory / f"alcedo-cli{exe}"
-        host = directory / f"alcedo_main{exe}"
-        bundle = directory / "alcedo_main.app" / "Contents" / "MacOS" / "alcedo_main"
-        if cli_path.is_file() and host.is_file():
-            return cli_path, host
-        if cli_path.is_file() and bundle.is_file():
-            return cli_path, bundle
-    raise FileNotFoundError(
-        f"no alcedo-cli and alcedo_main in {', '.join(str(c) for c in candidates)}")
+        directories += [build_dir / "alcedo_studio" / "src",
+                        build_dir / "alcedo_studio" / "src" / "ui" / "alcedo_main",
+                        build_dir / "bin", build_dir]
+    cli_path = cli if cli is not None else next(
+        (d / f"alcedo-cli{exe}" for d in directories if (d / f"alcedo-cli{exe}").is_file()), None)
+    host = None
+    for directory in directories:
+        for candidate in (directory / f"alcedo_main{exe}",
+                          directory / "alcedo_main.app" / "Contents" / "MacOS" / "alcedo_main"):
+            if host is None and candidate.is_file():
+                host = candidate
+    if cli_path is None or not cli_path.is_file() or host is None:
+        raise FileNotFoundError(
+            f"no alcedo-cli and alcedo_main in {', '.join(str(d) for d in directories)}")
+    return cli_path, host
 
 
 @dataclass
