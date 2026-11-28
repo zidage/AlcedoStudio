@@ -7,7 +7,7 @@ import QtQuick.Layouts
 
 // Settings > LUTs and Color Management, laid out as bento tiles: the LUT library folder (open,
 // change, refresh), the total LUT count, the film simulation / custom split, the DCP camera
-// profile folder (CameraProfileFolderTile), the monitor profile on Windows (DisplayProfileTile), and the official LUT packages as store cards (download, update, repair,
+// profile folder (CameraProfileFolderTile), the preset folder (PresetSettingsSection), the monitor profile on Windows (DisplayProfileTile), and the official LUT packages as store cards (download, update, repair,
 // cancel, retry, remove). "Change folder" moves the library into an empty folder and
 // switches to a folder that already holds files (LutLibraryService::
 // RootChangeMigrates). The dialog starts the signed package check when
@@ -24,6 +24,8 @@ ColumnLayout {
     property var packageService: null
     // CameraProfileLibraryService (appModules.cameraProfiles), for the camera profiles tile.
     property var cameraProfiles: null
+    // PresetLibraryService (appModules.presetLibrary), for the presets tile.
+    property var presetLibrary: null
     property color textColor: appTheme.textColor
     property color mutedTextColor: appTheme.textMutedColor
     property color dividerColor: appTheme.dividerColor
@@ -473,6 +475,17 @@ ColumnLayout {
         Layout.leftMargin: 34
         Layout.rightMargin: 34
         library: page.cameraProfiles
+        textColor: page.textColor
+        mutedTextColor: page.mutedTextColor
+        dataFontFamily: page.dataFontFamily
+    }
+
+    // ── Presets (preset folder) ───────────────────────────────────────────
+    PresetSettingsSection {
+        Layout.fillWidth: true
+        Layout.leftMargin: 34
+        Layout.rightMargin: 34
+        library: page.presetLibrary
         textColor: page.textColor
         mutedTextColor: page.mutedTextColor
         dataFontFamily: page.dataFontFamily

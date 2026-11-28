@@ -4,7 +4,7 @@ import QtTest
 
 // Auto-recognition behavior for the RAW Decode lens section against the
 // production panel + real lens catalog. lensSession (C++ context object)
-// records every submitPatch and exposes a scripted exifLensMake/exifLensModel
+// records every submitPatch and exposes a scripted autoLensMake/autoLensModel
 // so detection success/failure is deterministic.
 Item {
     id: outer
@@ -44,7 +44,7 @@ Item {
             // Fresh panel per scenario: EXIF + snapshot are staged before the
             // loader reactivates so Component.onCompleted sees final state.
             function reload(exifMake, exifModel, snapshot) {
-                lensSession.setExifLens(exifMake, exifModel)
+                lensSession.setAutoLens(exifMake, exifModel)
                 lensSession.setSnapshot(snapshot || ({}))
                 lensSession.clearCalls()
                 panelLoader.active = false
@@ -181,11 +181,29 @@ Item {
                 compare(lensCalls().length, 0)
             }
 
+            // A lens name that is no catalog row selects no row, so Auto stays
+            // Auto through an off/on cycle. The panel used to map the EXIF text
+            // "E 15-30mm F2.8" onto a Pentax K-mount row and wrote it on re-enable.
+            function test_reenableWithoutProfileKeepsAuto() {
+                const panel = reload("Sony", "E 15-30mm F2.8", {
+                    "lens_calib": { "enabled": true, "lens_maker": "", "lens_model": "" }
+                })
+                verify(!picker(panel).detectionAvailable)
+                const enabled = findChild(panel, "rawLensEnabledModel")
+                enabled.commitValue(false)
+                lensSession.setSnapshot({ "lens_calib": lastLensParams() })
+                enabled.commitValue(true)
+                const params = lastLensParams()
+                verify(params.enabled === true)
+                compare(params.lens_maker, "")
+                compare(params.lens_model, "")
+            }
+
             function test_detectionLossUnchecksBox() {
                 const panel = reload(appWin.exifMake, appWin.exifModel, {})
                 const box = autoCheck(panel)
                 verify(box.checked)
-                lensSession.setExifLens("", "")
+                lensSession.setAutoLens("", "")
                 verify(!picker(panel).detectionAvailable)
                 tryVerify(function () { return !box.checked && !box.enabled }, 1000)
             }

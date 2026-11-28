@@ -34,6 +34,8 @@ Item {
     signal ratingReasonSaveRequested(string reasons)
     signal contextMenuRequested(var item, real sceneX, real sceneY)
     signal colorLabelSettingsRequested()
+    signal aiModelsPageRequested()
+    signal messageRequested(string message)
 
     readonly property color textColor: appTheme.textColor
     readonly property color mutedTextColor: appTheme.textMutedColor
@@ -182,6 +184,8 @@ Item {
                 selectionState: root.selectionState
                 selectedCount: root.selectedCount
                 pageActive: root.currentPage === 2
+                onAiModelsPageRequested: root.aiModelsPageRequested()
+                onMessageRequested: function(message) { root.messageRequested(message) }
             }
         }
     }

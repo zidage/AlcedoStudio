@@ -11,7 +11,6 @@
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
 #include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
-#include "ui/alcedo_main/album_backend/import_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/project_maintenance_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_maintenance_model.hpp"
 #include "ui/alcedo_main/shortcut_registry.hpp"
@@ -59,6 +58,12 @@ void RegisterApplicationModuleTypes() {
   qmlRegisterUncreatableType<AdjustmentTransferDialogModel>(
       "Alcedo.Main", 1, 0, "AdjustmentTransferDialogModel",
       "Owned by AdjustmentTransferController");
+  qmlRegisterUncreatableType<PresetController>("Alcedo.Main", 1, 0, "PresetController",
+                                               "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<PresetListModel>("Alcedo.Main", 1, 0, "PresetListModel",
+                                              "Owned by PresetController");
+  qmlRegisterUncreatableType<PresetPreviewController>(
+      "Alcedo.Main", 1, 0, "PresetPreviewController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorSessionController>(
       "Alcedo.Main", 1, 0, "EditorSessionController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorComparisonController>(
@@ -75,8 +80,8 @@ void RegisterApplicationModuleTypes() {
                                               "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorBehaviorPreferences>(
       "Alcedo.Main", 1, 0, "EditorBehaviorPreferences", "Owned by ApplicationModuleHost");
-  qmlRegisterUncreatableType<ImportBehaviorPreferences>(
-      "Alcedo.Main", 1, 0, "ImportBehaviorPreferences", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<LibraryBehaviorPreferences>(
+      "Alcedo.Main", 1, 0, "LibraryBehaviorPreferences", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<LibraryViewPreferences>(
       "Alcedo.Main", 1, 0, "LibraryViewPreferences", "Owned by ApplicationModuleHost");
 }

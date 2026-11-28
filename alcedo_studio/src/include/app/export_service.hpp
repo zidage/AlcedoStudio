@@ -45,6 +45,8 @@ struct ExportResult {
   bool                  metadata_written_               = false;
   bool                  icc_embedded_                   = false;
   bool                  resolution_tags_written_        = false;
+  /// The task failed because its photo is not in the project or its source file does not exist.
+  bool                  source_missing_                 = false;
   std::filesystem::path output_path_;
   std::string           failed_stage_;
   std::string           message_;
@@ -78,6 +80,11 @@ struct ExportProgress {
   bool            task_started_  = false;
   bool            task_finished_ = false;
   bool            task_success_  = false;
+  /// ExportResult::source_missing_ of the finished task.
+  bool            task_source_missing_ = false;
+  /// ExportResult::message_ of a finished task that failed; empty otherwise. An AI Denoise
+  /// render error keeps its marker here (ParseAiDenoiseRenderError, integration plan DN8).
+  std::string     task_message_;
 };
 
 /**
@@ -99,10 +106,12 @@ class ExportService {
    *
    * The snapshot is captured at enqueue so that the rendered pixels and the output color of the
    * recipe come from the same document state. It is immutable and released with the task.
+   * A task queued by EnqueueMissingPhotoTask has no snapshot and source_missing_ set.
    */
   struct QueuedExport {
     ExportTask                                   task_;
     std::shared_ptr<const PipelineGraphSnapshot> snapshot_;
+    bool                                         source_missing_ = false;
   };
 
   std::shared_ptr<SleeveServiceImpl>   sleeve_service_;
@@ -155,6 +164,16 @@ class ExportService {
    *         queued on failure.
    */
   void EnqueueExportTask(const ExportTask& task);
+
+  /**
+   * @brief Queue a task for the photo (@p sleeve_id, @p image_id) that is not in the project.
+   *
+   * The task joins the next ExportAll like any other task and finishes at once with a failed
+   * ExportResult whose source_missing_ is set; the other tasks of the run export as usual.
+   *
+   * Thread: any thread.
+   */
+  void EnqueueMissingPhotoTask(sl_element_id_t sleeve_id, image_id_t image_id);
 
   void RemoveExportTask(sl_element_id_t sleeve_id) {
     std::lock_guard<std::mutex> lock(queue_mutex_);

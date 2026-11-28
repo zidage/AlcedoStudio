@@ -80,6 +80,15 @@
     <file>panel_icons/flask.svg</file>
     <file>panel_icons/sort.svg</file>
     <file>panel_icons/folder-plus.svg</file>
+    <file>panel_icons/folder-symlink.svg</file>
+    <file>panel_icons/library.svg</file>
+    <file>panel_icons/drive.svg</file>
+    <file>panel_icons/tray-download.svg</file>
+    <file>panel_icons/chevron-right.svg</file>
+    <file>panel_icons/dots.svg</file>
+    <file>panel_icons/link.svg</file>
+    <file>panel_icons/folder.svg</file>
+    <file>panel_icons/photo-off.svg</file>
     <file>panel_icons/plus.svg</file>
     <file>panel_icons/play.svg</file>
     <file>panel_icons/stop.svg</file>

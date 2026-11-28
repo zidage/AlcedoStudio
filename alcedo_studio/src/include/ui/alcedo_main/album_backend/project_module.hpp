@@ -11,8 +11,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "app/semantic_generation_service.hpp"
@@ -38,6 +40,15 @@ struct ProjectLifecycleHooks {
   std::function<void()>               refresh_semantic_state;
   std::function<bool()>               export_inflight;
   std::function<void()>               refresh_translations;
+  /// Stop the scans of the mounted folders before the services of the project close; the call
+  /// waits for the worker of the running scan (MountScanCoordinator::Stop).
+  std::function<void()>               stop_mount_scans;
+  /// Request the stop of the scans of the mounted folders without a wait
+  /// (MountScanCoordinator::BeginStop). The result is ready when the worker of the running scan
+  /// has ended; it is invalid when no worker runs.
+  std::function<std::shared_future<void>()> begin_stop_mount_scans;
+  /// Start the scans again when a close of the project failed.
+  std::function<void()>               resume_mount_scans;
 };
 
 /// Project lifecycle module: open/create/save, accelerator preference, recent
@@ -70,7 +81,7 @@ class ProjectModule final : public QObject, public IUiStatusSink {
 
  public:
   explicit ProjectModule(QObject* parent = nullptr);
-  ~ProjectModule() override = default;
+  ~ProjectModule() override;
 
   void               SetLifecycleHooks(ProjectLifecycleHooks hooks);
 
@@ -175,6 +186,13 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   void               ClearProjectUiState();
   [[nodiscard]] auto ProjectSwitchBlockReason() const -> QString;
   void               FinalizeEditorSession();
+  /// Calls ProjectLifecycleHooks::stop_mount_scans.
+  void               StopMountScans();
+  /// Calls ProjectLifecycleHooks::begin_stop_mount_scans. An invalid future when the hook is
+  /// empty.
+  auto               BeginStopMountScans() -> std::shared_future<void>;
+  /// Calls ProjectLifecycleHooks::resume_mount_scans.
+  void               ResumeMountScans();
   [[nodiscard]] bool ShouldKeepSemanticModelData(const QString& profileId) const;
 
  signals:
@@ -228,6 +246,9 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   i18n::LocalizedText          task_status_text_{};
   int                          task_progress_       = 0;
   bool                         task_cancel_visible_ = false;
+  // Join kernel preparation before this module and the process OpenCL library
+  // are destroyed. Closing the window can occur while clBuildProgram is active.
+  std::thread opencl_preparation_thread_;
 };
 
 }  // namespace alcedo::ui

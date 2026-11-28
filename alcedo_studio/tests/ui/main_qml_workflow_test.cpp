@@ -386,6 +386,62 @@ TEST_F(MainQmlWorkflowTests, SettingsDoneDoesNotOverwriteCommittedShortcutChange
   EXPECT_TRUE(restored.value(QStringLiteral("succeeded")).toBool());
 }
 
+// Issue 1140: a modal dialog blocks every press outside itself. The drawn
+// caption buttons live in a layer above every popup, so the window controls
+// stay usable while Settings is open, and the toolbar under it stays blocked.
+TEST_F(MainQmlWorkflowTests, CaptionButtonsStayUsableWhileSettingsIsOpen) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  alcedo::ui::AppTheme::RegisterFonts();
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(CreateTestProject(host));
+  alcedo::ui::LanguageManager language_manager(QCoreApplication::instance());
+  alcedo::ui::AppTheme::SetEffectiveLanguageCode(language_manager.EffectiveLanguageCode());
+  QQuickStyle::setStyle(QStringLiteral("Material"));
+
+  QQmlApplicationEngine  engine;
+  std::vector<QQmlError> qml_warnings;
+  QObject*               root = LoadMainQml(host, language_manager, engine, qml_warnings);
+  ASSERT_NE(root, nullptr) << (qml_warnings.empty()
+                                   ? std::string{}
+                                   : qml_warnings.front().toString().toStdString());
+  auto* window = qobject_cast<QQuickWindow*>(root);
+  ASSERT_NE(window, nullptr);
+  if (root->property("nativeTrafficLightsEnabled").toBool()) {
+    GTEST_SKIP() << "macOS keeps the system traffic lights";
+  }
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(root, "openSettingsDialog", Q_ARG(QVariant, QVariant(0))));
+  ProcessEvents(150);
+  auto* settings = root->findChild<QObject*>(QStringLiteral("settingsDialog"));
+  ASSERT_NE(settings, nullptr);
+  ASSERT_TRUE(settings->property("opened").toBool());
+
+  auto* sidebar_toggle = root->findChild<QQuickItem*>(QStringLiteral("collectionsSidebarToggle"));
+  ASSERT_NE(sidebar_toggle, nullptr);
+  const bool sidebar_expanded = root->property("collectionsSidebarExpanded").toBool();
+  QTest::mouseClick(
+      window, Qt::LeftButton, Qt::NoModifier,
+      sidebar_toggle
+          ->mapToScene(QPointF(sidebar_toggle->width() * 0.5, sidebar_toggle->height() * 0.5))
+          .toPoint());
+  ProcessEvents(50);
+  EXPECT_EQ(root->property("collectionsSidebarExpanded").toBool(), sidebar_expanded);
+
+  auto* maximize = root->findChild<QQuickItem*>(QStringLiteral("windowCaptionMaximize"));
+  ASSERT_NE(maximize, nullptr);
+  ASSERT_TRUE(maximize->isVisible());
+  const bool was_maximized = root->property("windowMaximized").toBool();
+  QTest::mouseClick(
+      window, Qt::LeftButton, Qt::NoModifier,
+      maximize->mapToScene(QPointF(maximize->width() * 0.5, maximize->height() * 0.5)).toPoint());
+  for (int i = 0; i < 20 && root->property("windowMaximized").toBool() == was_maximized; ++i) {
+    ProcessEvents(100);
+  }
+  EXPECT_NE(root->property("windowMaximized").toBool(), was_maximized);
+  EXPECT_TRUE(settings->property("opened").toBool());
+}
+
 TEST_F(MainQmlWorkflowTests, TextInputAndCapturePriorityPreventProductCommandActivation) {
   ASSERT_TRUE(QCoreApplication::instance());
   QSettings::setDefaultFormat(QSettings::IniFormat);

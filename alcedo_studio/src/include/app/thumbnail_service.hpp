@@ -20,6 +20,7 @@
 #include "app/thumbnail_types.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "image/image_buffer.hpp"
+#include "io/image/export_color_profile_config.hpp"
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
@@ -75,6 +76,48 @@ struct ThumbnailRequestResult {
 using ThumbnailCallback       = std::function<void(std::shared_ptr<ThumbnailGuard>)>;
 using ThumbnailResultCallback = std::function<void(ThumbnailRequestResult)>;
 using CallbackDispatcher      = std::function<void(std::function<void()>)>;
+
+/// The document of one preview render (ThumbnailService::RenderPreview) and its output encoding.
+struct ThumbnailPreviewDocument {
+  /// The frozen document to render. Required.
+  std::shared_ptr<const PipelineGraphSnapshot> snapshot;
+  /// Output encoding of the render; nullopt renders with the DRT of the document.
+  std::optional<ExportColorProfileConfig>      output_color;
+};
+
+/// Outcome of one preview render, delivered once.
+struct ThumbnailPreviewResult {
+  /// kReady with pixels, or kError with the real reason in @ref message.
+  ThumbnailRequestStatus       status = ThumbnailRequestStatus::kError;
+  std::string                  message;
+  /// RGBA8 host pixels; set only when kReady. Owned by the receiver; the service keeps no copy.
+  std::shared_ptr<ImageBuffer> pixels;
+  /// Output encoding of @ref pixels: the override of the document, or its DRT.
+  ViewerDisplayConfig          encoding{};
+};
+
+/**
+ * @brief One preview render of a library photo (ThumbnailService::RenderPreview).
+ *
+ * The edit presets plan (PS4, step 3): the Apply Preset dialog shows each preset on a library
+ * photo that the editor does not hold.
+ */
+struct ThumbnailPreviewRequest {
+  sl_element_id_t     element_id = 0;
+  image_id_t          image_id   = 0;
+  /// Size tier of the render: its long edge and its RAW decode resolution.
+  ThumbnailResolution resolution = ThumbnailResolution::k256;
+  /**
+   * Runs once on a lookup worker of the service with the committed snapshot of the photo (its
+   * active Version) and returns the document to render. Throws with the real reason; the
+   * request then completes with kError.
+   */
+  std::function<ThumbnailPreviewDocument(
+      const std::shared_ptr<const PipelineGraphSnapshot>& committed)>
+                                              build_document;
+  /// Receives the result once, on a worker of the service. Required.
+  std::function<void(ThumbnailPreviewResult)> on_complete;
+};
 
 /**
  * @brief Renders thumbnails of committed image states.
@@ -134,6 +177,22 @@ class ThumbnailService {
                             ThumbnailResultCallback callback, bool pin_if_found = true,
                             CallbackDispatcher  dispatcher = nullptr,
                             ThumbnailResolution resolution = ThumbnailResolution::k1024);
+
+  /**
+   * @brief Render a caller document of one photo and hand the pixels to the caller.
+   *
+   * The render takes the lookup, decode, and render stages and the batch executors of a
+   * thumbnail: the committed snapshot of @p request.element_id goes to
+   * ThumbnailPreviewRequest::build_document, and the returned document renders at the tier of
+   * @p request.resolution. The pixels go to @p request.on_complete only: the memory cache and the
+   * disk cache of the thumbnails do not change, and the request is not one of the pending
+   * thumbnail requests, so CancelPending and InvalidateThumbnail do not end it.
+   *
+   * Thread: any thread. @p request.on_complete runs on a worker of the service.
+   * @throws std::invalid_argument when build_document or on_complete is missing;
+   *         std::runtime_error when the services are not initialized.
+   */
+  void RenderPreview(ThumbnailPreviewRequest request);
 
   // Cancel a pending thumbnail request for one element/resolution key.
   // Also increments the key generation token so queued tasks skip execution.

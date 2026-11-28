@@ -627,6 +627,7 @@ TEST_F(LibraryQueryTests, RevealSelectsTheRootFolderWhenTheCurrentFolderLacksThe
   ASSERT_TRUE(WaitUntil([&]() { return module->PendingRevealFileId() == target; }));
 
   folders->CreateFolder(QStringLiteral("Empty"));
+  ASSERT_TRUE(WaitForFolderTree(*folders));
   uint empty_folder = 0;
   for (const auto& entry : folders->Folders()) {
     const auto map = entry.toMap();

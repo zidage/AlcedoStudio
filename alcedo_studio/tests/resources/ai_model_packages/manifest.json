@@ -4,6 +4,40 @@
   "sequence": 20261027120000,
   "packages": [
     {
+      "id": "alcedo-ai-denoise",
+      "name": "AI Denoise",
+      "model_set_version": 1,
+      "revision": "r1",
+      "licenses": [
+        {
+          "name": "GPL-3.0",
+          "file": "licenses/GPL-3.0.txt"
+        },
+        {
+          "name": "CC BY 4.0",
+          "file": "licenses/CC-BY-4.0.txt"
+        }
+      ],
+      "artifacts": {
+        "macos-arm64": {
+          "url": "https://static.aoraw.org/ai-models/v1/packages/alcedo-ai-denoise/v1/r1/alcedo-ai-denoise-v1-r1-macos-arm64.7z",
+          "size": 890,
+          "sha256": "7e5349db35ea4a293bd2e969521fd40b0df0c863e5599e981b5d00f02a0e383f",
+          "file_count": 5,
+          "unpacked_bytes": 535,
+          "inventory_sha256": "a3a083ed06f9f02eb8f18f1128f5a904797006b0d26ce0f18030c63a018fd774"
+        },
+        "windows-x86_64": {
+          "url": "https://static.aoraw.org/ai-models/v1/packages/alcedo-ai-denoise/v1/r1/alcedo-ai-denoise-v1-r1-windows-x86_64.7z",
+          "size": 896,
+          "sha256": "66dd7419c87d51921ccf5df18c18cd194bc562f70f1d3fb9993e551cc37dfab4",
+          "file_count": 5,
+          "unpacked_bytes": 547,
+          "inventory_sha256": "0dac4110043bf4afb007b1a24fd1a9dba4f8a785770dc3b54f95f6d9c618c23a"
+        }
+      }
+    },
+    {
       "id": "alcedo-ai-mask",
       "name": "AI Mask",
       "model_set_version": 1,

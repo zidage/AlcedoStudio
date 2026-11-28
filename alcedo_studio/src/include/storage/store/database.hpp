@@ -53,10 +53,12 @@ class Database {
       "color_labels UTINYINT NOT NULL DEFAULT 0,"
       "delete_mark BOOLEAN NOT NULL DEFAULT FALSE);"
       "CREATE TABLE SleeveRoot (id BIGINT PRIMARY KEY);"
+      // mount_id: the MountRoot.id of a mounted element, NULL for an ordinary element. Last, in
+      // the order mount_schema_query appends it to older databases.
       "CREATE TABLE Element (id BIGINT PRIMARY KEY, type INTEGER, element_name TEXT, added_time "
       "TIMESTAMP, modified_time "
       "TIMESTAMP, "
-      "ref_count BIGINT);"
+      "ref_count BIGINT, mount_id BIGINT);"
       "CREATE TABLE FolderContent (folder_id BIGINT NOT NULL, element_id BIGINT NOT NULL, "
       "PRIMARY KEY(folder_id, element_id));"
       "CREATE INDEX idx_folder_content_folder ON FolderContent(folder_id);"
@@ -105,6 +107,35 @@ class Database {
   constexpr static const char* image_marks_migration_query =
       "ALTER TABLE Image ADD COLUMN IF NOT EXISTS color_labels UTINYINT DEFAULT 0;"
       "ALTER TABLE Image ADD COLUMN IF NOT EXISTS delete_mark BOOLEAN DEFAULT FALSE;";
+
+  // Mounted folders (project file 0.12.0, Mounted Folder Plan MF1). Project file 0.10.0 and
+  // 0.11.0 databases have no Element.mount_id column: ADD COLUMN appends it after ref_count, the
+  // order of init_table_query, and every existing element reads NULL (an ordinary element).
+  // MountRoot holds one row per mount; SourceFile holds the recorded source of a file element
+  // (state 0 = present, 1 = missing; missing_since is set exactly for a missing file).
+  // ElementStore removes the SourceFile row with its file element. Runs on every open.
+  // MountRoot.volume_name (#1076) is the last read display name of the volume, NULL when the
+  // volume has none. Project files written before it have no column: ADD COLUMN appends it after
+  // last_scan_at, the order of the CREATE TABLE, and every existing mount reads NULL until its
+  // next scan reaches the volume.
+  constexpr static const char* mount_schema_query =
+      "ALTER TABLE Element ADD COLUMN IF NOT EXISTS mount_id BIGINT;"
+      "CREATE TABLE IF NOT EXISTS MountRoot ("
+      "id BIGINT PRIMARY KEY,"
+      "root_folder_id BIGINT NOT NULL,"
+      "volume_identity VARCHAR,"
+      "root_path TEXT NOT NULL,"
+      "last_scan_at TIMESTAMP,"
+      "volume_name VARCHAR);"
+      "ALTER TABLE MountRoot ADD COLUMN IF NOT EXISTS volume_name VARCHAR;"
+      "CREATE TABLE IF NOT EXISTS SourceFile ("
+      "element_id BIGINT PRIMARY KEY,"
+      "byte_size BIGINT NOT NULL,"
+      "modified_ns BIGINT NOT NULL,"
+      "fingerprint VARCHAR NOT NULL,"
+      "fingerprint_version INTEGER NOT NULL,"
+      "state UTINYINT NOT NULL,"
+      "missing_since TIMESTAMP);";
 
   constexpr static const char* semantic_table_query =
       "CREATE TABLE IF NOT EXISTS SemanticModel ("

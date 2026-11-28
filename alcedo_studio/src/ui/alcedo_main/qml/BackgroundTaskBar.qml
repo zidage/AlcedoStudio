@@ -181,6 +181,8 @@ Item {
         if (kind === "libraryMarkUpdate") return qsTr("Labels and Marks")
         if (kind === "imageDelete") return qsTr("Delete Images")
         if (kind === "agentControl") return qsTr("Agent")
+        if (kind === "mountScan") return qsTr("Folder Scan")
+        if (kind === "aiDenoiseSwitch") return qsTr("AI Denoise")
         return qsTr("Background Tasks")
     }
 

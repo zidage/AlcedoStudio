@@ -3,10 +3,11 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 // Issue 957: the image context menu resolves its targets with one rule for the Library grid and
-// the editor filmstrip (ImageActionsController.openImageContextMenu ->
+// the editor filmstrip (ImageActionsController.resolveMenuTargets ->
 // LibraryMutationOperations::ResolveTargets). A menu on a selected image acts on every selected
 // image: Paste, Delete, Rating, and "Add to" receive the whole selection. A menu on an image
 // outside the selection acts on that image alone.
+// Issue 1135: opening the menu resolves no targets; each command resolves them when it runs.
 //
 // The controller runs with the production LibraryMutationOperations and LibrarySelection; the
 // other appModules objects are stand-ins that these tests do not drive. ImageController has
@@ -54,7 +55,7 @@ class FakeImages final : public QObject {
   }
 };
 
-constexpr char kFakeModulesQml[] = R"(
+constexpr char kFakeModulesQml[]  = R"(
 import QtQuick
 
 QtObject {
@@ -70,7 +71,6 @@ QtObject {
     property QtObject images: null
     property QtObject interactionPolicy: QtObject {
         property int focusedElementId: 0
-        property var pendingDeleteTargets: []
     }
     property QtObject folders: QtObject { property int currentFolderId: 0 }
     property QtObject libraryMutations: null
@@ -78,7 +78,7 @@ QtObject {
 }
 )";
 
-constexpr char kHostQml[]        = R"(
+constexpr char kHostQml[]         = R"(
 import QtQuick
 
 QtObject {
@@ -87,12 +87,21 @@ QtObject {
 }
 )";
 
-constexpr char kMenuQml[]        = R"(
+constexpr char kMenuQml[]         = R"(
 import QtQuick
 
 QtObject {
     property int openCount: 0
     function openAt(x, y) { openCount += 1 }
+}
+)";
+
+constexpr char kDeleteDialogQml[] = R"(
+import QtQuick
+
+QtObject {
+    property string text: ""
+    function openWith(confirmText) { text = confirmText }
 }
 )";
 
@@ -133,7 +142,9 @@ class ImageContextMenuHarness {
     modules_ = Create(QByteArray{kFakeModulesQml}, QStringLiteral("file:///FakeModules.qml"));
     host_    = Create(QByteArray{kHostQml}, QStringLiteral("file:///FakeHost.qml"));
     menu_    = Create(QByteArray{kMenuQml}, QStringLiteral("file:///FakeMenu.qml"));
-    if (!modules_ || !host_ || !menu_) {
+    delete_dialog_ =
+        Create(QByteArray{kDeleteDialogQml}, QStringLiteral("file:///FakeDeleteDialog.qml"));
+    if (!modules_ || !host_ || !menu_ || !delete_dialog_) {
       return;
     }
     modules_->setProperty("libraryMutations", QVariant::fromValue<QObject*>(&mutations_));
@@ -147,6 +158,8 @@ class ImageContextMenuHarness {
     if (controller_) {
       controller_->setProperty("host", QVariant::fromValue<QObject*>(host_.get()));
       controller_->setProperty("imageContextMenu", QVariant::fromValue<QObject*>(menu_.get()));
+      controller_->setProperty("deleteConfirmDialog",
+                               QVariant::fromValue<QObject*>(delete_dialog_.get()));
     }
     ProcessEvents();
   }
@@ -170,6 +183,16 @@ class ImageContextMenuHarness {
     return controller_->property(property).toList();
   }
 
+  /// The targets that a command of the open menu acts on.
+  [[nodiscard]] auto MenuTargets() const -> QVariantList {
+    QVariant targets;
+    QMetaObject::invokeMethod(controller_.get(), "resolveMenuTargets",
+                              Q_RETURN_ARG(QVariant, targets));
+    return targets.toList();
+  }
+
+  void Invoke(const char* method) { QMetaObject::invokeMethod(controller_.get(), method); }
+
   // Members are destroyed in reverse order: the QML objects go before the engine, and the
   // engine before the C++ objects that the QML objects reference.
   LibrarySelection          selection_{nullptr};
@@ -180,6 +203,7 @@ class ImageContextMenuHarness {
   std::unique_ptr<QObject>  modules_;
   std::unique_ptr<QObject>  host_;
   std::unique_ptr<QObject>  menu_;
+  std::unique_ptr<QObject>  delete_dialog_;
   std::unique_ptr<QObject>  controller_;
 
  private:
@@ -206,9 +230,20 @@ TEST(ImageContextMenuTargetsQmlTest, FilmstripMenuOnSelectedImageTargetsWholeSel
   EXPECT_EQ(harness.menu_->property("openCount").toInt(), 1);
   EXPECT_EQ(harness.controller_->property("menuOrigin").toString(),
             QStringLiteral("editor-filmstrip"));
+  // The open menu holds the clicked image only (#1135).
+  EXPECT_TRUE(harness.Targets("pendingAdjustmentPasteTargets").isEmpty());
+  EXPECT_TRUE(harness.Targets("pendingDeleteTargets").isEmpty());
+  EXPECT_EQ(harness.controller_->property("menuClickedItem").toMap().value("elementId").toUInt(),
+            1002u);
+  EXPECT_EQ(ElementIds(harness.MenuTargets()), selected);
+
+  // Paste and Delete resolve the selection when they are picked.
+  harness.Invoke("preparePasteTargets");
   EXPECT_EQ(ElementIds(harness.Targets("pendingAdjustmentPasteTargets")), selected);
+  harness.Invoke("requestDeleteConfirmation");
   EXPECT_EQ(ElementIds(harness.Targets("pendingDeleteTargets")), selected);
-  EXPECT_EQ(ElementIds(harness.Targets("pendingRatingTargets")), selected);
+  EXPECT_EQ(harness.delete_dialog_->property("text").toString(),
+            QStringLiteral("Delete 3 images from project?"));
   // Copy and the menu rating read the clicked image.
   EXPECT_EQ(harness.controller_->property("pendingAdjustmentSource")
                 .toMap()
@@ -226,13 +261,15 @@ TEST(ImageContextMenuTargetsQmlTest, MenuOnUnselectedImageTargetsClickedImageOnl
 
   harness.Select({1001, 1002, 1003});
   harness.OpenMenu(1005, QStringLiteral("editor-filmstrip"));
-  EXPECT_EQ(ElementIds(harness.Targets("pendingAdjustmentPasteTargets")), QList<uint>{1005u});
+  EXPECT_EQ(ElementIds(harness.MenuTargets()), QList<uint>{1005u});
+  harness.Invoke("requestDeleteConfirmation");
   EXPECT_EQ(ElementIds(harness.Targets("pendingDeleteTargets")), QList<uint>{1005u});
 
+  // A new menu drops the targets of the last one.
   harness.OpenMenu(1005, QStringLiteral("library"));
   EXPECT_EQ(harness.controller_->property("menuOrigin").toString(), QStringLiteral("library"));
-  EXPECT_EQ(ElementIds(harness.Targets("pendingAdjustmentPasteTargets")), QList<uint>{1005u});
-  EXPECT_EQ(ElementIds(harness.Targets("pendingRatingTargets")), QList<uint>{1005u});
+  EXPECT_TRUE(harness.Targets("pendingDeleteTargets").isEmpty());
+  EXPECT_EQ(ElementIds(harness.MenuTargets()), QList<uint>{1005u});
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
@@ -244,8 +281,9 @@ TEST(ImageContextMenuTargetsQmlTest, LibraryMenuOnSelectedImageTargetsWholeSelec
   harness.Select({1001, 1003});
   harness.OpenMenu(1003, QStringLiteral("library"));
   const QList<uint> selected{1001u, 1003u};
+  EXPECT_EQ(ElementIds(harness.MenuTargets()), selected);
+  harness.Invoke("preparePasteTargets");
   EXPECT_EQ(ElementIds(harness.Targets("pendingAdjustmentPasteTargets")), selected);
-  EXPECT_EQ(ElementIds(harness.Targets("pendingDeleteTargets")), selected);
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 

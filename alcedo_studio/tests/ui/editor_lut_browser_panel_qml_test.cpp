@@ -444,14 +444,16 @@ TEST(EditorLutBrowserPanelQmlTest, FavoritesToggleAndListLayout) {
   EXPECT_FALSE(h.browser.favoritesOnly());
   ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 5; }, 2000));
 
-  // The list layout keeps one column of rows without the cube placeholder.
+  // The list layout keeps one column of rows, each with a small preview slot.
   h.panel->setProperty("viewMode", QStringLiteral("list"));
   ASSERT_TRUE(WaitUntil([&] { return h.result->property("columns").toInt() == 1; }, 2000));
   ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 5; }, 2000));
+  ProcessEvents(50);
   for (QQuickItem* tile : h.Tiles()) {
-    QQuickItem* cube = ChildNamed(tile, QStringLiteral("editorLutTileCube"));
-    ASSERT_NE(cube, nullptr);
-    EXPECT_FALSE(cube->isVisible());
+    QQuickItem* slot = ChildNamed(tile, QStringLiteral("editorLutTilePreviewSlot"));
+    ASSERT_NE(slot, nullptr);
+    EXPECT_TRUE(slot->isVisible());
+    EXPECT_NEAR(slot->width(), AppTheme::Instance().editorBrowserListThumbWidth(), 0.5);
     EXPECT_TRUE(ChildNamed(tile, QStringLiteral("editorLutFavoriteStar"))->isVisible());
   }
   h.panel->setProperty("viewMode", QStringLiteral("grid"));

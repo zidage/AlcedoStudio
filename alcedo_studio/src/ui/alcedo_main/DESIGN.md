@@ -11,7 +11,7 @@ Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
 `AdjustmentSlider.qml`, `AlcedoSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
 `ThemeSwitch.qml`, `SkeletonBlock.qml`, `StaggeredGridLoader.qml`,
-`StaggeredGridMark.qml`, `AlertBadge.qml`
+`StaggeredGridMark.qml`, `AlertBadge.qml`, `AlcedoScrollBar.qml`, `ViewportRenderAlert.qml`
 
 Per-file decisions: `docs/VI/README.md`. That catalog specializes this global
 system for individual QML files and is updated with each approved visual change.
@@ -71,6 +71,7 @@ Monospace (`monoFontFamily`, DM Mono) is limited to these surfaces:
 | Transaction card hash | `monoFontFamily` + `fontSizeCaption` | `Commit <8-hex>` per row |
 | Transaction before/after | `monoFontFamily` + `fontSizeBody` | Delta value line (`0 → +0.35`) |
 | Adjustment header EXIF tokens | `monoFontFamily` + `fontSizeCaption` | Four equal-width cells: `100mm`, `f2.8`, `1/500s`, `ISO 100` |
+| Viewport render alert detail | `monoFontFamily` + `fontSizeCaption` | The raw error text under Show Details (paths, error codes) |
 
 Version and transaction **titles**, times, and section chrome stay on
 `uiFontFamily`. The selected node display name in the adjustment header also stays
@@ -127,6 +128,12 @@ This rule applies to every new or changed message. Existing `dangerColor` text
 in files a change does not touch has not been converted yet; convert it when
 the file is next changed. `dangerColor` itself remains the token for
 destructive buttons, failure status lamps, and error borders.
+
+The viewport render alert (`ViewportRenderAlert.qml`, below) is the one
+exception, chosen by the user for #1056: an error that stops the render of the
+open photo blurs the whole viewport, so the photo-off icon, the title, and the
+neutral text on the blur carry the state, and the message is muted secondary
+text.
 
 ### Hard ban: unrequested status dots
 
@@ -315,8 +322,36 @@ strength (not the current edit), 256 px on the long edge. The preview slot has
 the 3:2 shape of the filmstrip slot and the full tile content width; the photo
 fits the slot, is centered, and has `controlRadiusSmall` corners (`MultiEffect`
 mask). Until the preview is ready, and for a LUT that cannot be applied, the slot
-shows the `editorLutTileIconSize` cube centered on the well. The list layout has
-no preview slot.
+shows the `editorLutTileIconSize` cube centered on the well. A list row has the
+same preview slot at `editorBrowserListThumbWidth` left of the title (see
+"Browser list rows").
+
+**Browser list rows (LUT and preset browsers):** the toolbar of both browsers has
+the sunken search field (`BrowserSearchField.qml`) and the grid / list switch
+(`BrowserViewModeToggle.qml`). In the list layout every LUT or preset is one row
+across the well with `spaceXs / 2` between rows: a 3:2 preview slot
+(`BrowserPreviewThumb.qml`, the slot of the grid tiles) `editorBrowserListThumbWidth`
+wide and centered on the row, then the name left-aligned in `fontSizeBody`. The
+placeholder icon of the slot shrinks to 60 % of the slot height. Selection,
+applied outline, and hover well are the grid tile states.
+
+**Versions panel presets (edit presets plan, PS2):** the Versions panel has a
+preset part above the Versions part, divided by a 1 px `cardBorderColor`
+splitter line (`textMutedColor` on hover and drag). The preset part has the
+`Presets` header with `plus.svg` (Add Preset...) and `dots.svg` (menu), an
+`AlertBadge` for errors, and the preset browser: the search field and the grid /
+list switch above tiles or list rows in a sunken `bgBaseColor` well with
+`spaceXs` gaps, a `textMutedColor` caption title for each group, the
+`tray-download.svg` icon only when the folder is empty, and the `search.svg` icon
+only when no preset matches the search. Each word of the search must occur in the
+group or the name of a preset; the layout is one setting for the Versions panel
+and the Apply Preset dialog. A tile is the LUT
+tile structure: a 3:2 image area (`cardSurfaceColor` until PS3 adds previews),
+the name centered below it, outline selection, and the hover well. A preset
+that is not available shows `info.svg` in `alertBadgeFillColor`. Names,
+group titles, tooltips, and error badges are plain text. During a drag between
+the two parts, the accepting part draws its well border in `textColor`, and a
+`bgBaseColor` label with the dragged name follows the pointer.
 
 **Editor filmstrip tiles:** the filmstrip shares the Library selection, and a
 tile has two independent states. (User request 2026-10-28: the former bone well
@@ -451,13 +486,18 @@ wordmark and the small import progress ring.
 
 | Surface | Treatment |
 | --- | --- |
-| Neutral filled action: Load Project (empty Library), Import From Folder, Export queue | `editorListSelectedFillColor` fill, `Qt.darker(…, 1.06)` on hover and press; text and icon in `editorListSelectedInkColor`. Disabled: `bgBaseColor` fill with `textMutedColor` ink |
-| Collections tree | File-browser rows of `collectionRowHeight`: `collectionIndentStep` indent per level, a `▸`/`▾` disclosure glyph in `textMutedColor` (the Library section-header glyphs), then the name in `fontSizeTitle` `textColor`. No folder icon. Names elide (uniform fixed-height rows). The root row (all images) has no disclosure glyph and aligns with the top-level collections. The photo count of the collection sits right-aligned after the name in `dataFontFamily` `fontSizeCaption` `textMutedColor`, with locale digit grouping; the root row counts the whole project. A row shows no count before the first count read and while its name field is open (issue #733) |
+| Neutral filled action: Load Project (empty Library), Import (Collections sidebar foot), Export queue | `editorListSelectedFillColor` fill, `Qt.darker(…, 1.06)` on hover and press; text and icon in `editorListSelectedInkColor`. Disabled: `bgBaseColor` fill with `textMutedColor` ink |
+| Collections sidebar surface (`CollectionsPanel.qml`, #1028) | One `colBgPanel` surface with `panelRadius` corners and no outline, like the Inspector: the wordmark, the navigation rows, the Collections section, and the foot. No card inside the panel and no button outside it. The user drags the edge in the gap to the workspace (`collectionsSidebarMinWidth` to `collectionsSidebarMaxWidth`; a 2 px `textMutedColor` line on hover and drag); a double-click sets `collectionsSidebarWidth` again; a drag below `collectionsSidebarFoldWidth` dims the panel to 55% and folds it on release. The width holds for the session |
+| Collections sidebar navigation rows | Search, Background Tasks, and All Photos: rows of `collectionsTreeRowHeight` with a 16 px icon (`search.svg`, `clock-play.svg`, `image.svg`) in the chevron column of the tree, in `textMutedColor` (`textColor` when selected or hovered, as the editor side panel icons), the name in `fontSizeTitle`, and for All Photos the project photo count in the tree count style. Search is a button that opens the search page; it is not a field. All Photos is the root row of the folder model: it takes the selection, the root row menu, a collection drag (move to the top level), and a file drop, with the tree row states |
+| Collections section header | "Collections" in `fontSizeBody` `fontWeightStrong` `textMutedColor` (`textColor` on hover); a click folds the tree, and a 12 px `chevron-right.svg` after the title turns 90 degrees when the section is open (shown on hover and while the section is folded). Sort and New collection are 24 px buttons at the right with a `controlFillColor` hover well and a 14 px icon in `textMutedColor` (`textColor` on hover and while in use); they show on hover of the header, on keyboard focus, while the sort is Z-A, and while a new name field is open |
+| Collections sidebar foot | Below a full-width `dividerColor` hairline: one 36 px "Import" button (`import.svg`, 16 px) in the neutral filled action style. It opens a menu above it: "Import Images...", "Import Folder...", a separator, "Mount Folder...". The verb "Mount" names only the mount and "Import" only the one-time imports. While the selected collection is mounted, or the backend is not interactive, the three items are disabled (user decision 2026-11-21: one labeled entry at the foot, so the import stays easy to find) |
+| Collections rail (`CollectionsRail.qml`) | In the Library, the folded sidebar leaves a `collectionsRailWidth` rail (`colBgPanel`, `panelRadius`) with compact `IconActionButton`s, icons in `textMutedColor` (`textColor` when selected or hovered): Search, Background Tasks, a 24 px `dividerColor` rule, All Photos, Collections, and at the foot Import in the neutral filled action fill. A hover of `collectionsPeekDelayMs` on All Photos or Collections, or a click on Collections, shows the open sidebar over the workspace with a 1 px `glassStrokeColor` outline; it closes when the pointer has left the sidebar and the rail and no menu, dialog, name field, or drag is open. The Editor folds the sidebar fully, to give the image the width |
+| Collections tree | File-browser rows of `collectionsTreeRowHeight` with `collectionsTreeIndentStep` indent per level. Each row has a 16 px chevron column (12 px `chevron-right.svg` in `textMutedColor`, turned 90 degrees when open; empty for a leaf row, so all names align), a 16 px icon column, then the name in `fontSizeTitle` `textColor`. The icon is `folder-symlink.svg` for a mount root and `folder.svg` for every other row, in `textMutedColor` (`textColor` on the selected row), as the editor side panel icons; no icon after the name. Indent guides: 1 px lines through the chevron column of each collection above the row, in `collectionsTreeGuideColor`; the guide of the collection that holds the selection (or of the selected collection when it is open) is `collectionsTreeGuideActiveColor`. Names elide (uniform fixed-height rows). The photo count sits right-aligned after the name in `headlineFontFamily` with tabular figures, `fontSizeCaption`, `fontWeightStrong`, `textMutedColor`, with locale digit grouping. On hover, and while the row menu is open, a 22 px more button (`dots.svg` in `textMutedColor`; `textColor` and a `controlHoveredFillColor` well on hover) takes the place of the count and opens the row menu. An offline mount shows "Offline" in `uiFontFamily` in the count place, and its name and icon are at 45% opacity. A row shows no count before the first count read and while its name field is open (issue #733). The tree scroll bar is the shared `AlcedoScrollBar` in its own column at the right of the rows, so it never covers a count; it sits above the tree pointer handler, so it takes its own drags |
 | Selected collection row | Quiet neutral well: `controlHoveredFillColor` with `controlRadiusSmall` corners; the name keeps `textColor` and turns `fontWeightStrong`; the photo count brightens from `textMutedColor` to `textColor` (user request 2026-11-07: the dark selected ink read dimmer than the idle count); the glyph stays `textMutedColor`. This is the per-file exception to the bright `editorListSelectedFillColor` well (user request 2026-11-07: the bright well was too heavy in the dense tree). No side stripe. Hover is the darker `hoverColor` wash |
 | Collection drop target (drag to move) | `hoverColor` wash with a 1 px `textMutedColor` outline; the dragged name follows the pointer on a `bgBaseColor` label with a 1 px `dividerColor` outline. Rows that cannot take the folder (its own subtree, its current parent) show no outline |
 | Collection drop target (file drop to import) | The same row style as the drag to move, on the row under a drag of local files and folders from the system file manager (issue #757). The draft row and the row being renamed show no outline. Every Library file drop answers Copy, so the file manager never deletes the dropped files |
 | Library grid file drop overlay | Over the grid while local files and folders are dragged onto it: `colBgDeep` at alpha 0.78 with `controlRadiusSmall` corners and a 1 px `textMutedColor` outline; centered `import.svg` (28 px) in `textColor` above "Import to" and the current collection name in `fontSizeSection` `fontWeightHeading`. No explanatory text |
-| New-collection and rename name field | Inline in the tree row: a plain `TextInput` (no Controls `TextField`, so no style-provided floating label or underline) in a `collectionRowHeight` - 4 high `bgBaseColor` box with `controlRadiusSmall` corners; 1 px `dividerColor` border, `textMutedColor` on focus; placeholder in `textMutedColor` inside the box; text selection `textMutedColor` (alpha 0.6) with `textColor` text. The "Add to" filter field uses the same construction |
+| New-collection and rename name field | Inline in the tree row: a plain `TextInput` (no Controls `TextField`, so no style-provided floating label or underline) in a `collectionsTreeRowHeight` - 6 high `bgBaseColor` box with `controlRadiusSmall` corners; 1 px `dividerColor` border, `textMutedColor` on focus; placeholder in `textMutedColor` inside the box; text selection `textMutedColor` (alpha 0.6) with `textColor` text. The "Add to" filter field uses the same construction |
 | Grid zoom slider | `AlcedoSlider` without a value field: the right end shows the largest photos; a double-click returns to the default zoom |
 | Inspector resize handle | `textMutedColor` on hover and drag |
 | Album Inspector sections (`InspectorSection.qml`) | Every field of the Library Overview (By Capture Date, By Import Time, By Edit Time, By Camera Model, By Labels, By Custom Label, By Rating, By Lens, Search Filter) is one rounded card: `bgBaseColor` fill, 1 px `cardBorderColor`, `panelRadius` corners, `spaceMd` from the panel edges, `spaceSm` between the cards. The header and, when the section is expanded, its content sit inside the same card; a collapsed section is the 36 px header alone. In the header: the fold glyph `▾`/`▸` in `textMutedColor` at the left (the Collections tree glyphs; empty for a section that does not fold), the title in title case (`uiFontFamily`, `fontSizeBody`, `fontWeightStrong`, `textColor`, no upper-case transform), and the sort ascending, sort descending, and Group actions (`InspectorFieldActions`) at the right with `spaceXs` between them. The title elides at the right; the actions stay on the title row at the minimum inspector width (300 px) in every UI language. Only when the header cannot hold the glyph, a 56 px title, and the actions do the actions move to a second header row, together at the right. A click on the header outside the actions folds the section with the fold rules of "Motion": the card height follows the clipped content, the content fades with the same progress, and the `▸` glyph turns 90 degrees to point down (`motionFoldOpenMs` / `motionFoldCloseMs`, `motionEasing`; `reduceMotion` makes it a cut); the date content stays loaded until the close ends. The content has `spaceMd` side and bottom padding. Controls inside the card keep their contrast against the `bgBaseColor` fill: chips and day tiles use `controlFillColor` (hover `controlHoveredFillColor`) with a 1 px `cardBorderColor`, the "+N more" and "Show less" chips are transparent with a 1 px `controlBorderColor`, the lens row hover is `controlFillColor`, and the calendar/activity switch track and the search field are `bgCanvasColor`. The Search Filter card shows the query text directly, without a nested box (user decisions 2026-11-09, issue #766: the sections had no visible boundaries, the actions spread across a second row, then rounded cards that extend over the expanded content, consistent with the other panel cards) |
@@ -799,10 +839,23 @@ the two side columns read as one family.
 | `editorLutBrowserFilterWidth` | 184 | LUT browser filter sidebar width |
 | `editorLutTileMinWidth` | 128 | Minimum LUT tile width; the grid fits as many columns as this allows |
 | `editorLutTileIconSize` | 36 | LUT tile cube placeholder icon, centered in the preview slot until the preview is ready |
+| `editorPresetPaneHeight` | 240 | Default height of the preset part of the Versions panel (splitter drag; double click restores it) |
+| `editorVersionsPartMinHeight` | 160 | Smallest Versions part that the preset splitter leaves |
+| `editorPresetTileMinWidth` | 104 | Minimum preset tile width; the browser fits as many columns as this allows |
+| `editorBrowserListThumbWidth` | 48 | Width of the 3:2 preview slot of a LUT or preset list row |
 | `editorAdjustmentHeaderMinHeight` | 58 | Node-name / EXIF header under the scope: EXIF caption line, `spaceXs` gap, compact Mask-tool row |
-| `collectionsSidebarWidth` | 276 | Persistent left collections column |
-| `collectionRowHeight` | 26 | Row of the collections tree, of its inline name field, and of the "Add to" collection list |
-| `collectionIndentStep` | 14 | Indent per tree level in the collections tree and the "Add to" list; also the width of the disclosure-triangle column |
+| `collectionsSidebarWidth` | 264 | Default width of the left collections column; a double-click on its edge sets it again |
+| `collectionsSidebarMinWidth` | 208 | Narrowest drag-resized collections column |
+| `collectionsSidebarMaxWidth` | 420 | Widest drag-resized collections column |
+| `collectionsSidebarFoldWidth` | 160 | A drag of the edge below this width folds the collections column on release |
+| `collectionsRailWidth` | 52 | Rail of the folded collections column in the Library |
+| `collectionsPeekDelayMs` | 250 | Hover time on a rail button before the folded column shows over the workspace |
+| `collectionsTreeRowHeight` | 28 | Row of the collections tree, of its navigation rows, and of its inline name field |
+| `collectionsTreeIndentStep` | 12 | Indent per level of the collections tree |
+| `collectionsTreeGuideColor` | `textColor` alpha 20 | Indent guide of the collections tree |
+| `collectionsTreeGuideActiveColor` | `textColor` alpha 64 | Indent guide of the collection that holds the selection |
+| `collectionRowHeight` | 26 | Row of the "Add to" collection list and of other dense collection lists |
+| `collectionIndentStep` | 14 | Indent per tree level in the "Add to" list; also the width of its disclosure-triangle column |
 | `collectionMenuMaxRows` | 12 | Collection rows that the "Add to" sub-menu shows before its list scrolls |
 | `collectionMenuFilterThreshold` | 15 | Collection count at which the "Add to" sub-menu shows its filter field |
 
@@ -1150,6 +1203,72 @@ cream tones.
 | --- | --- | --- |
 | `maskCoverageTintColor` | `#FF5050` (light red, every theme) | Coverage tint of the viewport composite |
 | `maskCoverageTintOpacity` | 0.5 | Overlay opacity at full coverage |
+
+### Viewport render alert
+
+An error that stops the render of the open photo (the AI Denoise errors of #1050
+first) is shown by `ViewportRenderAlert.qml` over the whole viewport (#1056).
+`BlurredOverlay` blurs the viewport stage and dims it with
+`viewportAlertScrimColor`; a centered column in the style of the workspace empty
+state stands on it, with no card:
+
+| Part | Tokens |
+| --- | --- |
+| Column | `viewportAlertWidth` (380), at most the viewport width less 2 x `spaceLg` |
+| Icon | `photo-off.svg`, `iconOpticalSize`, `viewportAlertSecondaryTextColor` |
+| Title | `headlineFontFamily`, `fontSizeHeadline`, `fontWeightHeading`, `textColor`, centered, wraps; `spaceMd` above |
+| Message | One short translated sentence: `fontSizeTitle`, `viewportAlertSecondaryTextColor`, centered; `spaceXs` above |
+| Show Details | Body text and `chevron-right.svg` (`layerIconGlyphSize`, turns 90 degrees over `motionFadeMs` when open) in `viewportAlertSecondaryTextColor`, `textColor` on hover; `spaceMd` above |
+| Detail | `viewportAlertDetailFillColor` well, 1 px `glassStrokeColor`, `controlRadius`, `spaceSm` / `spaceMd` padding; the raw error text in `monoFontFamily` + `fontSizeCaption` + `textColor`, selectable, wraps anywhere; after `viewportAlertDetailMaxLines` (8) lines it scrolls with an `AlcedoScrollBar` that stays shown |
+| Copy | `clipboard.svg` at the top right of the well (`layerIconHitSize` / `layerIconGlyphSize`); copies the whole detail; the tooltip reads "Copied" for `viewportAlertCopiedMs` |
+| Buttons | `DialogActionButton`, `viewportAlertButtonHeight` (32), `controlRadiusSmall`, `fontSizeBody`, centered; the main action is `light` and stands at the right, a second action is `normal`; `spaceLg` above |
+
+The alert takes the pointer and the wheel of the whole viewport. Show Details
+starts closed for each new error and stays open while the same error is shown
+again. The title and the message come from the caller in the language of the UI;
+the detail is the raw error text in full.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `viewportAlertWidth` | 380 | Width of the column |
+| `viewportAlertButtonHeight` | 32 | Height of the action buttons |
+| `viewportAlertDetailMaxLines` | 8 | Detail lines before the well scrolls |
+| `viewportAlertCopiedMs` | 1500 | Time the Copy tooltip reads "Copied" |
+| `viewportAlertScrimColor` | black at 140/255 | Dim over the blurred viewport; keeps white text readable over a bright photo |
+| `viewportAlertSecondaryTextColor` | `textColor` at 170/255 | Icon, message, Show Details, Copy |
+| `viewportAlertDetailFillColor` | black at 97/255 | Detail well |
+
+### Viewport render progress
+
+A render of the open photo that reads the RAW file or runs the AI Denoise model
+shows its steps in `EditorRenderProgress.qml` (AI Denoise plan, DN14). The user
+requested the pill on 2026-11-23 (direction A of the DN14 mock); it is an
+exception to "Hard ban: unrequested pills and badges" for this surface only.
+
+| Part | Tokens |
+| --- | --- |
+| Pill | At the bottom left of the viewport, `spaceMd` from the left and the bottom edge; `viewportProgressPillHeight` (26), fully rounded, `viewportProgressPillColor`, 1 px `glassStrokeColor`; `spaceSm` padding and spacing |
+| Step dots | One for each step of the render, `viewportProgressDotSize` (6); a done step `viewportProgressFillColor`, the current step `textColor`, a later step `viewportProgressTrackColor` |
+| Step name | `fontSizeCaption`, `fontWeightHeading`, `textColor` |
+| Count | `fontSizeCaption`, `viewportAlertSecondaryTextColor`, tabular figures: `12 / 24 tiles`, or the Develop group (`Sensor`, `Lens and geometry`, `Color`, `Color Grade 1 of 2`, `Display`) |
+| Bar | At the bottom edge of the viewport, `viewportProgressBarHeight` (3); one segment for each step, `viewportProgressSegmentGap` (2) apart; track `viewportProgressTrackColor`, fill `viewportProgressFillColor`; a step with no count sweeps a 30% fill |
+
+The pill and the bar fade in and out over `viewportProgressFadeMs` (200). While
+the pill shows, the center spinner of the viewport hides. The render alert covers
+them when the render fails. Before the first frame, the placeholder image of the
+photo (`appModules.editorPlaceholder`) fills the viewport like the frame at the fit
+zoom, under the pill and the bar.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `viewportProgressPillHeight` | 26 | Height of the pill |
+| `viewportProgressDotSize` | 6 | Step dot |
+| `viewportProgressBarHeight` | 3 | Height of the bar |
+| `viewportProgressSegmentGap` | 2 | Gap between the segments of the bar |
+| `viewportProgressFadeMs` | 200 | Fade of the pill and the bar |
+| `viewportProgressPillColor` | (18, 18, 18) at 184/255 | Pill fill over the photo |
+| `viewportProgressTrackColor` | white at 36/255 | Track of the bar; a later step dot |
+| `viewportProgressFillColor` | white at 230/255 | Fill of the bar; a done step dot |
 
 ### AI Mask tool panel
 
@@ -1652,6 +1771,7 @@ acknowledgements and components of README.md "Acknowledgments": the subject on o
 | `AdjustmentSlider.qml` | `AlcedoSlider` (stacked) bound to `EditorAdjustmentValueModel`: rail drag and value drag are `beginDrag` / `updateDrag` / `finishDrag`, arrow keys `editValue`, a typed value `editValue` + `commitImmediately`, text that is not a number `setInvalid`, double-click `reset`. The rail covers `minimum`..`maximum`; `railMinimum`..`railMaximum` of the model (catalog `rail_minimum` / `rail_maximum`) are the soft limits |
 | `EditorDragSlider.qml` | `AlcedoSlider` (stacked) for owners that take each edit as begin, update, finish calls (White Balance, Color Wheels Master, Selective Color, Mask fields); a typed value or an arrow key step is one begin, update, finish |
 | `AlcedoSlider.qml` | Shared numeric slider (#922): recessed 18 px rail with a 6 x 12 px handle inset 2 px (the handle stays inside the rail), fill from the origin, 1 px mark at the app default, and a value field (data font, tabular figures; muted at the default) that drags (1 px = 1 step, Shift x10) and edits on click. The rail covers the hard range; the extra zones outside the soft range are always hatched (dark tint, 1 px diagonal lines, 1 px line at the soft limit). A rail drag holds at a soft limit for `softDetent` (10 px) of pointer travel, then enters the extra zone, and holds again on the way back; typing, value drag, and arrow keys pass the soft limits without a hold. A double-click on the label or the rail resets; there is no reset button. Layouts `inline` and `stacked`; `showValue: false` drops the value field (Library grid zoom). A gradient rail (White Balance, Selective Color) draws the gradient at 70 % and no fill. Every numeric slider of the app uses it (#922). Soft limits narrower than the accepted range: Exposure +-5 EV (rail +-10 EV), Highlights and Shadows +-100, with an extra zone to -150 for the Highlights recovery and to +150 for the Shadows lift. Selective Color rails follow the selected hue (the swatch color, HSL 100 % / 50 %): Hue Shift shows the hue that each shift gives (a positive shift raises the hue; the Grade kernels turn the hue by 2.25 x the value, so the rail runs from the selected hue -67.5 degrees at -30 to +67.5 degrees at +30), Lightness runs from 10 % to 90 % lightness, Chroma from grey to full saturation |
+| `AlcedoScrollBar.qml` | Shared vertical scroll bar (#1028): the bar of the Inspector pages, the Basic style bar (6 px round thumb, shown while the view moves or the bar is hovered or dragged, then fades out). It names the Basic style, so a file that imports the Material controls still gets the thin bar. The Collections tree, the Library grid, the grouped view, and the folder section use it. Give it its own column or a z above an input layer that covers the view, so it takes its own drags |
 | `LoadingSpinner.qml` | Busy mark: a 270 degree arc (muted text color, round caps) turned by a GUI-thread RotationAnimation (900 ms per turn; still under `reduceMotion`). Use it instead of the Material `BusyIndicator`, whose render-thread animator requests a render-only frame on every vsync and halves the GUI frame rate while it runs. The editor render marks use it |
 | `ThemedProgressBar.qml` | Shared determinate / indeterminate progress track (Background Tasks, Export, Settings tiles); detail text in Manrope with tabular figures |
 | `ImportProgressRing.qml` | Counted import/removal work; rotates a waiting arc during stages without measurable entry progress. Project Maintenance reuses it with the working-task color and stops rotation under reduced motion |
@@ -1665,6 +1785,7 @@ acknowledgements and components of README.md "Acknowledgments": the subject on o
 | `AppMenuItem.qml` | Shared dark menu row (state gutter, wrapping label, sub-menu arrow, hover wash) |
 | `AppMenuSeparator.qml` | Shared 1 px menu group divider |
 | `AlertBadge.qml` | Warning and error message: wrapped white caption text on an `alertBadgeFillColor` badge; hidden while empty |
+| `ViewportRenderAlert.qml` | Error that stops the render of the open photo (#1056): blurs and dims the editor viewport and shows a centered column; see "Viewport render alert". The caller maps its error to `title`, `message`, `detail`, and one or two actions. `EditorAiDenoiseErrorCard.qml` uses it |
 | `SkeletonBlock.qml` | Content placeholder: `bgBaseColor` block with the moving `hoverColor` band (Motion); `animated: false` draws a static tile |
 | `StaggeredGridLoader.qml` | Library loading: a grid of rounded tiles with a diagonal wave (Motion, "Library loading"); `rows: 0` fills the height as a placeholder grid, a fixed 3 x 3 grid with `scaleDepth` is the compact mark |
 | `StaggeredGridMark.qml` | The compact 3 x 3 staggered grid as one shader quad on the shared `appTheme.loadingWavePhase` clock: the loading mark of a photo (Library card, justified tile, Editor filmstrip card) and of the Library over a kept result |

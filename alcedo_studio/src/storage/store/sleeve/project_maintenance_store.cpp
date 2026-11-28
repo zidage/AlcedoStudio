@@ -18,7 +18,7 @@
 #include "storage/store/image/image_store.hpp"
 #include "storage/store/mask_asset/mask_asset_store.hpp"
 #include "storage/store/semantic/semantic_embedding_store.hpp"
-#include "utils/file/source_image_path.hpp"
+#include "utils/file/source_file.hpp"
 #include "utils/file/source_image_status.hpp"
 #include "utils/string/convert.hpp"
 
@@ -218,8 +218,8 @@ auto ProjectMaintenanceStore::RemovePristineProjectEntries(
       }
       const auto retained = Inspect(*removal.retained_id);
       if (!retained.valid_references || retained.source_path.empty() ||
-          NormalizeSourceImagePath(evidence.source_path) !=
-              NormalizeSourceImagePath(retained.source_path)) {
+          SourcePathKey(evidence.source_path) !=
+              SourcePathKey(retained.source_path)) {
         throw std::invalid_argument("Duplicate pair does not share a full source path");
       }
     }

@@ -1037,6 +1037,13 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
     if (plan.source.kind == DevelopInputKind::Raster) {
       add(OpenCL::GpuDag::kDisplayToAp1ProgramName, OpenCL::GpuDag::kLinearizeRasterKernelName);
       add(kCvtRefSpaceProgramName, kCopyRgbaCropInverseOrientKernelName);
+    } else if (plan.source.kind == DevelopInputKind::DenoisedRgb) {
+      add(kCoreProgramName, kLinearizeRgbKernelName);
+      add(kCvtRefSpaceProgramName, kCopyRgbaCropInverseOrientKernelName);
+      add(kHighlightProgramName, kHlrBuildMaskKernelName);
+      add(kHighlightProgramName, kHlrDilateMaskKernelName);
+      add(kHighlightProgramName, kHlrChrominanceContribKernelName);
+      add(kHighlightProgramName, kHlrReconstructFromStatsKernelName);
     } else if (plan.source.kind != DevelopInputKind::DirectRgb) {
       add(kCoreProgramName, kToLinearRefKernelName);
       add(kCoreProgramName, kCfaClamp01KernelName);

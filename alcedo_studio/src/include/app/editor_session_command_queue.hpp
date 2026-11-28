@@ -93,6 +93,8 @@ enum class EditorSessionCommandKind : std::uint8_t {
   RenderAiMaskAnalysisImage,
   /// Render the LUT browser preview of one LUT on the import root of the open image.
   RenderLutPreview,
+  /// Render the preset browser preview of one preset on the import root of the open image.
+  RenderPresetPreview,
   /// Open an AI Mask edit session on a Color Grade: acquire the AiMaskEdit lease.
   OpenAiMaskEdit,
   /// Store the asset of the open AI Mask edit and publish one AddMask or ReplaceMaskSource.
@@ -136,7 +138,7 @@ enum class EditorSessionCompletionKind : std::uint8_t {
   SaveCheckpointFinished,
 };
 
-/// State of the session command admission rules.
+/// State of the session command admission gate.
 enum class EditorSessionQueueState : std::uint8_t {
   Accepting = 0,
   ShuttingDown,
@@ -159,8 +161,6 @@ struct EditorSessionCommand {
   std::string                             text;
   /// ApplyPaste: author of the Paste commit; nullopt is the user.
   std::optional<EditCommitAttribution>    attribution;
-  /// OpenImage: save and reload the same source after an import size change.
-  bool                                    reload_source           = false;
   bool                                    persist_changes = true;
   /// Presentation binding for SetPresentationTarget / SetPresentationSize /
   /// SetGeometryOverlay. Unused by other command kinds.

@@ -21,4 +21,10 @@ namespace alcedo::input_detail {
 [[nodiscard]] auto FinishRasterPrepared(PreparedRawInput input, std::uint64_t encoded_hash,
                                         std::uint64_t encoded_byte_count) -> PreparedRawInput;
 
+/**
+ * @brief The decode area of a full-size host plane: the DNG default crop when it is valid, else
+ *        the active area (the rectangle that `RawInputLoader::FromDenoisedBayer` takes).
+ */
+[[nodiscard]] auto FullSizeDecodeArea(const RawSensorGeometry& sensor, Extent2D host) -> RectI;
+
 }  // namespace alcedo::input_detail

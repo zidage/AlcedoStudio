@@ -22,24 +22,28 @@ class QQmlEngine;
 #include "app/lut_library_service.hpp"
 #include "app/lut_package_service.hpp"
 #include "app/model_download_service.hpp"
+#include "app/preset_library_service.hpp"
 #include "app/update_service.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 #include "ui/alcedo_main/album_backend/agent_control_owner.hpp"
 #include "ui/alcedo_main/album_backend/ai_model_download_task_publisher.hpp"
 #include "ui/alcedo_main/album_backend/application_close_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_ai_denoise_control.hpp"
 #include "ui/alcedo_main/album_backend/editor_ai_mask_tool.hpp"
 #include "ui/alcedo_main/album_backend/editor_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/editor_comparison_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
+#include "ui/alcedo_main/album_backend/editor_viewport_placeholder.hpp"
+#include "ui/alcedo_main/album_backend/export_ai_denoise_control.hpp"
 #include "ui/alcedo_main/album_backend/export_queue.hpp"
 #include "ui/alcedo_main/album_backend/export_recipe_builder.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
-#include "ui/alcedo_main/album_backend/import_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
+#include "ui/alcedo_main/album_backend/library_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/library_mutation_operations.hpp"
 #include "ui/alcedo_main/album_backend/library_view_preferences.hpp"
@@ -48,7 +52,10 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_preview_controller.hpp"
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
+#include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
+#include "ui/alcedo_main/album_backend/preset_controller.hpp"
+#include "ui/alcedo_main/album_backend/preset_preview_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_launch_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/project_maintenance_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
@@ -85,6 +92,10 @@ class ApplicationModuleHost final : public QObject {
   /// DCP library folder and its scans (Settings > LUTs and Color Management).
   Q_PROPERTY(
       alcedo::CameraProfileLibraryService* cameraProfiles READ camera_profiles CONSTANT)
+  /// Preset folder, its inventory, and its package cache (edit presets plan, PS1).
+  Q_PROPERTY(alcedo::PresetLibraryService* presetLibrary READ preset_library CONSTANT)
+  /// Preset browser rows and commands of the Versions panel (edit presets plan, PS2).
+  Q_PROPERTY(PresetController* presets READ presets CONSTANT)
   /// Signed AI model package feed and the AI Mask model set install (AI Models plan, AM1).
   Q_PROPERTY(alcedo::AiModelPackageService* aiModelPackages READ ai_model_packages CONSTANT)
   /// LUT browser rows over lutLibrary; one instance shared by every LUT surface (plan 6.4).
@@ -93,6 +104,10 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(LutLibraryController* lutTarget READ lut_target CONSTANT)
   /// Previews of every LUT on the open photo for the LUT browser tiles (issue #598).
   Q_PROPERTY(LutPreviewController* lutPreview READ lut_preview CONSTANT)
+  /// Preset browser previews of the open photo (edit presets plan, PS3).
+  Q_PROPERTY(PresetPreviewController* presetPreview READ preset_preview CONSTANT)
+  /// Preset previews of the first library photo of the Apply Preset dialog (plan, PS4).
+  Q_PROPERTY(PresetPreviewController* presetDialogPreview READ preset_dialog_preview CONSTANT)
   Q_PROPERTY(SemanticGenerationController* semanticGeneration READ semantic_generation CONSTANT)
   Q_PROPERTY(
       alcedo::AiProviderProfileController* aiProviderProfiles READ ai_provider_profiles CONSTANT)
@@ -102,9 +117,15 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(EditorComparisonController* editorComparison READ editor_comparison CONSTANT)
   /// The AI Mask tool of the open image (SM9 MVP).
   Q_PROPERTY(EditorAiMaskTool* aiMaskTool READ ai_mask_tool CONSTANT)
+  Q_PROPERTY(EditorAiDenoiseControl* editorAiDenoise READ editor_ai_denoise CONSTANT)
+  /// Turn Off AI Denoise of the export queue items (AI Denoise plan, DN8).
+  Q_PROPERTY(ExportAiDenoiseControl* exportAiDenoise READ export_ai_denoise CONSTANT)
+  /// The image of the editor viewport before the first frame of a photo (AI Denoise plan, DN14).
+  Q_PROPERTY(EditorViewportPlaceholder* editorPlaceholder READ editor_placeholder CONSTANT)
   Q_PROPERTY(WorkspaceRouter* workspaceRouter READ workspace_router CONSTANT)
   Q_PROPERTY(EditorBehaviorPreferences* editorBehavior READ editor_behavior CONSTANT)
-  Q_PROPERTY(ImportBehaviorPreferences* importBehavior READ import_behavior CONSTANT)
+  /// Library defaults (the default action of Import Folder, #1077).
+  Q_PROPERTY(LibraryBehaviorPreferences* libraryBehavior READ library_behavior CONSTANT)
   /// Library view settings (the layout of the ungrouped Library grid).
   Q_PROPERTY(LibraryViewPreferences* libraryView READ library_view CONSTANT)
   /// The RAW Import section of Settings > Default Behavior: the look of new RAW imports (#920).
@@ -141,6 +162,8 @@ class ApplicationModuleHost final : public QObject {
     std::function<alcedo::LutLibraryServiceOptions()>     library_options;
     std::function<alcedo::LutPackageServiceOptions()>     package_options;
     std::function<alcedo::AiModelPackageServiceOptions()> ai_model_package_options;
+    /// Preset library options; the host sets the LUT reference lookup when it has none.
+    std::function<alcedo::PresetLibraryServiceOptions()>  preset_library_options;
   };
 
   explicit ApplicationModuleHost(QObject* parent = nullptr, LifecycleObserver observer = {},
@@ -157,9 +180,6 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto stats() -> StatsEngine* { return stats_.get(); }
   [[nodiscard]] auto search() -> SearchController* { return search_.get(); }
   [[nodiscard]] auto import_export() -> ImportExportHandler* { return import_export_.get(); }
-  [[nodiscard]] auto import_behavior() -> ImportBehaviorPreferences* {
-    return import_behavior_.get();
-  }
   [[nodiscard]] auto nikon_he_recovery() -> NikonHeRecoveryController* {
     return nikon_he_recovery_.get();
   }
@@ -171,12 +191,16 @@ class ApplicationModuleHost final : public QObject {
     return interaction_policy_.get();
   }
   [[nodiscard]] auto agent_control() -> AgentControlOwner* { return agent_control_.get(); }
+  [[nodiscard]] auto mount_scans() -> MountScanCoordinator* { return mount_scans_.get(); }
   [[nodiscard]] auto model_download() -> ModelDownloadController* { return model_download_.get(); }
   [[nodiscard]] auto updates() -> alcedo::UpdateService* { return updates_.get(); }
   [[nodiscard]] auto lut_library() -> alcedo::LutLibraryService* { return lut_library_.get(); }
   [[nodiscard]] auto lut_packages() -> alcedo::LutPackageService* { return lut_packages_.get(); }
   [[nodiscard]] auto camera_profiles() -> alcedo::CameraProfileLibraryService* {
     return camera_profiles_.get();
+  }
+  [[nodiscard]] auto preset_library() -> alcedo::PresetLibraryService* {
+    return preset_library_.get();
   }
   [[nodiscard]] auto ai_model_packages() -> alcedo::AiModelPackageService* {
     return ai_model_packages_.get();
@@ -190,18 +214,33 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto adjustment_transfer() -> AdjustmentTransferController* {
     return adjustment_transfer_.get();
   }
+  [[nodiscard]] auto presets() -> PresetController* { return presets_.get(); }
 
   [[nodiscard]] auto editor_session() -> EditorSessionController* { return editor_session_.get(); }
   [[nodiscard]] auto editor_comparison() -> EditorComparisonController* {
     return editor_comparison_.get();
   }
   [[nodiscard]] auto ai_mask_tool() -> EditorAiMaskTool* { return ai_mask_tool_.get(); }
+  [[nodiscard]] auto editor_ai_denoise() -> EditorAiDenoiseControl* { return ai_denoise_.get(); }
+  [[nodiscard]] auto export_ai_denoise() -> ExportAiDenoiseControl* {
+    return export_ai_denoise_.get();
+  }
+  [[nodiscard]] auto editor_placeholder() -> EditorViewportPlaceholder* {
+    return editor_placeholder_.get();
+  }
   [[nodiscard]] auto lut_browser() -> LutLibraryModel* { return lut_browser_.get(); }
   [[nodiscard]] auto lut_target() -> LutLibraryController* { return lut_target_.get(); }
   [[nodiscard]] auto lut_preview() -> LutPreviewController* { return lut_preview_.get(); }
+  [[nodiscard]] auto preset_preview() -> PresetPreviewController* { return preset_preview_.get(); }
+  [[nodiscard]] auto preset_dialog_preview() -> PresetPreviewController* {
+    return preset_dialog_preview_.get();
+  }
   [[nodiscard]] auto workspace_router() -> WorkspaceRouter* { return workspace_router_.get(); }
   [[nodiscard]] auto editor_behavior() -> EditorBehaviorPreferences* {
     return editor_behavior_.get();
+  }
+  [[nodiscard]] auto library_behavior() -> LibraryBehaviorPreferences* {
+    return library_behavior_.get();
   }
   [[nodiscard]] auto library_view() -> LibraryViewPreferences* { return library_view_.get(); }
   [[nodiscard]] auto raw_import_look() -> RawImportLookSettingsModel* {
@@ -257,6 +296,8 @@ class ApplicationModuleHost final : public QObject {
   /// followed by one qCWarning(projectLog) per file that still cannot be removed (on Windows with
   /// the processes that hold it). It is not retried. Clears pending_workspace_removal_.
   void RemovePendingWorkspace();
+  /// Start the mount scans of an entered project that is not loading, and stop them otherwise.
+  void SyncMountScans();
 
   // Owned in construction dependency order. Destroyed in reverse.
   std::unique_ptr<BackgroundTaskController>            background_tasks_;
@@ -267,6 +308,8 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<alcedo::UpdateService>               updates_;
   std::unique_ptr<alcedo::LutLibraryService>           lut_library_;
   std::unique_ptr<alcedo::LutPackageService>           lut_packages_;
+  /// Saves read LUT references from lut_library_, so it is destroyed before lut_library_.
+  std::unique_ptr<alcedo::PresetLibraryService>        preset_library_;
   std::unique_ptr<alcedo::CameraProfileLibraryService> camera_profiles_;
   std::unique_ptr<ProjectModule>                       project_;
   std::unique_ptr<LibraryModule>                       library_;
@@ -280,21 +323,30 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<alcedo::AiProviderProfileController> ai_provider_profiles_;
   std::unique_ptr<SemanticGenerationController>        semantic_generation_;
   std::unique_ptr<ImportExportHandler>                 import_export_;
-  std::unique_ptr<ImportBehaviorPreferences>           import_behavior_;
   std::unique_ptr<ExportQueue>                         export_queue_;
   std::unique_ptr<ExportRecipeBuilder>                 export_recipe_;
   std::unique_ptr<NikonHeRecoveryController>           nikon_he_recovery_;
   std::unique_ptr<AdjustmentTransferController>        adjustment_transfer_;
+  /// Reads the Copy dialog model of adjustment_transfer_, so it is destroyed before it.
+  std::unique_ptr<PresetController>                    presets_;
   std::unique_ptr<alcedo::EditorSessionRuntime>        editor_session_runtime_;
   std::shared_ptr<EditorSessionRenderSchedulerPort>    editor_session_scheduler_;
   std::unique_ptr<EditorSessionController>             editor_session_;
   std::unique_ptr<EditorComparisonController>          editor_comparison_;
   std::unique_ptr<EditorAiMaskTool>                    ai_mask_tool_;
+  std::unique_ptr<EditorAiDenoiseControl>              ai_denoise_;
+  std::unique_ptr<ExportAiDenoiseControl>              export_ai_denoise_;
+  /// Shared with the image provider of the QML engine, which can outlive the host.
+  std::shared_ptr<EditorPlaceholderImage>              editor_placeholder_image_;
+  std::unique_ptr<EditorViewportPlaceholder>           editor_placeholder_;
   std::unique_ptr<LutLibraryModel>                     lut_browser_;
   std::unique_ptr<LutLibraryController>                lut_target_;
   std::unique_ptr<LutPreviewController>                lut_preview_;
+  std::unique_ptr<PresetPreviewController>             preset_preview_;
+  std::unique_ptr<PresetPreviewController>             preset_dialog_preview_;
   std::unique_ptr<WorkspaceRouter>                     workspace_router_;
   std::unique_ptr<EditorBehaviorPreferences>           editor_behavior_;
+  std::unique_ptr<LibraryBehaviorPreferences>          library_behavior_;
   std::unique_ptr<LibraryViewPreferences>              library_view_;
   std::unique_ptr<RawImportLookSettingsModel>          raw_import_look_;
   std::unique_ptr<LogFolderController>                 log_folder_;
@@ -303,6 +355,9 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<ProjectMaintenanceService>           maintenance_service_;
   std::unique_ptr<ProjectMaintenanceController>        maintenance_;
   std::unique_ptr<LibraryMutationOperations>           library_mutations_;
+  // Holds the mount service and the import service of the project while a scan runs, so it
+  // stops before the project closes and is destroyed before the modules above.
+  std::unique_ptr<MountScanCoordinator>                mount_scans_;
 
   LifecycleObserver                                    lifecycle_observer_{};
   bool                                                 shutting_down_ = false;

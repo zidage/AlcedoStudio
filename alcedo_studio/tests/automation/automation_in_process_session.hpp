@@ -19,9 +19,11 @@
 #include "automation/automation_protocol.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/automation/automation_adjustment_commands.hpp"
+#include "ui/alcedo_main/automation/automation_preset_commands.hpp"
 #include "ui/alcedo_main/automation/automation_command_registry.hpp"
 #include "ui/alcedo_main/automation/automation_curve_commands.hpp"
 #include "ui/alcedo_main/automation/automation_editor_commands.hpp"
+#include "ui/alcedo_main/automation/automation_denoise_commands.hpp"
 #include "ui/alcedo_main/automation/automation_export_commands.hpp"
 #include "ui/alcedo_main/automation/automation_film_commands.hpp"
 #include "ui/alcedo_main/automation/automation_host_commands.hpp"
@@ -56,6 +58,7 @@ class InProcessAutomationSession {
         RegisterAutomationLibraryCommands(registry_, &host_, &tracker_, host_mode, &error) &&
         RegisterAutomationTaskCommands(registry_, &host_, &tracker_, &error) &&
         RegisterAutomationExportCommands(registry_, &host_, &tracker_, &error) &&
+        RegisterAutomationDenoiseCommands(registry_, &host_, &error) &&
         RegisterAutomationSearchCommands(registry_, &host_, &error) &&
         RegisterAutomationLutCommands(registry_, &host_, &error) &&
         RegisterAutomationFilmCommands(registry_, &error) &&
@@ -64,7 +67,8 @@ class InProcessAutomationSession {
         RegisterAutomationVersionCommands(registry_, &host_, &error) &&
         RegisterAutomationNodeCommands(registry_, &host_, &error) &&
         RegisterAutomationRenderCommands(registry_, &host_, &error) &&
-        RegisterAutomationAdjustmentCommands(registry_, &host_, host_mode, &error);
+        RegisterAutomationAdjustmentCommands(registry_, &host_, host_mode, &error) &&
+        RegisterAutomationPresetCommands(registry_, &host_, host_mode, &error);
     EXPECT_TRUE(registered) << error.toStdString();
   }
 

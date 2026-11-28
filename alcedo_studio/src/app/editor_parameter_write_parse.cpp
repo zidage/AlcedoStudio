@@ -429,11 +429,16 @@ auto ParseColorWheelUpdate(const nlohmann::json& params) -> ColorWheelUpdate {
   return update;
 }
 
-auto ParseRawDecodeUpdate(const nlohmann::json& params) -> DevelopRawDecodeUpdate {
+/// `raw_decode`. The AI Denoise switch (integration plan, DN7): in a write, an `ai_denoise` object
+/// turns it on with its model version, null turns it off, and no key keeps it. A value (history
+/// replay, paste) is a stored Develop JSON, which has the key only while the switch is on, so no
+/// key turns it off.
+auto ParseRawDecodeUpdate(const nlohmann::json& params, ParseForm form) -> DevelopRawDecodeUpdate {
   const auto& object = UnwrapObject(params, {"raw", "raw_decode"}, "raw_decode");
   RejectUnknownKeys(object,
                     {"method",
                      "demosaic_method",
+                     "ai_denoise",
                      "highlights_reconstruct",
                      "use_camera_wb",
                      "user_wb",
@@ -467,6 +472,12 @@ auto ParseRawDecodeUpdate(const nlohmann::json& params) -> DevelopRawDecodeUpdat
       ReadOptionalBool(object, {"highlights_reconstruct"}, "raw_decode");
   update.use_camera_wb = ReadOptionalBool(object, {"use_camera_wb"}, "raw_decode");
   update.user_wb       = ReadOptionalFloat(object, {"user_wb"}, "raw_decode");
+  if (const auto found = object.find("ai_denoise"); found != object.end()) {
+    update.ai_denoise = found->is_null() ? std::optional<DevelopAiDenoise>{}
+                                         : std::optional{DevelopAiDenoiseFromJson(*found)};
+  } else if (form == ParseForm::Value) {
+    update.ai_denoise = std::optional<DevelopAiDenoise>{};
+  }
   return update;
 }
 
@@ -1039,7 +1050,7 @@ auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params, Par
     return ParseSharpenUpdate(params);
   }
   if (field == "raw_decode") {
-    return ParseRawDecodeUpdate(params);
+    return ParseRawDecodeUpdate(params, form);
   }
   if (field == "color_temp") {
     return ParseColorTemperatureUpdate(params);

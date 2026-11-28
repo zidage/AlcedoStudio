@@ -247,6 +247,7 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     case EditorSessionCommandKind::RenderPreviewImages:
     case EditorSessionCommandKind::RenderAiMaskAnalysisImage:
     case EditorSessionCommandKind::RenderLutPreview:
+    case EditorSessionCommandKind::RenderPresetPreview:
       return std::nullopt;
     // The AI Mask edit commands evaluate CommitAdjustment admission on the owner themselves, so
     // that a refused Open still reaches its completion and Commit ignores its own lease.

@@ -20,6 +20,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "edit/input/ai_denoise_model_session.hpp"
 #include "edit/input/prepared_source_cache.hpp"
 #include "edit/input/raster_input_loader.hpp"
 #include "edit/input/raw_input_loader.hpp"
@@ -102,10 +103,14 @@ class Renderer {
    *        workspace. Null selects the file-path-only DefaultLutResourceResolver.
    * @param mask_assets Reader of AI Mask assets, shared with the device workspace. Null selects
    *        DefaultMaskAssetReader.
+   * @param ai_denoise Owner of the AI Denoise model session (integration plan, DN6). A full-size
+   *        render with `ai_denoise` on runs the model through it. Null runs no model: such a
+   *        render reports the input error of RequireDevelopInputForAiDenoise.
    */
   explicit Renderer(ExecutorRole role, PreparedSourceCache::UnpackFn unpack = {},
                     std::shared_ptr<const LutResourceResolver> lut_resources = nullptr,
-                    std::shared_ptr<const MaskAssetReader>     mask_assets   = nullptr);
+                    std::shared_ptr<const MaskAssetReader>     mask_assets   = nullptr,
+                    std::shared_ptr<DenoiseModelSession>       ai_denoise    = nullptr);
   ~Renderer();
 
   Renderer(const Renderer&)                    = delete;
@@ -243,12 +248,14 @@ class Renderer {
   std::optional<ResolvedRenderGeometry>      presented_frame_geometry_;
   std::shared_ptr<const LutResourceResolver> lut_resources_;
   std::shared_ptr<const MaskAssetReader>     mask_assets_;
+  std::shared_ptr<DenoiseModelSession>       ai_denoise_;
 };
 
 template <class Backend>
 Renderer<Backend>::Renderer(ExecutorRole role, PreparedSourceCache::UnpackFn unpack,
                             std::shared_ptr<const LutResourceResolver> lut_resources,
-                            std::shared_ptr<const MaskAssetReader>     mask_assets)
+                            std::shared_ptr<const MaskAssetReader>     mask_assets,
+                            std::shared_ptr<DenoiseModelSession>       ai_denoise)
     : role_(role),
       device_(),
       unpack_(unpack ? std::move(unpack)
@@ -259,7 +266,8 @@ Renderer<Backend>::Renderer(ExecutorRole role, PreparedSourceCache::UnpackFn unp
       source_cache_(unpack_),
       plan_cache_(Backend::kCapabilityVersion),
       lut_resources_(lut_resources ? std::move(lut_resources) : DefaultLutResourceResolver()),
-      mask_assets_(mask_assets ? std::move(mask_assets) : DefaultMaskAssetReader()) {}
+      mask_assets_(mask_assets ? std::move(mask_assets) : DefaultMaskAssetReader()),
+      ai_denoise_(std::move(ai_denoise)) {}
 
 template <class Backend>
 Renderer<Backend>::~Renderer() = default;

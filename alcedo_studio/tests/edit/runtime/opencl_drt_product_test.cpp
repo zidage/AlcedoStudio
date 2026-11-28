@@ -680,7 +680,7 @@ class RecordingOpenClPresentSink : public IFrameSink {
     mapped_           = true;
     FrameWriteMapping mapping;
     mapping.data         = reinterpret_cast<void*>(image_);
-    mapping.row_bytes    = static_cast<std::size_t>(width_) * sizeof(float) * 4U;
+    mapping.row_bytes    = compatible_ ? static_cast<std::size_t>(width_) * sizeof(float) * 4U : 0;
     mapping.pixel_format = FramePixelFormat::RGBA32F;
     mapping.memory_domain =
         compatible_ ? FrameMemoryDomain::OpenClDevice : FrameMemoryDomain::HostVisible;
@@ -741,6 +741,27 @@ class RecordingOpenClPresentSink : public IFrameSink {
   bool   compatible_ = true;
 };
 
+// A display without device sharing supplies writable host storage. The GPU renderer
+// must read back the completed DRT image and retain the GPU scope tap.
+class RecordingOpenClHostSink : public RecordingOpenClPresentSink {
+ public:
+  void EnsureSize(int width, int height) override {
+    RecordingOpenClPresentSink::EnsureSize(width, height);
+    pixels.resize(static_cast<std::size_t>(width) * height * 4);
+  }
+  auto MapResourceForWrite(FrameMemoryDomain preferred_domain) -> FrameWriteMapping override {
+    events_.push_back(PresentEvent::Map);
+    preferred_domain_ = preferred_domain;
+    FrameWriteMapping mapping;
+    mapping.data          = pixels.data();
+    mapping.row_bytes     = static_cast<std::size_t>(GetWidth()) * sizeof(float) * 4;
+    mapping.memory_domain = FrameMemoryDomain::HostVisible;
+    mapping.target_type   = FrameWriteTargetType::LinearBuffer;
+    return mapping;
+  }
+  std::vector<float> pixels;
+};
+
 class OpenClRendererFixture : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -790,6 +811,35 @@ class OpenClRendererFixture : public ::testing::Test {
   std::unique_ptr<OpenClRenderer>             batch_renderer_;
   std::shared_ptr<ImageBuffer>                image_;
 };
+
+TEST_F(OpenClRendererFixture, HostPresentationReadsBackGpuPixelsAndKeepsGpuScopeImage) {
+  OpenClApiCounterScope counter_scope(true);
+  ResetOpenClApiCounters();
+  RecordingOpenClHostSink   sink;
+  FrameCompletionSubmission submission;
+  submission.metadata.presentation_request_id = 231;
+  submission.metadata.image_identity          = 18;
+  submission.metadata.session_epoch           = 4;
+  submission.metadata.scope_update_allowed    = true;
+  const auto before                           = SnapshotOpenClApiCounters();
+  ASSERT_NE(RenderTo(sink, submission), nullptr);
+  renderer_->Device().WaitIdle();
+  const auto delta = DeltaOpenClApiCounters(before, SnapshotOpenClApiCounters());
+  EXPECT_EQ(delta.d2h_bytes, sink.pixels.size() * sizeof(float));
+  EXPECT_EQ(sink.notify_count_, 1);
+  EXPECT_EQ(sink.last_notified_.metadata.presentation_request_id, 231u);
+  EXPECT_EQ(sink.last_frame_.image.backend, GpuBackend::OpenCL);
+  EXPECT_EQ(sink.last_frame_.image.resource_type, FrameWriteTargetType::OpenClImage);
+  auto expected = RenderHost();
+  ASSERT_TRUE(HostRgbaIsFinite(expected));
+  const auto& pixels = expected->GetCPUData();
+  ASSERT_EQ(pixels.total() * pixels.channels(), sink.pixels.size());
+  const auto* reference = pixels.ptr<float>();
+  for (std::size_t i = 0; i < sink.pixels.size(); ++i) {
+    ASSERT_TRUE(std::isfinite(sink.pixels[i]));
+    ASSERT_NEAR(sink.pixels[i], reference[i], 1e-5f) << "channel " << i;
+  }
+}
 
 TEST_F(OpenClRendererFixture, OpenClRendererPresentsWorkspaceImageWithoutHostDownload) {
   OpenClApiCounterScope counter_scope(true);
@@ -874,6 +924,9 @@ TEST_F(OpenClRendererFixture, OpenClScopeTapUsesTheFinalDisplayImageAndSubmissio
   EXPECT_EQ(display.image_identity, 7U);
   EXPECT_EQ(display.session_epoch, 2U);
   EXPECT_EQ(display.display_generation, 88U);
+  EXPECT_EQ(downstream.submit_count_, 1);
+  EXPECT_EQ(downstream.last_frame_.display_config, display.display_config);
+  EXPECT_EQ(downstream.last_frame_.image_identity, 7u);
   ASSERT_NE(scope.ready_signal.resource, nullptr);
   const auto* signal = static_cast<const scope::opencl_detail::OpenClEventSignalResource*>(
       scope.ready_signal.resource.get());

@@ -18,7 +18,8 @@ namespace alcedo {
  * @brief OpenCL image2d presentation and explicit host download.
  *
  * Present copies the final DRT image into the sink's OpenCL writable image on
- * the product queue. Download is retained for export and test requests only.
+ * the product queue. Linux devices without GL sharing read back the completed
+ * GPU image for host upload. Processing stays on the GPU.
  */
 template <>
 struct FramePresenter<OpenClBackend> {

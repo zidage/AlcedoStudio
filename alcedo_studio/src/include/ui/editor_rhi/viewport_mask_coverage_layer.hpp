@@ -66,7 +66,8 @@ class ViewportMaskCoverageLayer {
 
   /// Import the newest completed frame of the image session and then release the previous one.
   /// @return True when a new frame became the displayed frame.
-  auto ConsumeNewest(QRhi* rhi, std::uint64_t session_epoch, std::uint64_t image_identity) -> bool;
+  auto ConsumeNewest(QRhi* rhi, std::uint64_t session_epoch, std::uint64_t image_identity,
+                     QRhiResourceUpdateBatch* updates = nullptr) -> bool;
 
   /// Release the displayed frame (hide, image change, close). Idempotent.
   void Release();

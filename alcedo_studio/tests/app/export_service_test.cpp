@@ -15,10 +15,13 @@
 #include <future>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -585,6 +588,105 @@ TEST_F(ExportServiceTests, EnqueueRefusesTasksThatCannotResolveTheirCommittedSta
   const auto results = done_fut.get();
   ASSERT_NE(results, nullptr);
   EXPECT_TRUE(results->empty());
+}
+
+// #1018: a photo that is no longer in the project and a photo whose source file was deleted fail
+// alone with source_missing_; the other photo of the same run exports.
+TEST_F(ExportServiceTests, MissingPhotosFailAloneAndTheRunExportsTheOtherPhotos) {
+  ProjectService    project(db_path_, meta_path_);
+  auto              sleeve_service   = project.GetSleeveService();
+  auto              image_pool       = project.GetImagePoolService();
+  auto              pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+
+  ImportServiceImpl import_service(sleeve_service, image_pool, pipeline_service);
+  const auto        fixtures = CollectSupportedBatchImportImages(/*max_count=*/1);
+  if (fixtures.empty()) {
+    GTEST_SKIP() << "No supported images found under TEST_IMG_PATH";
+  }
+  const std::filesystem::path deleted_source =
+      temp_dir_ / (L"deleted-source" + std::filesystem::path(fixtures[0]).extension().wstring());
+  std::filesystem::copy_file(fixtures[0], deleted_source);
+
+  auto                       import_job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> import_done;
+  auto                       import_done_fut = import_done.get_future();
+  import_job->on_finished_                   = [&import_done](const ImportResult& result) {
+    import_done.set_value(result);
+  };
+  import_job = import_service.ImportToFolder({fixtures[0], deleted_source}, L"", {}, import_job);
+  ASSERT_NE(import_job, nullptr);
+  ASSERT_EQ(import_done_fut.wait_for(120s), std::future_status::ready);
+  ASSERT_EQ(import_done_fut.get().failed_, 0u);
+  ASSERT_NE(import_job->import_log_, nullptr);
+  const auto snapshot = import_job->import_log_->Snapshot();
+  ASSERT_EQ(snapshot.created_.size(), 2u);
+  import_service.SyncImports(snapshot, L"");
+
+  ExportService                  export_service(sleeve_service, image_pool, pipeline_service);
+  std::optional<sl_element_id_t> kept_element_id;
+  std::optional<sl_element_id_t> deleted_element_id;
+  for (const auto& created : snapshot.created_) {
+    const auto source = image_pool->Read<std::filesystem::path>(
+        created.image_id_, [](std::shared_ptr<Image> img) { return img->image_path_; });
+    const bool is_deleted_source                               = source == deleted_source;
+    (is_deleted_source ? deleted_element_id : kept_element_id) = created.element_id_;
+
+    ExportTask task;
+    task.sleeve_id_                = created.element_id_;
+    task.image_id_                 = created.image_id_;
+    task.options_.format_          = ImageFormatType::JPEG;
+    task.options_.resize_enabled_  = true;
+    task.options_.max_length_side_ = 512;
+    task.options_.export_path_ =
+        export_dir_ / (is_deleted_source ? "deleted-source.jpg" : "kept-source.jpg");
+    AttachLegacyRecipe(task);
+    export_service.EnqueueExportTask(task);
+  }
+  ASSERT_TRUE(kept_element_id.has_value());
+  ASSERT_TRUE(deleted_element_id.has_value());
+  std::filesystem::remove(deleted_source);
+  constexpr sl_element_id_t kRemovedElementId = 987654;
+  constexpr image_id_t      kRemovedImageId   = 987654;
+  export_service.EnqueueMissingPhotoTask(kRemovedElementId, kRemovedImageId);
+
+  std::mutex                                               progress_mutex;
+  std::map<sl_element_id_t, ExportProgress>                finished_progress;
+  std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
+  auto                                                     done_fut = done.get_future();
+  export_service.ExportAll(
+      [&progress_mutex, &finished_progress](const ExportProgress& progress) {
+        if (progress.task_finished_) {
+          std::lock_guard lock(progress_mutex);
+          finished_progress[progress.sleeve_id_] = progress;
+        }
+      },
+      [&done](std::shared_ptr<std::vector<ExportResult>> results) { done.set_value(results); });
+  ASSERT_EQ(done_fut.wait_for(600s), std::future_status::ready) << "Export timed out";
+  const auto results = done_fut.get();
+  ASSERT_NE(results, nullptr);
+  ASSERT_EQ(results->size(), 3u);
+
+  std::lock_guard lock(progress_mutex);
+  ASSERT_EQ(finished_progress.size(), 3u);
+  const auto& kept = finished_progress.at(*kept_element_id);
+  EXPECT_TRUE(kept.task_success_);
+  EXPECT_FALSE(kept.task_source_missing_);
+  for (const auto missing_id : {*deleted_element_id, kRemovedElementId}) {
+    const auto& missing = finished_progress.at(missing_id);
+    EXPECT_FALSE(missing.task_success_) << missing_id;
+    EXPECT_TRUE(missing.task_source_missing_) << missing_id;
+  }
+  EXPECT_EQ(std::count_if(results->begin(), results->end(),
+                          [](const ExportResult& result) { return result.success_; }),
+            1);
+  for (const auto& result : *results) {
+    EXPECT_EQ(result.source_missing_, !result.success_) << result.message_;
+    if (result.source_missing_) {
+      EXPECT_EQ(result.failed_stage_, "load-source");
+    }
+  }
+  AssertReadableNonEmptyImageFile(export_dir_ / "kept-source.jpg");
+  EXPECT_FALSE(std::filesystem::exists(export_dir_ / "deleted-source.jpg"));
 }
 
 namespace {

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Idea
+    url: https://github.com/zidage/AlcedoStudio/discussions/new?category=ideas
+    about: An idea that is not yet a specific request. Maintainers open a feature issue from an idea that they accept.
+  - name: Question
+    url: https://github.com/zidage/AlcedoStudio/discussions/new?category=q-a
+    about: A question about how to use Alcedo Studio.

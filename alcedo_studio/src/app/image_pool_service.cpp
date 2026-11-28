@@ -37,6 +37,17 @@ auto ImagePoolService::CreateAndReturnPinned(const std::function<void(Image&)>& 
   return handle;
 }
 
+auto ImagePoolService::Contains(image_id_t image_id) -> bool {
+  std::unique_lock lock(pool_lock_);
+  if (!pool_manager_) {
+    throw std::runtime_error("[ERROR] ImagePoolService: Pool manager is not initialized.");
+  }
+  if (const auto img = pool_manager_->GetImage(image_id)) {
+    return img->GetSyncState() != ImageSyncState::DELETED;
+  }
+  return storage_->GetImageStore().GetImageById(image_id) != nullptr;
+}
+
 void ImagePoolService::Remove(image_id_t image_id) {
   std::unique_lock lock(pool_lock_);
   if (!pool_manager_) {
@@ -93,10 +104,6 @@ void ImagePoolService::RemoveBatch(std::span<const image_id_t> image_ids) {
 
 auto ImagePoolService::SyncWithStorage() -> ImagePoolSyncStatus {
   std::unique_lock lock(pool_lock_);
-  return SyncWithStorageLocked();
-}
-
-auto ImagePoolService::SyncWithStorageLocked() -> ImagePoolSyncStatus {
   auto&            img_ctrl = storage_->GetImageStore();
 
   // Classify the pool first so each sync state can be flushed as one batched
@@ -191,27 +198,6 @@ auto ImagePoolService::GetCurrentID() -> image_id_t {
     throw std::runtime_error("[ERROR] ImagePoolService: Pool manager is not initialized.");
   }
   return pool_manager_->GetCurrentID();
-}
-
-void ImagePoolService::PersistImportedImages(std::span<const image_id_t> ids) {
-  std::unique_lock                    lock(pool_lock_);
-  std::vector<std::shared_ptr<Image>> images;
-  images.reserve(ids.size());
-  for (auto id : ids) {
-    auto image = pool_manager_->GetImage(id);
-    if (!image || image->GetSyncState() != ImageSyncState::UNSYNCED) {
-      throw std::runtime_error("Import image is missing or is not new");
-    }
-    images.push_back(std::move(image));
-  }
-  storage_->GetImageStore().AddImages(images);
-  for (const auto& image : images) image->MarkSyncState(ImageSyncState::SYNCED);
-}
-
-void ImagePoolService::DiscardImportedImages(std::span<const image_id_t> ids) {
-  std::unique_lock lock(pool_lock_);
-  storage_->GetImageStore().RemoveImagesByIds(ids);
-  for (auto id : ids) pool_manager_->GetPool().erase(id);
 }
 
 };  // namespace alcedo

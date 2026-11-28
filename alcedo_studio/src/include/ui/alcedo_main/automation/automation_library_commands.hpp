@@ -29,4 +29,12 @@ namespace alcedo::automation {
                                                      const QString&             host_mode,
                                                      QString* error = nullptr) -> bool;
 
+/// Registers `library.mount`, `library.mounts`, `library.sync`, and `library.unmount` (Mounted
+/// Folder Plan, MF8). They call the FolderController mount commands that the Collections panel
+/// calls, and MountService::ListMounts for `library.mounts`. RegisterAutomationLibraryCommands
+/// calls it. @p host must outlive every dispatch.
+[[nodiscard]] auto RegisterAutomationMountCommands(AutomationCommandRegistry& registry,
+                                                   ui::ApplicationModuleHost* host,
+                                                   QString* error = nullptr) -> bool;
+
 }  // namespace alcedo::automation

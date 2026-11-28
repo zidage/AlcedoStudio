@@ -1,0 +1,54 @@
+name: Bug report
+description: Alcedo Studio does something wrong, such as a crash, a wrong result, lost data, or a wrong message.
+title: "[BUG] "
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. You can write in English or Chinese.
+        Give the steps that make the problem happen. A maintainer finds the cause.
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens
+      description: What you see. Include the exact text of an error message.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The steps from the start of the application to the problem.
+      placeholder: |
+        1. Open a project with ...
+        2. Select ...
+        3. Click ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Alcedo Studio version
+      description: Settings > About shows the version.
+      placeholder: "0.3.6"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Operating system and GPU
+      placeholder: "Windows 11, NVIDIA RTX 3080 / macOS 15, Apple M2"
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Camera, files, and screenshots
+      description: The camera model of the RAW file, screenshots, or a log file (Settings > About > Open Log Folder).

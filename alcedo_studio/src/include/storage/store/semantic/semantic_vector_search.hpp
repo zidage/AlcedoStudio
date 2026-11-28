@@ -12,6 +12,7 @@
 #include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/semantic/semantic_records.hpp"
+#include "type/album_scope.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -72,8 +73,8 @@ class SemanticVectorSearch {
 };
 
 /**
- * @brief SELECT of the files of @p folder_id (0 for the whole library) that the relevance rule
- *        of SemanticVectorSearch keeps for @p embedding.
+ * @brief SELECT of the files of @p scope (see AlbumScope) that the relevance rule of
+ *        SemanticVectorSearch keeps for @p embedding.
  *
  * The statement returns the columns `file_id`, `image_id`, and `relevance`, with no order.
  * The fragment carries its binds and is valid for one statement on the database of @p conn.
@@ -81,7 +82,7 @@ class SemanticVectorSearch {
  * @throws std::runtime_error when the model is not registered, when a vector does not have
  *         the model dimension, or when a vector has a non-finite value or a zero norm.
  */
-[[nodiscard]] auto BuildSemanticRelevanceSelect(duckorm::Connection conn, sl_element_id_t folder_id,
+[[nodiscard]] auto BuildSemanticRelevanceSelect(duckorm::Connection conn, const AlbumScope& scope,
                                                 const SemanticQueryEmbedding& embedding)
     -> duckorm::SqlFragment;
 

@@ -41,7 +41,7 @@ class FakeLutPreviewSource final : public LutPreviewSource {
   };
   struct Render {
     EditorLutPreviewRequest    request;
-    EditorLutPreviewCompletion completion;
+    EditorBrowserPreviewCompletion completion;
   };
 
   [[nodiscard]] auto ImageId() const -> std::uint64_t override { return image_id; }
@@ -56,7 +56,7 @@ class FakeLutPreviewSource final : public LutPreviewSource {
     return true;
   }
   [[nodiscard]] auto ViewportRendering() const -> bool override { return viewport_rendering; }
-  auto RenderLutPreview(EditorLutPreviewRequest request, EditorLutPreviewCompletion on_complete,
+  auto RenderLutPreview(EditorLutPreviewRequest request, EditorBrowserPreviewCompletion on_complete,
                         std::string* error) -> bool override {
     if (refuse) {
       *error = "The session refused the command";
@@ -74,11 +74,11 @@ class FakeLutPreviewSource final : public LutPreviewSource {
   }
 
   /// Complete render @p index as the session would, from outside the GUI thread's call stack.
-  void Complete(std::size_t index, EditorLutPreviewStatus status, std::string message = {}) {
-    EditorLutPreviewResult result;
+  void Complete(std::size_t index, EditorBrowserPreviewStatus status, std::string message = {}) {
+    EditorBrowserPreviewResult result;
     result.status  = status;
     result.message = std::move(message);
-    if (status == EditorLutPreviewStatus::Completed) {
+    if (status == EditorBrowserPreviewStatus::Completed) {
       result.image.pixels = std::make_shared<ImageBuffer>(
           cv::Mat(4, 6, CV_32FC4, cv::Scalar(0.5f, 0.25f, 1.0f, 1.0f)));
       result.image.geometry.render_extent         = {6, 4};
@@ -131,7 +131,8 @@ class LutPreviewControllerTest : public ::testing::Test {
   }
 
   FakeLutPreviewSource                  source_;
-  std::shared_ptr<LutPreviewImageStore> store_ = std::make_shared<LutPreviewImageStore>();
+  std::shared_ptr<BrowserPreviewImageStore> store_ =
+      std::make_shared<BrowserPreviewImageStore>(QString::fromUtf8(kLutPreviewImageProviderId));
   LutPreviewController                  controller_;
 };
 
@@ -144,13 +145,13 @@ TEST_F(LutPreviewControllerTest, WatchedEntryRendersOnceAndShowsTheCachedPreview
   EXPECT_EQ(source_.renders[0].request.write.input_encoding, "acescc");
   EXPECT_TRUE(Url(QStringLiteral("a")).isEmpty()) << "no preview before the render ends";
 
-  source_.Complete(0, EditorLutPreviewStatus::Completed);
+  source_.Complete(0, EditorBrowserPreviewStatus::Completed);
   const QString url = Url(QStringLiteral("a"));
   ASSERT_FALSE(url.isEmpty());
   EXPECT_NE(controller_.revision(), revision_before) << "tiles read the new URL";
   std::uint64_t display_id = 0;
   ASSERT_TRUE(
-      LutPreviewImageStore::ParseProviderId(url.section(QLatin1Char('/'), -1), &display_id));
+      BrowserPreviewImageStore::ParseProviderId(url.section(QLatin1Char('/'), -1), &display_id));
   const QImage shown = store_->Get(display_id);
   ASSERT_FALSE(shown.isNull());
   EXPECT_EQ(shown.size(), QSize(6, 4));
@@ -172,13 +173,13 @@ TEST_F(LutPreviewControllerTest, OnlyOneRenderIsInFlightAndTheLastWatchedEntryRe
   ASSERT_EQ(source_.renders.size(), 1u) << "a viewport frame waits for at most one render";
   EXPECT_TRUE(controller_.rendering());
 
-  source_.Complete(0, EditorLutPreviewStatus::Completed);
+  source_.Complete(0, EditorBrowserPreviewStatus::Completed);
   ASSERT_EQ(source_.renders.size(), 2u);
   EXPECT_EQ(source_.EntryOf(1), QStringLiteral("c")) << "the most recently watched tile first";
-  source_.Complete(1, EditorLutPreviewStatus::Completed);
+  source_.Complete(1, EditorBrowserPreviewStatus::Completed);
   ASSERT_EQ(source_.renders.size(), 3u);
   EXPECT_EQ(source_.EntryOf(2), QStringLiteral("b"));
-  source_.Complete(2, EditorLutPreviewStatus::Completed);
+  source_.Complete(2, EditorBrowserPreviewStatus::Completed);
   EXPECT_FALSE(controller_.rendering());
   for (const auto* id : {"a", "b", "c"}) {
     EXPECT_FALSE(Url(QString::fromLatin1(id)).isEmpty()) << id;
@@ -194,8 +195,8 @@ TEST_F(LutPreviewControllerTest, OnlyOneRenderIsInFlightAndTheLastWatchedEntryRe
 TEST_F(LutPreviewControllerTest, EncodingChangeRendersThatEntryAgainAndKeepsTheOthers) {
   Watch(QStringLiteral("a"));
   Watch(QStringLiteral("b"));
-  source_.Complete(0, EditorLutPreviewStatus::Completed);
-  source_.Complete(1, EditorLutPreviewStatus::Completed);
+  source_.Complete(0, EditorBrowserPreviewStatus::Completed);
+  source_.Complete(1, EditorBrowserPreviewStatus::Completed);
   ASSERT_FALSE(Url(QStringLiteral("a")).isEmpty());
   const QString url_b = Url(QStringLiteral("b"));
   ASSERT_FALSE(url_b.isEmpty());
@@ -208,7 +209,7 @@ TEST_F(LutPreviewControllerTest, EncodingChangeRendersThatEntryAgainAndKeepsTheO
   ASSERT_EQ(source_.renders.size(), 3u);
   EXPECT_EQ(source_.EntryOf(2), QStringLiteral("a"));
   EXPECT_EQ(source_.renders[2].request.write.input_encoding, "logc3_ei800");
-  source_.Complete(2, EditorLutPreviewStatus::Completed);
+  source_.Complete(2, EditorBrowserPreviewStatus::Completed);
   EXPECT_FALSE(Url(QStringLiteral("a")).isEmpty());
 
   // Back to the first pair: that preview is still in the LRU.
@@ -220,7 +221,7 @@ TEST_F(LutPreviewControllerTest, EncodingChangeRendersThatEntryAgainAndKeepsTheO
 
 TEST_F(LutPreviewControllerTest, ImageSwitchHidesPreviewsAndAnOldResultIsNotShown) {
   Watch(QStringLiteral("b"));
-  source_.Complete(0, EditorLutPreviewStatus::Completed);
+  source_.Complete(0, EditorBrowserPreviewStatus::Completed);
   ASSERT_FALSE(Url(QStringLiteral("b")).isEmpty());
 
   Watch(QStringLiteral("a"));
@@ -231,14 +232,14 @@ TEST_F(LutPreviewControllerTest, ImageSwitchHidesPreviewsAndAnOldResultIsNotShow
   EXPECT_EQ(source_.renders.size(), 2u) << "the render in flight finishes first";
 
   // The render of the previous photo ends: it is not shown on the new photo.
-  source_.Complete(1, EditorLutPreviewStatus::Completed);
+  source_.Complete(1, EditorBrowserPreviewStatus::Completed);
   EXPECT_TRUE(Url(QStringLiteral("a")).isEmpty());
   ASSERT_EQ(source_.renders.size(), 3u);
   EXPECT_EQ(source_.renders[2].request.image_id, 8u);
-  source_.Complete(2, EditorLutPreviewStatus::Completed);
+  source_.Complete(2, EditorBrowserPreviewStatus::Completed);
   ASSERT_EQ(source_.renders.size(), 4u);
   EXPECT_EQ(source_.renders[3].request.image_id, 8u);
-  source_.Complete(3, EditorLutPreviewStatus::Completed);
+  source_.Complete(3, EditorBrowserPreviewStatus::Completed);
   EXPECT_FALSE(Url(QStringLiteral("a")).isEmpty());
   EXPECT_FALSE(Url(QStringLiteral("b")).isEmpty());
 }
@@ -250,7 +251,7 @@ TEST_F(LutPreviewControllerTest, FailedRenderIsNotTriedAgainAndAnEntryWithoutWri
 
   Watch(QStringLiteral("a"));
   ASSERT_EQ(source_.renders.size(), 1u);
-  source_.Complete(0, EditorLutPreviewStatus::Failed, "device lost");
+  source_.Complete(0, EditorBrowserPreviewStatus::Failed, "device lost");
   EXPECT_TRUE(Url(QStringLiteral("a")).isEmpty());
   EXPECT_FALSE(controller_.rendering());
   RefreshAll();
@@ -274,7 +275,7 @@ TEST_F(LutPreviewControllerTest, PreviewsWaitWhileTheViewportRendersAndContinueA
 
   // A frame starts while the preview renders: the preview finishes, the next one waits.
   source_.viewport_rendering = true;
-  source_.Complete(0, EditorLutPreviewStatus::Completed);
+  source_.Complete(0, EditorBrowserPreviewStatus::Completed);
   EXPECT_FALSE(Url(QStringLiteral("b")).isEmpty());
   EXPECT_EQ(source_.renders.size(), 1u);
   source_.viewport_rendering = false;
@@ -292,14 +293,14 @@ TEST_F(LutPreviewControllerTest, RefusedOrRejectedRenderStartsAgainAfterTheNextR
   source_.refuse = false;
   RefreshAll();
   ASSERT_EQ(source_.renders.size(), 1u);
-  source_.Complete(0, EditorLutPreviewStatus::Rejected, "not interactive");
+  source_.Complete(0, EditorBrowserPreviewStatus::Rejected, "not interactive");
   EXPECT_TRUE(Url(QStringLiteral("a")).isEmpty());
   EXPECT_EQ(source_.renders.size(), 1u);
 
   // A rejected render is not a failure: the next refresh (a session state change) renders it.
   RefreshAll();
   ASSERT_EQ(source_.renders.size(), 2u);
-  source_.Complete(1, EditorLutPreviewStatus::Completed);
+  source_.Complete(1, EditorBrowserPreviewStatus::Completed);
   EXPECT_FALSE(Url(QStringLiteral("a")).isEmpty());
 }
 
@@ -312,14 +313,14 @@ TEST_F(LutPreviewControllerTest, PreviewIsConvertedToTheDestination) {
   source_.render_encoding =
       ViewerDisplayConfig{ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::SRGB_PIECEWISE};
   Watch(QStringLiteral("a"));
-  source_.Complete(0, EditorLutPreviewStatus::Completed);
+  source_.Complete(0, EditorBrowserPreviewStatus::Completed);
   const auto display_id_of = [this](const QString& entry_id) {
     std::uint64_t display_id = 0;
-    EXPECT_TRUE(LutPreviewImageStore::ParseProviderId(Url(entry_id).section(QLatin1Char('/'), -1),
-                                                      &display_id));
+    EXPECT_TRUE(BrowserPreviewImageStore::ParseProviderId(
+        Url(entry_id).section(QLatin1Char('/'), -1), &display_id));
     return display_id;
   };
-  LutPreviewImageProvider provider(store_);
+  BrowserPreviewImageProvider provider(store_);
   const auto              provider_id = [this](const QString& entry_id) {
     return Url(entry_id).section(QLatin1Char('/'), -1);
   };
@@ -353,7 +354,7 @@ TEST_F(LutPreviewControllerTest, PreviewIsConvertedToTheDestination) {
 
   // A preview shown after the change is converted too.
   Watch(QStringLiteral("b"));
-  source_.Complete(1, EditorLutPreviewStatus::Completed);
+  source_.Complete(1, EditorBrowserPreviewStatus::Completed);
   EXPECT_EQ(provider.requestImage(provider_id(QStringLiteral("b")), nullptr, {}),
             alcedo::test::ExpectedDisplayImage(store_->Get(display_id_of(QStringLiteral("b"))),
                                                source_.render_encoding, p3_bytes));

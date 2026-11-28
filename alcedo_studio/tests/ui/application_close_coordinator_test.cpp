@@ -11,12 +11,24 @@
 #include <gtest/gtest.h>
 
 #include <QSignalSpy>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <span>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/mount_directory_watcher.hpp"
+#include "ui/alcedo_main/album_backend/mount_scan_coordinator.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
 
 namespace alcedo::ui::test {
@@ -100,6 +112,70 @@ class DeferredCloseBackend final : public alcedo::IEditorSessionBackend {
   EditorSessionState    state_ = EditorSessionState::NoImage;
   EditorSessionIdentity identity_{};
   std::string           last_error_;
+};
+
+/// A scan port with one mount whose scan is in a batch: the stop request does not end the
+/// scan, Release does.
+class ScanInBatchPort final : public MountScanPort {
+ public:
+  auto ListMounts() -> std::vector<MountSummary> override {
+    MountSummary summary;
+    summary.record.id             = 1;
+    summary.record.root_folder_id = 101;
+    summary.record.root_path      = "mounted";
+    return {summary};
+  }
+
+  auto ScanMount(mount_id_t, const std::atomic<bool>& stop_requested,
+                 const std::function<void(const MountScanProgress&)>&, bool)
+      -> MountScanResult override {
+    std::unique_lock lock(mutex_);
+    in_batch_ = true;
+    changed_.wait(lock, [this] { return released_; });
+    saw_stop_request_ = stop_requested.load();
+    MountScanResult result;
+    result.status = MountScanStatus::kCanceled;
+    return result;
+  }
+  // The canceled scan stored no change, so the coordinator never calls it.
+  auto SaveProject() -> bool override { return true; }
+
+  void Release() {
+    {
+      std::lock_guard lock(mutex_);
+      released_ = true;
+    }
+    changed_.notify_all();
+  }
+  auto InBatch() -> bool {
+    std::lock_guard lock(mutex_);
+    return in_batch_;
+  }
+  auto SawStopRequest() -> bool {
+    std::lock_guard lock(mutex_);
+    return saw_stop_request_;
+  }
+
+ private:
+  std::mutex              mutex_;
+  std::condition_variable changed_;
+  bool                    in_batch_         = false;
+  bool                    released_         = false;
+  bool                    saw_stop_request_ = false;
+};
+
+/// A watcher that registers nothing.
+class IdleWatcher final : public MountDirectoryWatcher {
+ public:
+  void SetChangeCallback(ChangeCallback) override {}
+  void SetVolumeCallbacks(VolumeRemovedCallback, VolumeArrivedCallback,
+                          MountPointArrivedCallback, MountPointRemovedCallback) override {}
+  auto Watch(mount_id_t, const std::filesystem::path&, std::span<const std::wstring>)
+      -> bool override {
+    return false;
+  }
+  void Unwatch(mount_id_t) override {}
+  void UnwatchAll() override {}
 };
 
 class ApplicationCloseCoordinatorTest : public ApplicationModuleHostTestFixture {};
@@ -202,6 +278,52 @@ TEST_F(ApplicationCloseCoordinatorTest, ProjectCloseFinalizesEditorThenClosesPro
   EXPECT_TRUE(finished.front().at(0).toBool());
   EXPECT_FALSE(host.project()->ServiceReady());
   EXPECT_FALSE(host.project()->ProjectEntered());
+  EXPECT_FALSE(host.project()->handler().project());
+}
+
+TEST_F(ApplicationCloseCoordinatorTest, ProjectCloseWaitsForTheStoppedScanWorker) {
+  // #1014: the project close joined the scan worker on the UI thread. The scan here is in a
+  // batch; the close waits for its worker in the event loop and then saves and closes.
+  ApplicationModuleHost host;
+  ASSERT_TRUE(CreateTestProject(host));
+
+  BackgroundTaskController         tasks;
+  MountScanCoordinatorDependencies dependencies;
+  dependencies.tasks   = &tasks;
+  dependencies.clock   = CreateSteadyMountScanClock();
+  dependencies.watcher = std::make_unique<IdleWatcher>();
+  MountScanCoordinator scans(std::move(dependencies));
+  auto                 port = std::make_shared<ScanInBatchPort>();
+  scans.Start(port);
+  for (int step = 0; step < 200 && !port->InBatch(); ++step) {
+    ProcessEvents(10);
+  }
+  ASSERT_TRUE(port->InBatch());
+
+  ApplicationCloseCoordinator close(nullptr, nullptr, host.project());
+  close.BindMountScans(&scans);
+  QSignalSpy finished(&close, &ApplicationCloseCoordinator::ProjectCloseFinished);
+  ASSERT_TRUE(close.BeginProjectClose(/*persist=*/true).isEmpty());
+  ProcessEvents(100);
+
+  // The worker is in its batch: the project is open and the close waits.
+  EXPECT_FALSE(scans.IsStarted());
+  EXPECT_TRUE(scans.HasStoppedWorker());
+  EXPECT_TRUE(close.waiting());
+  EXPECT_EQ(finished.count(), 0);
+  EXPECT_TRUE(host.project()->ServiceReady());
+  EXPECT_TRUE(host.project()->handler().project());
+
+  port->Release();
+  for (int step = 0; step < 200 && finished.count() == 0; ++step) {
+    ProcessEvents(10);
+  }
+
+  ASSERT_EQ(finished.count(), 1);
+  EXPECT_TRUE(finished.front().at(0).toBool()) << finished.front().at(1).toString().toStdString();
+  EXPECT_TRUE(port->SawStopRequest());
+  EXPECT_FALSE(scans.HasStoppedWorker());
+  EXPECT_FALSE(close.waiting());
   EXPECT_FALSE(host.project()->handler().project());
 }
 

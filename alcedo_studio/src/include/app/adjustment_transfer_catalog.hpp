@@ -187,4 +187,22 @@ class AdjustmentTransferCatalogService final {
       -> std::optional<std::vector<AdjustmentTransferNodeDescriptor>>;
 };
 
+/// The node rows of one transfer package for a summary: the node name and its item names.
+struct AdjustmentTransferPackageNodeSummary {
+  std::string              display_name;
+  std::vector<std::string> item_names;
+
+  auto operator==(const AdjustmentTransferPackageNodeSummary&) const -> bool = default;
+};
+
+/**
+ * @brief The items of @p package, with the node and item names of the Copy dialog.
+ *
+ * One row for the Develop fields, one row for each Color Grade in package order, and one row for
+ * the DRT/Post entry. A part that the package does not contain has no row. Reads @p package only;
+ * needs no source document, so it describes a package that was read from a preset file.
+ */
+[[nodiscard]] auto SummarizeTransferPackage(const AdjustmentTransferPackage& package)
+    -> std::vector<AdjustmentTransferPackageNodeSummary>;
+
 }  // namespace alcedo

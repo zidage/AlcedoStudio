@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
 
 #include "edit/input/prepared_raw_input.hpp"
 #include "type/type.hpp"
@@ -47,6 +48,25 @@ class RawInputLoader {
    * @brief Direct RGB (already demosaiced) host plane. No LibRaw.
    */
   [[nodiscard]] static auto FromDirectRgb(HostImagePlane plane, RawSensorGeometry sensor)
+      -> PreparedRawInput;
+
+  /**
+   * @brief AI Denoise input of a full-size Bayer RAW file (AI Denoise integration plan, DN5).
+   *
+   * @p denoised is the camera RGB output of the model for the decode area of @p cfa (the active
+   * area or the DNG default crop, @p cfa at full size), F32 RGBA and tightly packed. Channel c is
+   * in the value domain of the CFA Linearize step before its clamp and its white balance: 0 is
+   * `black_level[c]`, 1 is `white_level[c]` of @p cfa's linearization; values outside [0, 1] are
+   * kept. The result copies the linearization, color context, DNG warp, orientation, and encoded
+   * identity of @p cfa; its sensor geometry is the plane, and its source key holds the hash of
+   * @p model_version and @p xyz_to_camera, the camera matrix of the gain match (HashAiDenoiseRun).
+   * @throws std::runtime_error when @p cfa is not a full-size Bayer CFA input, when @p denoised is
+   *         not tightly packed F32 RGBA of the decode area, or when @p model_version is not 64
+   *         lowercase hexadecimal digits.
+   */
+  [[nodiscard]] static auto FromDenoisedBayer(const PreparedRawInput& cfa, HostImagePlane denoised,
+                                              std::string_view             model_version,
+                                              const std::array<double, 9>& xyz_to_camera)
       -> PreparedRawInput;
 
   [[nodiscard]] static auto TryLoadEncoded(std::span<const std::byte> encoded, DecodeRes decode_res)

@@ -4,14 +4,9 @@
 
 #include "ui/alcedo_main/album_backend/lut_preview_controller.hpp"
 
-#include <QDebug>
-#include <QMetaObject>
-#include <exception>
 #include <utility>
 
-#include "ui/alcedo_main/album_backend/comparison_presentation_image.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
-#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -35,7 +30,7 @@ class EditorSessionLutPreviewSource final : public LutPreviewSource {
   [[nodiscard]] auto ViewportRendering() const -> bool override {
     return session_ && session_->render_busy();
   }
-  auto RenderLutPreview(EditorLutPreviewRequest request, EditorLutPreviewCompletion on_complete,
+  auto RenderLutPreview(EditorLutPreviewRequest request, EditorBrowserPreviewCompletion on_complete,
                         std::string* error) -> bool override {
     auto* backend = session_ ? session_->session_backend() : nullptr;
     if (backend == nullptr) {
@@ -58,13 +53,9 @@ class EditorSessionLutPreviewSource final : public LutPreviewSource {
 }  // namespace
 
 LutPreviewController::LutPreviewController(QObject* parent)
-    : QObject(parent), store_(SharedLutPreviewImageStore()) {}
+    : BrowserPreviewController(SharedLutPreviewImageStore(), parent) {}
 
-LutPreviewController::~LutPreviewController() {
-  for (const auto& shown : std::as_const(shown_)) {
-    store_->Remove(shown.display_id);
-  }
-}
+LutPreviewController::~LutPreviewController() = default;
 
 void LutPreviewController::setEditorSession(EditorSessionController* session) {
   if (session_ == session) return;
@@ -105,245 +96,39 @@ void LutPreviewController::SetSource(LutPreviewSource* source) {
   source_ = source;
 }
 
-void LutPreviewController::SetImageStore(std::shared_ptr<LutPreviewImageStore> store) {
-  for (const auto& shown : std::as_const(shown_)) {
-    store_->Remove(shown.display_id);
-  }
-  shown_.clear();
-  store_ = store ? std::move(store) : SharedLutPreviewImageStore();
-  store_->SetDestination(display_source_ != nullptr ? display_source_->Destination() : nullptr);
-  BumpRevision();
-}
-
 void LutPreviewController::RebuildSessionSource() {
   session_source_ = std::make_unique<EditorSessionLutPreviewSource>(session_, library_);
   source_         = session_source_.get();
 }
 
-void LutPreviewController::watch(const QString& entry_id) {
-  if (entry_id.isEmpty()) return;
-  if (++watched_[entry_id] > 1) return;
-  RefreshEntry(entry_id);
-  Pump();
+auto LutPreviewController::PreviewImageId() const -> std::uint64_t {
+  return source_ != nullptr ? source_->ImageId() : 0;
 }
 
-void LutPreviewController::unwatch(const QString& entry_id) {
-  const auto found = watched_.find(entry_id);
-  if (found == watched_.end()) return;
-  if (--found.value() > 0) return;
-  watched_.erase(found);
-  std::erase(pending_, entry_id);
-  // The tile that showed it is gone; the LRU keeps the pixels for the next watch.
-  Hide(entry_id, /*notify=*/false);
+auto LutPreviewController::EntryKey(const QString& entry_id) const -> std::optional<QString> {
+  if (source_ == nullptr) return std::nullopt;
+  EditorLutWrite write;
+  if (!source_->EntryWrite(entry_id, &write)) return std::nullopt;
+  return entry_id + QLatin1Char('|') + ToQString(write.input_encoding.value_or("")) +
+         QLatin1Char('|') + ToQString(write.output_encoding.value_or(""));
 }
 
-auto LutPreviewController::previewUrl(const QString& entry_id, int /*revision*/) const -> QString {
-  const auto found = shown_.constFind(entry_id);
-  return found == shown_.constEnd() ? QString{} : found->url;
+auto LutPreviewController::ViewportRendering() const -> bool {
+  return source_ == nullptr || source_->ViewportRendering();
 }
 
-void LutPreviewController::Refresh() {
-  const std::uint64_t image_id = source_ != nullptr ? source_->ImageId() : 0;
-  if (image_id != image_id_) {
-    image_id_          = image_id;
-    // Previews of the previous photo must not stay on the tiles.
-    const auto entries = shown_.keys();
-    for (const auto& entry_id : entries) {
-      Hide(entry_id, /*notify=*/false);
-    }
-    pending_.clear();
-    failed_.clear();
-    BumpRevision();
-  }
-  const auto entries = watched_.keys();
-  for (const auto& entry_id : entries) {
-    RefreshEntry(entry_id);
-  }
-  Pump();
-}
-
-auto LutPreviewController::KeyFor(const QString& entry_id, EditorLutWrite* write) const
-    -> std::optional<QString> {
-  if (image_id_ == 0 || source_ == nullptr) return std::nullopt;
-  EditorLutWrite entry_write;
-  if (!source_->EntryWrite(entry_id, &entry_write)) return std::nullopt;
-  const QString key = QString::number(image_id_) + QLatin1Char('|') + entry_id + QLatin1Char('|') +
-                      ToQString(entry_write.input_encoding.value_or("")) + QLatin1Char('|') +
-                      ToQString(entry_write.output_encoding.value_or(""));
-  if (write != nullptr) *write = std::move(entry_write);
-  return key;
-}
-
-void LutPreviewController::RefreshEntry(const QString& entry_id) {
-  const auto key = KeyFor(entry_id, nullptr);
-  if (!key) {
-    Hide(entry_id, /*notify=*/true);
-    return;
-  }
-  const auto shown = shown_.constFind(entry_id);
-  if (shown != shown_.constEnd() && shown->key == *key) return;
-  if (auto preview = CachedImage(*key)) {
-    Show(entry_id, *key, *preview);
-    return;
-  }
-  // The encodings changed: the old preview shows another LUT result.
-  Hide(entry_id, /*notify=*/true);
-  if (!failed_.contains(*key) && !(in_flight_ && in_flight_->key == *key)) {
-    Enqueue(entry_id);
-  }
-}
-
-void LutPreviewController::Show(const QString& entry_id, const QString& key,
-                                const RenderedPreview& preview) {
-  Hide(entry_id, /*notify=*/false);
-  const std::uint64_t display_id = next_display_id_++;
-  shown_.insert(entry_id,
-                ShownPreview{key, display_id,
-                             store_->Put(display_id, preview.image, preview.encoding), preview});
-  BumpRevision();
-}
-
-void LutPreviewController::Hide(const QString& entry_id, bool notify) {
-  const auto found = shown_.find(entry_id);
-  if (found == shown_.end()) return;
-  store_->Remove(found->display_id);
-  shown_.erase(found);
-  if (notify) BumpRevision();
-}
-
-void LutPreviewController::Enqueue(const QString& entry_id) {
-  std::erase(pending_, entry_id);
-  // The most recently watched entry renders first: it is the one the user scrolled to.
-  pending_.push_front(entry_id);
-}
-
-void LutPreviewController::Pump() {
-  // A preview starts only while the viewport does not render. The editor render worker runs
-  // frames and previews in order, so a frame never waits behind a run of previews: during a slider
-  // drag the previews stop, and the next one starts when the viewport is idle again.
-  while (!in_flight_ && !pending_.empty() && source_ != nullptr && !source_->ViewportRendering()) {
-    const QString entry_id = pending_.front();
-    pending_.pop_front();
-    if (!watched_.contains(entry_id)) continue;
-    EditorLutWrite write;
-    const auto     key = KeyFor(entry_id, &write);
-    if (!key || failed_.contains(*key)) continue;
-    if (auto preview = CachedImage(*key)) {
-      Show(entry_id, *key, *preview);
-      continue;
-    }
-
-    in_flight_ = InFlight{entry_id, *key};
-    // One render at a time; a refused command stops the queue until the next refresh.
-    SubmitRender(entry_id, *key, std::move(write));
-    return;
-  }
-}
-
-void LutPreviewController::ResumeAfterViewport() { Pump(); }
-
-void LutPreviewController::SubmitRender(const QString& entry_id, const QString& key,
-                                        EditorLutWrite write) {
-  ++render_count_;
+auto LutPreviewController::StartRender(const QString& entry_id, std::uint64_t image_id,
+                                       EditorBrowserPreviewCompletion on_complete,
+                                       std::string*                   error) -> bool {
   EditorLutPreviewRequest request;
-  request.image_id = static_cast<image_id_t>(image_id_);
-  request.write    = std::move(write);
-  QPointer<LutPreviewController> self(this);
-  std::string                    error;
-  const bool                     submitted = source_->RenderLutPreview(
-      std::move(request),
-      [self, entry_id, preview_key = key](EditorLutPreviewResult result) {
-        // Runs on the session owner or the editor render worker.
-        QMetaObject::invokeMethod(
-            self,
-            [self, entry_id, preview_key, result = std::move(result)]() mutable {
-              if (self) self->OnRendered(entry_id, preview_key, std::move(result));
-            },
-            Qt::QueuedConnection);
-      },
-      &error);
-  if (!submitted) {
-    // The session refused the command; a later state change refreshes the tiles again.
-    in_flight_.reset();
-    qCWarning(alcedo::diag::editorLog).noquote() << "LUT preview not started:" << ToQString(error);
+  request.image_id = static_cast<image_id_t>(image_id);
+  if (source_ == nullptr || !source_->EntryWrite(entry_id, &request.write)) {
+    if (error != nullptr) *error = "The LUT entry is no longer listed";
+    return false;
   }
+  return source_->RenderLutPreview(std::move(request), std::move(on_complete), error);
 }
 
-void LutPreviewController::OnRendered(const QString& entry_id, const QString& key,
-                                      EditorLutPreviewResult result) {
-  if (in_flight_ && in_flight_->key == key) in_flight_.reset();
-  if (result.status == EditorLutPreviewStatus::Completed) {
-    try {
-      auto presentation = ConvertRenderedImageForComparison(result.image);
-      CachePut(key, RenderedPreview{std::move(presentation.image), result.image.display});
-    } catch (const std::exception& ex) {
-      failed_.insert(key);
-      qCWarning(alcedo::diag::editorLog).noquote()
-          << "LUT preview of" << entry_id << "cannot be shown:" << ex.what();
-    }
-  } else if (result.status == EditorLutPreviewStatus::Failed) {
-    failed_.insert(key);
-    qCWarning(alcedo::diag::editorLog).noquote()
-        << "LUT preview of" << entry_id << "failed:" << ToQString(result.message);
-  }
-  // Rejected: the session cannot render now; the entry renders after the next refresh.
-  if (watched_.contains(entry_id)) {
-    const auto current = KeyFor(entry_id, nullptr);
-    if (current && *current == key) {
-      if (auto preview = CachedImage(key)) Show(entry_id, key, *preview);
-    }
-  }
-  Pump();
-}
-
-auto LutPreviewController::CachedImage(const QString& key) -> std::optional<RenderedPreview> {
-  const auto found = lru_index_.find(key);
-  if (found == lru_index_.end()) return std::nullopt;
-  lru_.splice(lru_.begin(), lru_, found.value());
-  return lru_.front().second;
-}
-
-void LutPreviewController::CachePut(const QString& key, RenderedPreview preview) {
-  if (preview.image.isNull()) return;
-  if (const auto found = lru_index_.find(key); found != lru_index_.end()) {
-    lru_.erase(found.value());
-    lru_index_.erase(found);
-  }
-  lru_.emplace_front(key, std::move(preview));
-  lru_index_.insert(key, lru_.begin());
-  while (lru_.size() > kLutPreviewCacheCapacity) {
-    lru_index_.remove(lru_.back().first);
-    lru_.pop_back();
-  }
-}
-
-void LutPreviewController::BumpRevision() {
-  ++revision_;
-  emit revisionChanged();
-}
-
-void LutPreviewController::SetDisplayWindow(QWindow* window) {
-  QObject::disconnect(display_connection_);
-  display_source_ = window != nullptr ? WindowDisplayDestination::ForWindow(window) : nullptr;
-  if (display_source_ != nullptr) {
-    display_connection_ = connect(display_source_, &WindowDisplayDestination::DestinationChanged,
-                                  this, &LutPreviewController::ApplyDisplayDestination);
-  }
-  ApplyDisplayDestination();
-}
-
-void LutPreviewController::ApplyDisplayDestination() {
-  auto destination = display_source_ != nullptr ? display_source_->Destination() : nullptr;
-  if (store_->Destination() == destination) return;
-  store_->SetDestination(std::move(destination));
-  if (shown_.isEmpty()) return;
-  // The stored pixels stay; a new display id makes the tile request the new conversion.
-  for (auto& shown : shown_) {
-    store_->Remove(shown.display_id);
-    shown.display_id = next_display_id_++;
-    shown.url        = store_->Put(shown.display_id, shown.preview.image, shown.preview.encoding);
-  }
-  BumpRevision();
-}
+auto LutPreviewController::LogName() const -> QString { return QStringLiteral("LUT preview"); }
 
 }  // namespace alcedo::ui

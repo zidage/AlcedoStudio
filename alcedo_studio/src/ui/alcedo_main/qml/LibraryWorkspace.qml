@@ -5,6 +5,7 @@ import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
 import "FileDrop.js" as FileDrop
+import "CollectionTree.js" as CollectionTree
 
 // Extracted library/album surface. Layout and behavior match the former Main.qml body.
 Item {
@@ -38,6 +39,89 @@ Item {
     readonly property string dataFontFamily: theme ? theme.dataFontFamily : appTheme.dataFontFamily
     readonly property string headlineFontFamily: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
     readonly property int controlRadius: theme ? theme.controlRadius : 10
+
+    // ── Folder section (issue #1009) ──
+    // A search or a filter selects photos, so it hides the folder section.
+    readonly property bool libraryFilterActive:
+        appModules.search.activeSearchQuery.length > 0
+        || appModules.stats.statsFilterDate.length > 0
+        || appModules.stats.statsFilterImportDate.length > 0
+        || appModules.stats.statsFilterCamera.length > 0
+        || appModules.stats.statsFilterLens.length > 0
+        || appModules.stats.statsFilterLabel.length > 0
+        || appModules.stats.statsFilterRating.length > 0
+    // The direct child folders of the shown folder, in the order of the Collections tree. The
+    // Library row shows its collections, not the mounts (#1078); All Photos shows none.
+    readonly property var folderSectionRows: {
+        const folders = appModules.folders
+        const current = folders ? Number(folders.currentFolderId) : 0
+        const libraryRoot = current === 0 && !!folders && folders.libraryRootSelected === true
+        if ((current === 0 && !libraryRoot) || !appModules.project.serviceReady
+                || root.libraryFilterActive) {
+            return []
+        }
+        return CollectionTree.orderRows(folders.folders, false).filter(function(row) {
+            return Number(row.folderId) !== 0 && Number(row.parentFolderId) === current
+                   && (!libraryRoot || Number(row.mountId || 0) === 0)
+        })
+    }
+    // A folder with child folders and no photo shows the folder section alone, in place of the
+    // empty state.
+    readonly property bool folderSectionAlone: folderSectionRows.length > 0
+                                               && appModules.library.shownCount === 0
+                                               && appModules.library.queryError.length === 0
+                                               && !libraryQueryReplacing
+
+    // A click on a folder tile shows that folder; the Collections tree selects and reveals it.
+    // Path of a collection for the header breadcrumb (#1028, #1078): All Photos alone; Library,
+    // then each collection down to the collection itself; for a mounted folder the volume, then
+    // the mount root and each folder below it. Each part is { folderId, name }; folderId 0 is
+    // the Library row, and a negative folderId is a part that shows no view (All Photos itself,
+    // a volume).
+    function collectionPath(folderId, libraryRootSelected) {
+        if (Number(folderId) === 0 && !libraryRootSelected) {
+            return [{ folderId: -1, name: qsTr("All Photos") }]
+        }
+        const rows = appModules.folders ? appModules.folders.folders : []
+        const byFolderId = CollectionTree.rowsByFolderId(rows)
+        const path = []
+        let current = byFolderId[String(Number(folderId))]
+        let top = null
+        let guard = 0
+        while (current && Number(current.folderId) !== 0 && guard < 4096) {
+            path.unshift({ folderId: Number(current.folderId), name: String(current.name) })
+            top = current
+            current = byFolderId[String(Number(current.parentFolderId))]
+            ++guard
+        }
+        if (top && Number(top.mountId || 0) > 0) {
+            const volume = String(top.mountVolumeName || top.mountPoint || top.mountVolumeRoot
+                                  || qsTr("Disk"))
+            path.unshift({ folderId: -1, name: volume })
+        } else {
+            path.unshift({ folderId: 0, name: qsTr("Library") })
+        }
+        return path
+    }
+
+    function showChildFolder(folderId) {
+        if (appModules.folders && appModules.interactionPolicy.canChangeStateAsUser) {
+            folderActivationGuardTimer.restart()
+            if (Number(folderId) === 0) {
+                appModules.folders.SelectLibraryRoot()
+            } else if (Number(folderId) > 0) {
+                appModules.folders.SelectFolder(Number(folderId))
+            }
+        }
+    }
+
+    // A double click on a folder tile: the second click lands on the view of the child folder.
+    // For one double-click interval the photo area takes no click, so that click does not
+    // select or open the photo under the pointer.
+    Timer {
+        id: folderActivationGuardTimer
+        interval: Qt.styleHints.mouseDoubleClickInterval
+    }
 
     function secondaryButtonFill(enabled, hovered, pressed) {
         if (theme && theme.secondaryButtonFill) {
@@ -364,8 +448,85 @@ RowLayout {
             RowLayout {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 40
-                Label { text: qsTr("Browser"); color: root.colTextMuted; font.pixelSize: 13; font.weight: 600 }
-                Item { Layout.fillWidth: true }
+                // Path of the current collection. A click on a part above the current
+                // collection shows that collection. A path of more than four parts shows the
+                // first part, "...", and the last two parts; the tooltip of "..." has the
+                // hidden parts.
+                RowLayout {
+                    id: libraryBreadcrumb
+                    objectName: "libraryBreadcrumb"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    spacing: appTheme.spaceXs
+
+                    readonly property var path: root.collectionPath(
+                        Number(appModules.folders.currentFolderId),
+                        appModules.folders.libraryRootSelected === true)
+                    readonly property var shownPath: path.length > 4
+                        ? [path[0], null].concat(path.slice(-2))
+                        : path
+                    readonly property string hiddenNames: path.length > 4
+                        ? path.slice(1, -2).map(function(part) { return part.name }).join(" / ")
+                        : ""
+
+                    Repeater {
+                        model: libraryBreadcrumb.shownPath
+
+                        delegate: RowLayout {
+                            id: crumb
+                            required property var modelData
+                            required property int index
+                            readonly property bool last: index === libraryBreadcrumb.shownPath.length - 1
+                            readonly property bool folded: modelData === null
+                            Layout.minimumWidth: 0
+                            spacing: appTheme.spaceXs
+
+                            IconImage {
+                                Layout.preferredWidth: 12
+                                Layout.preferredHeight: 12
+                                Layout.alignment: Qt.AlignVCenter
+                                visible: crumb.index > 0
+                                sourceSize: Qt.size(12, 12)
+                                source: "qrc:/panel_icons/chevron-right.svg"
+                                color: root.colTextMuted
+                            }
+
+                            Label {
+                                objectName: "libraryBreadcrumbPart_" + crumb.index
+                                Layout.minimumWidth: 0
+                                Layout.maximumWidth: 220
+                                Layout.alignment: Qt.AlignVCenter
+                                elide: Text.ElideRight
+                                text: crumb.folded ? "..." : crumb.modelData.name
+                                color: crumb.last || crumbMouse.containsMouse ? root.colText
+                                                                               : root.colTextMuted
+                                font.family: appTheme.uiFontFamily
+                                font.pixelSize: appTheme.fontSizeTitle
+                                font.weight: crumb.last ? appTheme.fontWeightStrong
+                                                        : appTheme.fontWeightRegular
+
+                                ToolTip.visible: crumb.folded && crumbMouse.containsMouse
+                                ToolTip.text: libraryBreadcrumb.hiddenNames
+
+                                MouseArea {
+                                    id: crumbMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    enabled: !crumb.last && (crumb.folded
+                                                             || Number(crumb.modelData.folderId) >= 0)
+                                    cursorShape: crumb.folded ? Qt.ArrowCursor : Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (!crumb.folded) {
+                                            root.showChildFolder(crumb.modelData.folderId)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
 
                 // ── Zoom slider ──
                 // Left end: the most photos (the smallest thumbnails, zoom level 7); right end:
@@ -499,12 +660,16 @@ RowLayout {
                     keys: ["text/uri-list"]
 
                     readonly property int targetFolderId: Number(appModules.folders.currentFolderId)
+                    // A mounted folder takes its files from its disk directory: no import, and
+                    // the refused drag shows the "not allowed" cursor.
+                    readonly property bool takesDrop: !!host && host.fileDropImportAllowed
+                                                      && !appModules.folders.currentFolderMounted
                     property var urls: []
 
                     // The action is always Copy: import reads the files in place, and a Move
                     // answer lets the file manager delete them.
                     onEntered: function(drag) {
-                        urls = host && host.fileDropImportAllowed ? FileDrop.localFileUrls(drag) : []
+                        urls = takesDrop ? FileDrop.localFileUrls(drag) : []
                         if (urls.length > 0) {
                             drag.accept(Qt.CopyAction)
                         } else {
@@ -515,7 +680,7 @@ RowLayout {
                     onDropped: function(drop) {
                         const dropped = urls.length > 0 ? urls : FileDrop.localFileUrls(drop)
                         urls = []
-                        if (!host || !host.fileDropImportAllowed || dropped.length === 0) {
+                        if (!takesDrop || dropped.length === 0) {
                             drop.accepted = false
                             return
                         }
@@ -642,17 +807,52 @@ RowLayout {
                     }
                 }
 
+                MouseArea {
+                    objectName: "libraryFolderActivationGuard"
+                    anchors.fill: parent
+                    z: 10
+                    enabled: folderActivationGuardTimer.running
+                    visible: enabled
+                    acceptedButtons: Qt.AllButtons
+                }
+
+                // Folder with child folders and no photo: the folder section alone, in place
+                // of the empty state.
+                Flickable {
+                    id: folderSectionAloneView
+                    objectName: "libraryFolderSectionAloneView"
+                    anchors.fill: parent
+                    anchors.topMargin: contentViewLoader.anchors.topMargin
+                    visible: root.folderSectionAlone
+                    clip: true
+                    contentWidth: width
+                    contentHeight: folderSectionAlone.height
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: AlcedoScrollBar {}
+
+                    readonly property var metrics: root.libraryLoadingGridMetrics(width)
+
+                    LibraryFolderSection {
+                        id: folderSectionAlone
+                        width: folderSectionAloneView.width
+                        folders: folderSectionAloneView.visible ? root.folderSectionRows : []
+                        photoCellWidth: Math.max(72, Math.floor(folderSectionAloneView.width
+                            / Math.max(1, folderSectionAloneView.metrics.cols)))
+                        compact: folderSectionAloneView.metrics.cols >= 8
+                        cellPadding: folderSectionAloneView.metrics.cols >= 11
+                                     ? 4 : (folderSectionAloneView.metrics.cols >= 8 ? 6 : 8)
+                        onFolderActivated: function(folderId) { root.showChildFolder(folderId) }
+                    }
+                }
+
                 Column {
-                    readonly property bool hasLibraryFilter:
-                        appModules.search.activeSearchQuery.length > 0
-                        || appModules.stats.statsFilterDate.length > 0
-                        || appModules.stats.statsFilterImportDate.length > 0
-                        || appModules.stats.statsFilterCamera.length > 0
-                        || appModules.stats.statsFilterLens.length > 0
-                        || appModules.stats.statsFilterLabel.length > 0
-                        || appModules.stats.statsFilterRating.length > 0
+                    objectName: "libraryEmptyState"
                     readonly property bool noMatchingPhotos: appModules.project.serviceReady
-                                                             && hasLibraryFilter
+                                                             && root.libraryFilterActive
+                    // A mounted folder takes its photos from its disk directory: no import text.
+                    readonly property bool importTextShown: !noMatchingPhotos
+                                                            && appModules.project.serviceReady
+                                                            && !appModules.folders.currentFolderMounted
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
@@ -662,6 +862,7 @@ RowLayout {
                     visible: appModules.library.shownCount === 0
                              && appModules.library.queryError.length === 0
                              && !root.libraryQueryReplacing
+                             && !root.folderSectionAlone
                     spacing: 8
                     Label {
                         text: parent.noMatchingPhotos ? qsTr("No Matching Photos")
@@ -672,6 +873,9 @@ RowLayout {
                         font.weight: 700
                     }
                     Label {
+                        objectName: "libraryEmptyStateDetail"
+                        visible: parent.noMatchingPhotos || parent.importTextShown
+                                 || !appModules.project.serviceReady
                         text: parent.noMatchingPhotos
                               ? qsTr("Change the filters or the search to show photos.")
                               : appModules.project.serviceReady
@@ -765,6 +969,8 @@ RowLayout {
                         host.openImageContextMenu(item, sceneX, sceneY)
                     }
                     onColorLabelSettingsRequested: host.openColorLabelSettings()
+                    onAiModelsPageRequested: host.openAiModelSettings()
+                    onMessageRequested: function(message) { host.showSnackbar(message) }
                 }
 
                 ColumnLayout {
@@ -857,6 +1063,8 @@ RowLayout {
                 }
             }
             exportQueueById: host.exportQueueById
+            folderSectionRows: root.folderSectionRows
+            onFolderActivated: function(folderId) { root.showChildFolder(folderId) }
             onZoomChanged: function(level) { root.gridZoomLevel = level }
             onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
                 host.selectionState.setImageSelected(elementId, imageId, fileName, isHdr, selected)
@@ -893,6 +1101,8 @@ RowLayout {
             zoomAdjusting: zoomSlider.pressed
             geometryAnimating: root.geometryAnimating
             onZoomLevelChanged: root.gridZoomLevel = zoomLevel
+            folderSectionRows: root.folderSectionRows
+            onFolderActivated: function(folderId) { root.showChildFolder(folderId) }
             onContentYChanged: {
                 if (host) {
                     if (host.contentY !== undefined) {

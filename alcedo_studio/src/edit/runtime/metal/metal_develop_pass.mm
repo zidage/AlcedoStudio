@@ -34,6 +34,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/operators/geometry/resize_algorithm.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
+#include "edit/runtime/develop_ai_denoise.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/dng_profile_gpu_data.hpp"
 #include "edit/runtime/lens/lens_calibration_resolver.hpp"
@@ -54,9 +55,9 @@ MetalDemosaicNetModelCache* g_metal_neural_cache_for_test = nullptr;
 void ExecuteMetalLensCalibration(MetalRenderDevice& device, const ExecutionPlan& plan,
                                  const PreparedRawInput& input,
                                  const DevelopPayload&   develop_params) {
-  const auto runtime = LensCalibrationResolver::Resolve(develop_params, input.color_context,
-                                                        plan.source.develop_output_extent,
-                                                        input.dng_warp_rectilinear.has_value());
+  const auto runtime = LensCalibrationResolver::Resolve(
+      develop_params, input.color_context, plan.source.develop_output_extent,
+      dng::CorrectionsOf(input.dng_warp_rectilinear));
   if (!runtime.has_value()) {
     return;
   }
@@ -456,6 +457,7 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
         command_buffer, Native(linear), Native(decoded_lease.Texture()),
         CropOrFull(input, width, height), identity, input.sensor.orientation_flip);
   } else if (input.input_kind == RawInputKind::DebayeredRgb ||
+             input.input_kind == RawInputKind::DenoisedRgb ||
              plan.source.kind == DevelopInputKind::DirectRgb) {
     const auto width  = input.host_extent.width;
     const auto height = input.host_extent.height;
@@ -470,7 +472,7 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
     }
     auto* command_buffer = CommandBuffer(device);
     metal::EncodeLinearizeRgb(command_buffer, Native(uploaded),
-                              input.rgb_linearization.value_or(RawRgbLinearizationParams{}));
+                              DevelopRgbLinearization(input, hlr));
     auto* source = Native(uploaded);
     if (hlr && input.rgb_linearization.has_value()) {
       auto& corrected = AcquireScratch(workspace, width, height, TextureFormat::Rgba32f);

@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <unordered_set>
 
-#include "utils/file/source_image_path.hpp"
+#include "utils/file/source_file.hpp"
 
 namespace alcedo {
 auto ProjectMaintenanceService::CheckSource(const image_path_t& path) -> MaintenanceSourceCheck {
@@ -27,7 +27,7 @@ auto ProjectMaintenanceService::Scan(ProjectMaintenanceStore&           store,
                                      SourceChecker                      checker) -> bool {
   Clear();
   if (!checker) checker = CheckSource;
-  std::map<std::wstring, std::vector<MaintenanceEntryEvidence>> groups;
+  std::map<image_path_t::string_type, std::vector<MaintenanceEntryEvidence>> groups;
   sl_element_id_t                                               after     = 0;
   size_t                                                        inspected = 0;
   while (true) {
@@ -46,7 +46,10 @@ auto ProjectMaintenanceService::Scan(ProjectMaintenanceStore&           store,
         }
       }
       try {
-        groups[NormalizeSourceImagePath(evidence.source_path)].push_back(std::move(evidence));
+        if (!evidence.source_path.is_absolute()) {
+          throw std::invalid_argument("Source image path must be absolute");
+        }
+        groups[SourcePathKey(evidence.source_path)].push_back(std::move(evidence));
       } catch (const std::exception& error) {
         findings_.push_back(
             {std::move(evidence), MaintenanceFindingKind::ProjectProblem, error.what(), {}, false});

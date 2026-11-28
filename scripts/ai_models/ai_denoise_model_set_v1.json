@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "kind": "alcedo-ai-model-set-definition",
+  "id": "alcedo-ai-denoise",
+  "name": "AI Denoise",
+  "model_set_version": 1,
+  "revision": "r1",
+  "notice": "ai_denoise_model_set_v1_NOTICE.txt",
+  "licenses": [
+    {
+      "name": "GPL-3.0",
+      "file": "licenses/GPL-3.0.txt",
+      "source": "../../LICENSE",
+      "end_before": "Additional permission under GNU GPL version 3 section 7"
+    },
+    {
+      "name": "CC BY 4.0",
+      "file": "licenses/CC-BY-4.0.txt",
+      "source": "../../third_party_licenses/RawNIND-weights-CC-BY-4.0.txt",
+      "sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411"
+    }
+  ],
+  "models": [
+    {
+      "role": "denoise_graph",
+      "licenses": ["GPL-3.0", "CC BY 4.0"],
+      "files": {
+        "windows-x86_64": "utnet2_bayer_dark_loss_10k_fp16.onnx",
+        "macos-arm64": "utnet2_bayer_dark_loss_10k_fp16.onnx"
+      }
+    }
+  ],
+  "platforms": {
+    "windows-x86_64": [
+      {"path": "utnet2_bayer_dark_loss_10k_fp16.onnx", "size": 15552242,
+       "sha256": "0bc98084c9bff16d489945ec357fd008465414813e5330f4a6077f205b668469"}
+    ],
+    "macos-arm64": [
+      {"path": "utnet2_bayer_dark_loss_10k_fp16.onnx", "size": 15552242,
+       "sha256": "0bc98084c9bff16d489945ec357fd008465414813e5330f4a6077f205b668469"}
+    ]
+  }
+}

@@ -60,6 +60,8 @@ $requiredFiles = @(
     'alcedo_studio_ao.ico',
     'alcedo_mind.exe',
     'DirectML.dll',
+    'onnxruntime.dll',
+    'onnxruntime_providers_shared.dll',
     'aria2c.exe',
     'duckdb.dll',
     'duckdb_extensions\fts.duckdb_extension',

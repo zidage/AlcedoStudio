@@ -273,6 +273,12 @@ void ThumbnailManager::FinishThumbnailRequest(const ThumbnailCacheKey&          
 
 void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t imageId,
                                         uint32_t maxEdge, int retryAttempt) {
+  if (stored_missing_sources_.contains(elementId)) {
+    // A mounted photo whose file the last scan did not find: the tile shows the missing state,
+    // and no render reads a cached thumbnail of a file that is gone.
+    UpdateThumbnailState(elementId, QString(), false, true);
+    return;
+  }
   auto thumb_svc = library_.project()->handler().thumbnail_service();
   if (!thumb_svc) {
     return;
@@ -481,6 +487,28 @@ bool ThumbnailManager::RefreshCurrentThumbnail(sl_element_id_t elementId, image_
     RequestThumbnail(elementId, imageId, static_cast<uint32_t>(key.resolution));
   }
   return !pinned_keys.empty();
+}
+
+void ThumbnailManager::SetStoredMissingSources(std::unordered_set<sl_element_id_t> element_ids) {
+  auto previous           = std::move(stored_missing_sources_);
+  stored_missing_sources_ = std::move(element_ids);
+  for (const auto element_id : stored_missing_sources_) {
+    if (!previous.contains(element_id) && library_.FindAlbumItem(element_id) != nullptr) {
+      UpdateThumbnailState(element_id, QString(), false, true);
+    }
+  }
+  for (const auto element_id : previous) {
+    if (stored_missing_sources_.contains(element_id)) {
+      continue;
+    }
+    const auto* item = library_.FindAlbumItem(element_id);
+    if (item == nullptr) {
+      continue;
+    }
+    const auto image_id = item->image_id;
+    UpdateThumbnailState(element_id, QString(), false, false);
+    (void)RefreshCurrentThumbnail(element_id, image_id);
+  }
 }
 
 void ThumbnailManager::UpdateThumbnailState(sl_element_id_t elementId, const QString& thumbUrl,

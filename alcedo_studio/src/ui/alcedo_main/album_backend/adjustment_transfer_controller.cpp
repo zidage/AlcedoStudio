@@ -199,9 +199,6 @@ void AdjustmentTransferController::SetInteractionPolicy(
 
 auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, const QString& strategy)
     -> QVariantMap {
-  if (const QString refusal = UserStateChangeRefusal(interaction_policy_); !refusal.isEmpty()) {
-    return ErrorResult(refusal);
-  }
   if (!copied_package_.has_value()) {
     return ErrorResult(Tr("No copied adjustments."));
   }
@@ -209,7 +206,15 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
   if (merge_strategy) {
     return ErrorResult(Tr("Pipeline merge is not supported."));
   }
+  return PastePackageToTargets(*copied_package_, targetEntries, Tr("Pasted Adjustments"));
+}
 
+auto AdjustmentTransferController::PastePackageToTargets(
+    const alcedo::AdjustmentTransferPackage& package, const QVariantList& targetEntries,
+    const QString& version_name) -> QVariantMap {
+  if (const QString refusal = UserStateChangeRefusal(interaction_policy_); !refusal.isEmpty()) {
+    return ErrorResult(refusal);
+  }
   const auto targets = import_export_->CollectExportTargets(targetEntries);
   auto       ids     = MakeTargetIds(targets);
   if (ids.empty()) {
@@ -226,8 +231,8 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
     const auto found     = std::find(ids.begin(), ids.end(), editor_id);
     if (found != ids.end()) {
       ids.erase(found);
-      const auto session_result = SessionResultMap(
-          editor_session_->PasteAdjustmentPackage(*copied_package_, Tr("Pasted Adjustments")));
+      const auto session_result =
+          SessionResultMap(editor_session_->PasteAdjustmentPackage(package, version_name));
       editor_pasted  = session_result.value("success").toBool();
       editor_message = session_result.value("message").toString();
       if (!editor_pasted && ids.empty()) {
@@ -242,8 +247,7 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
   }
 
   QString error;
-  if (!apply_coordinator_->StartApplyToTargets(*copied_package_, std::move(ids),
-                                               Tr("Pasted Adjustments"), &error)) {
+  if (!apply_coordinator_->StartApplyToTargets(package, std::move(ids), version_name, &error)) {
     return ErrorResult(error);
   }
   QVariantMap result = SuccessResult(Tr("Pasting adjustments…"));

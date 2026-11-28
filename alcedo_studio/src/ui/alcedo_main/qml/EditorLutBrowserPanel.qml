@@ -63,8 +63,7 @@ Item {
     }
     Component.onCompleted: Qt.callLater(resultCard.revealAppliedEntry)
     function focusSearch() {
-        searchInput.forceActiveFocus()
-        searchInput.selectAll()
+        searchField.focusInput()
     }
 
     // Write one filter predicate; @p value is a choice `value` of that dimension.
@@ -259,97 +258,31 @@ Item {
             Layout.fillWidth: true
             spacing: appTheme.spaceXs
 
-            // Sunken search track.
-            Rectangle {
+            BrowserSearchField {
+                id: searchField
                 Layout.fillWidth: true
                 Layout.preferredHeight: root.toolbarChrome
-                radius: appTheme.controlRadiusSmall
-                color: root.colBase
-                border.width: 1
-                border.color: searchInput.activeFocus ? appTheme.textMutedColor : root.colCardBorder
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: appTheme.spaceSm
-                    anchors.rightMargin: appTheme.spaceXs / 2
-                    spacing: appTheme.spaceXs
-
-                    ColorImage {
-                        Layout.preferredWidth: appTheme.iconOpticalSizeCompact
-                        Layout.preferredHeight: appTheme.iconOpticalSizeCompact
-                        source: "qrc:/panel_icons/search.svg"
-                        sourceSize.width: appTheme.iconSourceSizeCompact
-                        sourceSize.height: appTheme.iconSourceSizeCompact
-                        color: root.colMuted
-                    }
-
-                    Item {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-
-                        TextInput {
-                            id: searchInput
-                            objectName: "editorLutSearchInput"
-                            anchors.fill: parent
-                            verticalAlignment: TextInput.AlignVCenter
-                            color: root.colText
-                            selectionColor: appTheme.editorListSelectedFillColor
-                            selectedTextColor: appTheme.editorListSelectedInkColor
-                            font.family: appTheme.uiFontFamily
-                            font.pixelSize: appTheme.fontSizeCaption
-                            font.weight: appTheme.fontWeightRegular
-                            clip: true
-                            text: root.browser ? String(root.browser.queryText) : ""
-                            Accessible.role: Accessible.EditableText
-                            Accessible.name: qsTr("Search LUTs")
-                            onTextEdited: {
-                                if (root.browser)
-                                    root.browser.queryText = text
-                            }
-                            Keys.onReturnPressed: {
-                                if (root.browser)
-                                    root.browser.applyQueryNow()
-                                resultCard.focusResults()
-                            }
-                            Keys.onEscapePressed: {
-                                if (text.length > 0 && root.browser) {
-                                    root.browser.queryText = ""
-                                    root.browser.applyQueryNow()
-                                } else {
-                                    resultCard.focusResults()
-                                }
-                            }
-                        }
-
-                        Text {
-                            anchors.fill: searchInput
-                            verticalAlignment: Text.AlignVCenter
-                            visible: searchInput.text.length === 0 && !searchInput.activeFocus
-                            text: qsTr("Search LUTs")
-                            color: root.colMuted
-                            elide: Text.ElideRight
-                            font.family: appTheme.uiFontFamily
-                            font.pixelSize: appTheme.fontSizeCaption
-                            font.weight: appTheme.fontWeightRegular
-                        }
-                    }
-
-                    ToolbarButton {
-                        objectName: "editorLutSearchClearButton"
-                        visible: searchInput.text.length > 0
-                        Layout.preferredWidth: root.toolbarChrome - appTheme.spaceXs
-                        Layout.preferredHeight: root.toolbarChrome - appTheme.spaceXs
-                        iconSrc: "qrc:/panel_icons/close.svg"
-                        actionName: qsTr("Clear search")
-                        focusOnPointerPress: false
-                        onClicked: {
-                            if (!root.browser)
-                                return
-                            root.browser.queryText = ""
-                            root.browser.applyQueryNow()
-                        }
-                    }
+                chromeHeight: root.toolbarChrome
+                inputObjectName: "editorLutSearchInput"
+                clearButtonObjectName: "editorLutSearchClearButton"
+                placeholderText: qsTr("Search LUTs")
+                text: root.browser ? String(root.browser.queryText) : ""
+                onTextEdited: function (text) {
+                    if (root.browser)
+                        root.browser.queryText = text
                 }
+                onSubmitted: {
+                    if (root.browser)
+                        root.browser.applyQueryNow()
+                    resultCard.focusResults()
+                }
+                onCleared: {
+                    if (!root.browser)
+                        return
+                    root.browser.queryText = ""
+                    root.browser.applyQueryNow()
+                }
+                onLeaveRequested: resultCard.focusResults()
             }
 
             ToolbarButton {
@@ -479,70 +412,14 @@ Item {
                 }
             }
 
-            // Grid / list segments: the monochrome segmented family (sunken track,
-            // light well under the current segment), sized to the toolbar row.
-            Rectangle {
-                id: viewModeTrack
+            BrowserViewModeToggle {
                 objectName: "editorLutViewModeNav"
-                readonly property int inset: appTheme.spaceXs / 2
-                readonly property int segment: root.toolbarChrome - inset * 2
-                Layout.preferredWidth: segment * 2 + inset * 2
+                namePrefix: "editorLut"
+                Layout.preferredWidth: implicitWidth
                 Layout.preferredHeight: root.toolbarChrome
-                radius: appTheme.controlRadiusSmall
-                color: root.colBase
-                border.width: 1
-                border.color: root.colCardBorder
-
-                Rectangle {
-                    objectName: "editorLutViewModeThumb"
-                    x: viewModeTrack.inset + (root.viewMode === "list" ? viewModeTrack.segment : 0)
-                    y: viewModeTrack.inset
-                    width: viewModeTrack.segment
-                    height: viewModeTrack.segment
-                    radius: Math.max(0, appTheme.controlRadiusSmall - viewModeTrack.inset)
-                    color: appTheme.editorListSelectedFillColor
-                    Behavior on x {
-                        enabled: !appTheme.reduceMotion
-                        NumberAnimation {
-                            duration: appTheme.motionFoldOpenMs
-                            easing.type: appTheme.motionEasing
-                        }
-                    }
-                }
-
-                Row {
-                    x: viewModeTrack.inset
-                    y: viewModeTrack.inset
-
-                    Repeater {
-                        model: [
-                            { key: "grid", icon: "qrc:/panel_icons/view-grid.svg",
-                              label: qsTr("Grid view"), name: "editorLutGridViewButton" },
-                            { key: "list", icon: "qrc:/panel_icons/view-list.svg",
-                              label: qsTr("List view"), name: "editorLutListViewButton" }
-                        ]
-                        delegate: IconActionButton {
-                            required property var modelData
-                            objectName: modelData.name
-                            width: viewModeTrack.segment
-                            height: viewModeTrack.segment
-                            compact: true
-                            selected: root.viewMode === modelData.key
-                            showHoverFill: !selected
-                            showFocusRing: false
-                            iconSrc: modelData.icon
-                            actionName: modelData.label
-                            iconColorDefault: selected ? appTheme.editorListSelectedInkColor
-                                                       : root.colMuted
-                            iconColorMuted: root.colMuted
-                            iconColorSelected: appTheme.editorListSelectedInkColor
-                            fillIdle: "transparent"
-                            fillSelected: "transparent"
-                            fillHover: appTheme.buttonHoveredFillColor
-                            onClicked: root.viewMode = modelData.key
-                        }
-                    }
-                }
+                chromeHeight: root.toolbarChrome
+                viewMode: root.viewMode
+                onViewModeRequested: function (mode) { root.viewMode = mode }
             }
         }
 

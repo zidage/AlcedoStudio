@@ -104,6 +104,19 @@ auto ToVariantIdList(const std::vector<sl_element_id_t>& ids) -> QVariantList {
   return out;
 }
 
+/// The status text of a request that SleeveServiceImpl refused (Mounted Folder Plan, MF5).
+auto SleeveRefusalText(const SleeveError code) -> i18n::LocalizedText {
+  switch (code) {
+    case SleeveError::kMountedFolderStructureIsReadOnly:
+      return PL_TEXT("The structure of a mounted folder is read-only.");
+    case SleeveError::kMountedPhotoIsPresent:
+      return PL_TEXT("A mounted photo stays in the library while its file is on the disk.");
+    case SleeveError::kMountedPhotoIsMissing:
+      return PL_TEXT("Remove Missing Photos of the mount removes a missing photo.");
+  }
+  return PL_TEXT("The request was refused.");
+}
+
 auto DashValue() -> QString { return QString::fromUtf8("\u2014"); }
 
 auto ToDisplayText(const std::string& value) -> QString {
@@ -522,6 +535,10 @@ void ImageController::BindCollaborators(StatsEngine* stats, ImportExportHandler*
   background_tasks_ = background_tasks;
 }
 
+void ImageController::BindMountScans(MountScanCoordinator* mount_scans) {
+  mount_scans_ = mount_scans;
+}
+
 auto ImageController::SaveProjectSnapshot() -> bool {
   bool save_ok = true;
   try {
@@ -597,15 +614,34 @@ auto ImageController::DeleteResultMap(const DeleteExecutionResult& result) -> QV
       {QStringLiteral("failedCount"), result.failed_count_},
       {QStringLiteral("deletedElementIds"), ToVariantIdList(result.deleted_element_ids_)},
       {QStringLiteral("failedElementIds"), ToVariantIdList(result.failed_element_ids_)},
+      {QStringLiteral("keptMountedElementIds"), ToVariantIdList(result.kept_mounted_element_ids_)},
+      {QStringLiteral("lockedElementIds"), ToVariantIdList(result.locked_element_ids_)},
+      {QStringLiteral("refusal"), result.refusal_.has_value()
+                                      ? QString::fromLatin1(SleeveErrorName(*result.refusal_))
+                                      : QString{}},
       {QStringLiteral("message"), result.message_}};
 }
 
 auto ImageController::StartDeleteImages(const QVariantList& targetEntries) -> QVariantMap {
   QVariantMap result{{QStringLiteral("started"), false}, {QStringLiteral("message"), QString{}}};
+  auto        targets = CollectDeleteTargets(targetEntries);
+  std::vector<sl_element_id_t> locked_ids;
   if (policy_) {
-    const QVariantMap policy = policy_->EvaluateDeleteImages(targetEntries);
-    if (!policy.value(QStringLiteral("allowed")).toBool()) {
-      QString reason = policy.value(QStringLiteral("reason")).toString();
+    // A photo that a running task locks stays; the other photos are deleted (#1135).
+    std::optional<QString> lock_reason;
+    std::erase_if(targets, [this, &locked_ids, &lock_reason](const DeleteTarget& target) {
+      auto reason = policy_->DeleteImageRefusal(static_cast<quint64>(target.element_id_));
+      if (!reason.has_value()) {
+        return false;
+      }
+      locked_ids.push_back(target.element_id_);
+      if (!lock_reason.has_value()) {
+        lock_reason = std::move(reason);
+      }
+      return true;
+    });
+    if (targets.empty() && lock_reason.has_value()) {
+      QString reason = *lock_reason;
       if (reason.isEmpty()) {
         reason = PL_TEXT("These images cannot be deleted right now.").Render();
       }
@@ -618,14 +654,15 @@ auto ImageController::StartDeleteImages(const QVariantList& targetEntries) -> QV
     }
   }
   QString refusal;
-  auto    batch = PrepareDeleteBatch(CollectDeleteTargets(targetEntries), &refusal);
+  auto    batch = PrepareDeleteBatch(targets, &refusal);
   if (!batch.has_value()) {
     result[QStringLiteral("message")] = refusal;
     return result;
   }
+  batch->locked_element_ids_ = std::move(locked_ids);
 
-  const int target_count = static_cast<int>(batch->targets_.size());
-  delete_running_        = true;
+  const int target_count     = static_cast<int>(batch->targets_.size());
+  delete_running_            = true;
   if (background_tasks_ != nullptr) {
     const QString          reason = PL_TEXT("Images are being deleted.").Render();
     BackgroundTaskSnapshot snapshot;
@@ -666,34 +703,47 @@ auto ImageController::StartDeleteImages(const QVariantList& targetEntries) -> QV
                         0, false);
 
   QPointer<ImageController> self(this);
-  std::thread([self, job = MakeDeleteJob(*batch), batch = std::move(*batch)]() mutable {
-    auto outcome        = std::make_shared<DeleteBatchOutcome>(job());
-    auto finished_batch = std::make_shared<DeleteBatch>(std::move(batch));
-    QMetaObject::invokeMethod(
-        self.data(),
-        [self, outcome, finished_batch]() {
-          if (!self) {
-            return;
-          }
-          const QVariantMap result =
-              DeleteResultMap(self->FinishDeleteBatch(*finished_batch, *outcome));
-          if (self->background_tasks_ != nullptr && !self->delete_task_id_.isEmpty()) {
-            self->background_tasks_->FinishTask(self->delete_task_id_,
-                                                result.value(QStringLiteral("success")).toBool()
-                                                    ? BackgroundTaskState::Succeeded
-                                                    : BackgroundTaskState::Failed,
-                                                result.value(QStringLiteral("message")).toString());
-            self->delete_task_id_.clear();
-          }
-          self->delete_running_ = false;
-          emit self->DeleteImagesFinished(result);
-        },
-        Qt::QueuedConnection);
-  }).detach();
+  auto                      job          = MakeDeleteJob(*batch);
+  auto                      shared_batch = std::make_shared<DeleteBatch>(std::move(*batch));
+  // #1016: no scan batch writes the project while the delete runs. The worker starts when the
+  // running scan has completed its batch.
+  delete_scan_hold_ = mount_scans_ != nullptr ? mount_scans_->Hold() : MountScanHold{};
+  delete_scan_hold_.WhenReady([self, job = std::move(job), shared_batch]() {
+    std::thread([self, job, shared_batch]() {
+      auto outcome = std::make_shared<DeleteBatchOutcome>(job());
+      FinishDeleteOnUiThread(self, shared_batch, outcome);
+    }).detach();
+  });
 
   result[QStringLiteral("started")] = true;
   result[QStringLiteral("taskId")]  = delete_task_id_;
   return result;
+}
+
+void ImageController::FinishDeleteOnUiThread(const QPointer<ImageController>&           self,
+                                             const std::shared_ptr<DeleteBatch>&        batch,
+                                             const std::shared_ptr<DeleteBatchOutcome>& outcome) {
+  QMetaObject::invokeMethod(
+      self.data(),
+      [self, outcome, batch]() {
+        if (!self) {
+          return;
+        }
+        const QVariantMap result = DeleteResultMap(self->FinishDeleteBatch(*batch, *outcome));
+        // The delete is stored and saved; the held scans start again.
+        self->delete_scan_hold_.Release();
+        if (self->background_tasks_ != nullptr && !self->delete_task_id_.isEmpty()) {
+          self->background_tasks_->FinishTask(self->delete_task_id_,
+                                              result.value(QStringLiteral("success")).toBool()
+                                                  ? BackgroundTaskState::Succeeded
+                                                  : BackgroundTaskState::Failed,
+                                              result.value(QStringLiteral("message")).toString());
+          self->delete_task_id_.clear();
+        }
+        self->delete_running_ = false;
+        emit self->DeleteImagesFinished(result);
+      },
+      Qt::QueuedConnection);
 }
 
 auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint targetFolderId)
@@ -784,7 +834,9 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
   const int added_count  = static_cast<int>(added_ids.size());
   const int failed_count = static_cast<int>(link_result.failed_element_ids_.size());
   auto      msg          = i18n::LocalizedText{};
-  if (added_count == 0) {
+  if (added_count == 0 && link_result.refusal_.has_value()) {
+    msg = SleeveRefusalText(*link_result.refusal_);
+  } else if (added_count == 0) {
     msg = PL_TEXT("No images were added.");
   } else if (failed_count == 0) {
     msg = PL_TEXT("Added %1 image(s) to album.", added_count);
@@ -806,6 +858,9 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
   result["failedCount"]      = failed_count;
   result["addedElementIds"]  = ToVariantIdList(added_ids);
   result["failedElementIds"] = ToVariantIdList(link_result.failed_element_ids_);
+  result["refusal"]          = link_result.refusal_.has_value()
+                                   ? QString::fromLatin1(SleeveErrorName(*link_result.refusal_))
+                                   : QString{};
   result["message"]          = msg.Render();
   return result;
 }
@@ -891,6 +946,8 @@ auto ImageController::MakeDeleteJob(DeleteBatch batch) const
     try {
       const auto delete_result =
           browse->DeleteFilesInFolderByElementIds(batch.folder_id_, delete_element_ids);
+      outcome.refusal_                  = delete_result.refusal_;
+      outcome.kept_mounted_element_ids_ = delete_result.kept_mounted_element_ids_;
       outcome.deleted_element_ids_.reserve(delete_result.deleted_files_.size());
       for (const auto& file : delete_result.deleted_files_) {
         outcome.deleted_element_ids_.push_back(file.element_id_);
@@ -954,9 +1011,11 @@ auto ImageController::FinishDeleteBatch(const DeleteBatch& batch, const DeleteBa
     -> DeleteExecutionResult {
   const std::unordered_set<sl_element_id_t> deleted_id_set(outcome.deleted_element_ids_.begin(),
                                                            outcome.deleted_element_ids_.end());
+  const std::unordered_set<sl_element_id_t> kept_id_set(outcome.kept_mounted_element_ids_.begin(),
+                                                        outcome.kept_mounted_element_ids_.end());
   std::vector<sl_element_id_t>              failed_ids;
   for (const auto& target : batch.targets_) {
-    if (target.element_id_ == 0) {
+    if (target.element_id_ == 0 || kept_id_set.contains(target.element_id_)) {
       continue;
     }
     if (!deleted_id_set.contains(target.element_id_)) {
@@ -980,9 +1039,14 @@ auto ImageController::FinishDeleteBatch(const DeleteBatch& batch, const DeleteBa
   const bool delete_from_library = batch.delete_from_library_;
   const int  deleted_count       = static_cast<int>(outcome.deleted_element_ids_.size());
   const int  failed_count        = static_cast<int>(failed_ids.size());
+  const int  kept_count          = static_cast<int>(kept_id_set.size());
 
   auto       msg                 = i18n::LocalizedText{};
-  if (deleted_count == 0) {
+  if (deleted_count == 0 && outcome.refusal_.has_value()) {
+    msg = SleeveRefusalText(*outcome.refusal_);
+  } else if (deleted_count == 0 && kept_count > 0) {
+    msg = SleeveRefusalText(SleeveError::kMountedPhotoIsPresent);
+  } else if (deleted_count == 0) {
     msg = delete_from_library ? PL_TEXT("No images were deleted.")
                               : PL_TEXT("No images were removed from this album.");
   } else if (failed_count == 0) {
@@ -992,6 +1056,14 @@ auto ImageController::FinishDeleteBatch(const DeleteBatch& batch, const DeleteBa
     msg = delete_from_library
               ? PL_TEXT("Deleted %1 image(s); %2 failed.", deleted_count, failed_count)
               : PL_TEXT("Removed %1 image(s); %2 failed.", deleted_count, failed_count);
+  }
+  // The photos that the delete skipped (#1135).
+  if (deleted_count > 0 && kept_count > 0) {
+    msg = PL_TEXT("%1 %2 mounted photo(s) stay in the library.", msg.Render(), kept_count);
+  }
+  if (deleted_count > 0 && !batch.locked_element_ids_.empty()) {
+    msg = PL_TEXT("%1 %2 image(s) were skipped while a task changes them.", msg.Render(),
+                  static_cast<int>(batch.locked_element_ids_.size()));
   }
   if (!outcome.save_ok_) {
     msg = PL_TEXT("%1 Project state save failed.", msg.Render());
@@ -1004,17 +1076,29 @@ auto ImageController::FinishDeleteBatch(const DeleteBatch& batch, const DeleteBa
   }
 
   DeleteExecutionResult result;
-  result.success_             = deleted_count > 0;
-  result.deleted_count_       = deleted_count;
-  result.failed_count_        = failed_count;
-  result.deleted_element_ids_ = outcome.deleted_element_ids_;
-  result.failed_element_ids_  = std::move(failed_ids);
-  result.message_             = msg.Render();
+  result.success_                  = deleted_count > 0;
+  result.deleted_count_            = deleted_count;
+  result.failed_count_             = failed_count;
+  result.deleted_element_ids_      = outcome.deleted_element_ids_;
+  result.failed_element_ids_       = std::move(failed_ids);
+  result.kept_mounted_element_ids_ = outcome.kept_mounted_element_ids_;
+  result.locked_element_ids_       = batch.locked_element_ids_;
+  result.refusal_                  = outcome.refusal_;
+  result.message_                  = msg.Render();
   return result;
 }
 
 auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
     -> DeleteExecutionResult {
+  // #1016: this delete runs on the calling thread, so it cannot wait for a scan worker. No scan
+  // starts during the call: the scans start on this thread.
+  if (mount_scans_ != nullptr && mount_scans_->HasWorker()) {
+    DeleteExecutionResult result;
+    result.message_ = PL_TEXT("A mounted folder is being scanned. Please try again.").Render();
+    status_->SetTaskState(PL_TEXT("A mounted folder is being scanned. Please try again."), 0,
+                          false);
+    return result;
+  }
   QString refusal;
   auto    batch = PrepareDeleteBatch(targets, &refusal);
   if (!batch.has_value()) {

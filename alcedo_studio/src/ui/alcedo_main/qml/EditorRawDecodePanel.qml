@@ -15,6 +15,10 @@ Item {
 
     property var theme: null
     property var editorSession: null
+    // EditorAiDenoiseControl (AI Denoise plan, DN7); null hides the switch.
+    property var aiDenoise: null
+    // The application host: opens the AI Models page of the settings.
+    property var host: null
     property bool controlsEnabled: true
     property bool restoring: false
     // Develop `input` object of a raster document, from the "input_profile"
@@ -27,15 +31,38 @@ Item {
     // pair; cleared by manual picks. Derived on snapshot load: detection
     // available AND (empty maker/model OR pair equals the detected entry).
     property bool lensAutoDetect: true
-    // Image EXIF lens identity published by the session (empty when missing).
-    readonly property string exifLensMake: editorSession
-            && editorSession.exifLensMake !== undefined
-            ? String(editorSession.exifLensMake) : ""
-    readonly property string exifLensModel: editorSession
-            && editorSession.exifLensModel !== undefined
-            ? String(editorSession.exifLensModel) : ""
+    // Lensfun profile that the Auto setting uses for the image, published by
+    // the session (empty when no profile matches).
+    readonly property string autoLensMake: editorSession
+            && editorSession.autoLensMake !== undefined
+            ? String(editorSession.autoLensMake) : ""
+    readonly property string autoLensModel: editorSession
+            && editorSession.autoLensModel !== undefined
+            ? String(editorSession.autoLensModel) : ""
 
     readonly property var rawDefaults: parameterCatalog.uiDefault("raw_decode")
+    // The AI Denoise switch of the open photo, read from the snapshot (load-only).
+    property bool aiDenoiseOn: false
+    readonly property bool aiDenoiseAvailable: root.aiDenoise !== null && root.aiDenoise.available
+    readonly property string aiDenoiseSensor: root.aiDenoise ? String(root.aiDenoise.sensorLayout) : ""
+    readonly property bool aiDenoiseSupported: root.aiDenoiseSensor === ""
+                                               || root.aiDenoiseSensor === "bayer"
+    // The model also does the demosaic: one locked segment replaces the method choices.
+    readonly property var aiDenoiseMethodEntries: [{ value: "ai_denoise", label: qsTr("AI Denoise") }]
+
+    function setAiDenoise(on) {
+        if (!root.aiDenoise)
+            return
+        if (!on) {
+            root.aiDenoise.turnOff()
+            return
+        }
+        const result = String(root.aiDenoise.turnOn())
+        if (result === "model_not_installed" && root.host && root.host.openAiModelSettings)
+            root.host.openAiModelSettings()
+        if (result !== "on")
+            aiDenoiseSwitch.checked = false
+    }
     readonly property var lensDefaults: parameterCatalog.uiDefault("lens_calib")
     // Fixed method list; no per-image capability map.
     readonly property var rawMethodEntries: root.catalogEntries("raw_decode", "method")
@@ -320,6 +347,12 @@ Item {
         const rawEntry = root.catalogUiValue("raw_decode",
                                              snapshot ? snapshot["raw_decode"] : undefined)
         root.setEnumValue(rawMethodModel, rawEntry.method, rawMethodModel.defaultIndex)
+        // The catalog value has no AI Denoise key; it is read from the projection.
+        const rawWrapper = snapshot ? snapshot["raw_decode"] : undefined
+        const rawObject = rawWrapper && rawWrapper["raw"] !== undefined ? rawWrapper["raw"] : rawWrapper
+        root.aiDenoiseOn = Boolean(rawObject && rawObject.ai_denoise)
+        // A toggle of the switch ends its binding; the snapshot is the switch state.
+        aiDenoiseSwitch.checked = root.aiDenoiseOn
         rawHighlightsModel.value = rawEntry.highlights_reconstruct !== undefined
                 ? Boolean(rawEntry.highlights_reconstruct) : rawHighlightsModel.defaultValue
         cameraProfileSection.loadFromSnapshot(snapshot)
@@ -517,8 +550,8 @@ Item {
                         enabled: root.controlsEnabled
                         controlsEnabled: root.controlsEnabled
                         catalog: lensCatalog
-                        exifLensMake: root.exifLensMake
-                        exifLensModel: root.exifLensModel
+                        autoLensMake: root.autoLensMake
+                        autoLensModel: root.autoLensModel
                         selectedBrand: root.selectedLensBrandValue
                         selectedValue: root.selectedLensModelValue
                         autoEngaged: root.lensAutoDetect
@@ -577,6 +610,51 @@ Item {
                     anchors.margins: appTheme.spaceXs
                     spacing: appTheme.spaceSm
 
+                    Item {
+                        id: aiDenoiseRow
+                        objectName: "rawAiDenoiseRow"
+                        Layout.fillWidth: true
+                        visible: root.aiDenoiseAvailable
+                        implicitHeight: aiDenoiseRowLayout.implicitHeight
+
+                        HoverHandler {
+                            id: aiDenoiseHover
+                        }
+                        ToolTip.visible: aiDenoiseHover.hovered && !root.aiDenoiseSupported
+                        ToolTip.delay: 300
+                        ToolTip.text: root.aiDenoiseSensor === "xtrans"
+                                      ? qsTr("Not supported for X-Trans sensors")
+                                      : qsTr("Not supported for this sensor")
+
+                        RowLayout {
+                            id: aiDenoiseRowLayout
+                            anchors.fill: parent
+                            spacing: appTheme.spaceSm
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: qsTr("AI Denoise")
+                                color: root.colText
+                                opacity: aiDenoiseSwitch.enabled ? 1.0 : 0.45
+                                font.pixelSize: appTheme.fontSizeBody
+                            }
+
+                            Switch {
+                                id: aiDenoiseSwitch
+                                objectName: "rawAiDenoiseSwitch"
+                                // Off for a photo that is not Bayer unless the switch is already
+                                // on (a paste can set it): then it can still be turned off.
+                                enabled: root.controlsEnabled
+                                         && (root.aiDenoiseSupported || root.aiDenoiseOn)
+                                checked: root.aiDenoiseOn
+                                activeFocusOnTab: true
+                                Accessible.role: Accessible.CheckBox
+                                Accessible.name: qsTr("AI Denoise")
+                                onToggled: root.setAiDenoise(aiDenoiseSwitch.checked)
+                            }
+                        }
+                    }
+
                     Label {
                         Layout.fillWidth: true
                         text: qsTr("Method")
@@ -586,8 +664,23 @@ Item {
                     }
 
                     SegmentedCardSwitcher {
+                        objectName: "rawAiDenoiseMethodControl"
+                        Layout.fillWidth: true
+                        visible: root.aiDenoiseOn
+                        entries: root.aiDenoiseMethodEntries
+                        currentIndex: 0
+                        currentValue: "ai_denoise"
+                        enabled: false
+                        trackColor: root.colBase
+                        trackBorderColor: root.colCardBorder
+                        textColor: root.colText
+                        hoverColor: root.colHover
+                    }
+
+                    SegmentedCardSwitcher {
                         objectName: "rawDemosaicMethodControl"
                         Layout.fillWidth: true
+                        visible: !root.aiDenoiseOn
                         entries: rawMethodModel.entries
                         currentIndex: root.selectedMethodIndex
                         currentValue: root.selectedMethodValue

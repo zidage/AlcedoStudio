@@ -225,6 +225,12 @@ ProjectModule::ProjectModule(QObject* parent) : QObject(parent), handler_(*this)
   task_status_text_ = PL_TEXT("Open or create a project to begin.");
 }
 
+ProjectModule::~ProjectModule() {
+  if (opencl_preparation_thread_.joinable()) {
+    opencl_preparation_thread_.join();
+  }
+}
+
 void ProjectModule::SetLifecycleHooks(ProjectLifecycleHooks hooks) {
   lifecycle_hooks_ = std::move(hooks);
 }
@@ -303,6 +309,10 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
   accelerator_prepare_started_ = true;
 
 #ifdef HAVE_OPENCL
+  // A failed preparation can be retried. Its completed worker remains joinable.
+  if (opencl_preparation_thread_.joinable()) {
+    opencl_preparation_thread_.join();
+  }
   // A driver compiler crash ends the process inside clBuildProgram, so the program name has to
   // be on disk before the call. Flush after each line instead of waiting for the log buffer.
   OpenClProgramLibrary::Instance().SetBuildTraceSink([](std::string_view message) {
@@ -313,7 +323,7 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
   SetAcceleratorPreparationState(true,
                                  PL_TEXT("Compiling OpenCL kernels. This happens every launch."));
   QPointer<ProjectModule> self(this);
-  std::thread([self]() {
+  opencl_preparation_thread_ = std::thread([self]() {
     QString error_text;
     try {
       WarmUpOpenClRuntime();
@@ -345,7 +355,7 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
               PL_TEXT("OpenCL preparation failed: %1", error_text));
         },
         Qt::QueuedConnection);
-  }).detach();
+  });
 #else
   SetAcceleratorPreparationState(false, {});
 #endif
@@ -658,12 +668,17 @@ bool ProjectModule::CloseProject(bool persist) {
   // The editor has no image, so this only forgets the last edited image of this project and
   // shows the Library.
   FinalizeEditorSession();
+  // The save and the close need the mount service and the import service without a scan.
+  // ApplicationCloseCoordinator waits for the scan worker before this call, so the join of
+  // StopMountScans has no worker to wait for in the application.
+  StopMountScans();
   if (persist) {
     QString error;
     if (!handler_.PersistProjectForClose(&error)) {
       SetServiceMessageForCurrentProject(error.isEmpty() ? PL_TEXT("Project save failed.")
                                                          : PL_TEXT("%1", error));
       SetTaskState(PL_TEXT("Project save failed."), 0, false);
+      ResumeMountScans();
       return false;
     }
   }
@@ -885,6 +900,23 @@ auto ProjectModule::ProjectSwitchBlockReason() const -> QString {
 void ProjectModule::FinalizeEditorSession() {
   if (lifecycle_hooks_.finalize_editor_session) {
     lifecycle_hooks_.finalize_editor_session();
+  }
+}
+
+void ProjectModule::StopMountScans() {
+  if (lifecycle_hooks_.stop_mount_scans) {
+    lifecycle_hooks_.stop_mount_scans();
+  }
+}
+
+auto ProjectModule::BeginStopMountScans() -> std::shared_future<void> {
+  return lifecycle_hooks_.begin_stop_mount_scans ? lifecycle_hooks_.begin_stop_mount_scans()
+                                                 : std::shared_future<void>{};
+}
+
+void ProjectModule::ResumeMountScans() {
+  if (lifecycle_hooks_.resume_mount_scans) {
+    lifecycle_hooks_.resume_mount_scans();
   }
 }
 

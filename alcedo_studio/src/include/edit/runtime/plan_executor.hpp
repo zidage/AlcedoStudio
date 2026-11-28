@@ -14,6 +14,7 @@
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/curve_input_histogram.hpp"
+#include "edit/runtime/develop_ai_denoise.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/execution_plan.hpp"
@@ -23,6 +24,7 @@
 #include "edit/runtime/mask_coverage_probe_record.hpp"
 #include "edit/runtime/pass_encoder.hpp"
 #include "edit/runtime/pass_kind.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -60,6 +62,10 @@ class PlanExecutor {
    * @param histogram Optional curve input histogram (issue #888). The grade pass of the Grade
    *        with `histogram->grade_id` also records the histogram of its curve input and sets
    *        `recorded`. It changes no result key and no photo pixel.
+   * @param progress Optional receiver of the Develop groups (AI Denoise plan, DN14): each group
+   *        (Sensor, Lens and geometry, Color, each Color Grade, Display) is reported when it
+   *        starts, also when its result is valid and it records nothing. The Sensor group ends
+   *        with a wait for the device; the later groups wait only with ExactRelease.
    * @return Display GraphValueId of the compiled plan.
    * @throws std::exception from encode, upload, or submit after CancelRender.
    */
@@ -70,8 +76,17 @@ class PlanExecutor {
       TransientAllocationPolicy         transient_policy = TransientAllocationPolicy::SessionPacked,
       ResultPersistenceScope            persistence = ResultPersistenceScope::AllCurrentResults,
       MaskCoverageProbeRecord<Backend>* probe       = nullptr,
-      CurveInputHistogramRecord*        histogram   = nullptr) -> GraphValueId {
+      CurveInputHistogramRecord*        histogram   = nullptr,
+      RenderProgressReporter*           progress    = nullptr) -> GraphValueId {
     try {
+      const int  grade_count = static_cast<int>(plan.grade_nodes.size());
+      const int  group_count = DevelopGroupCount(grade_count);
+      const auto report_group = [&](DevelopGroup group, int index, int grade_index = 0) {
+        if (progress != nullptr) {
+          progress->DevelopGroupStarted(group, index, group_count, grade_index,
+                                        group == DevelopGroup::ColorGrade ? grade_count : 0);
+        }
+      };
       if (probe != nullptr) {
         probe->target = nullptr;
       }
@@ -106,12 +121,18 @@ class PlanExecutor {
       const auto represent_before = workspace.Images().RepresentationMissCount();
       const auto publishes_before = workspace.Images().PersistentPublishCount();
 
+      report_group(DevelopGroup::Sensor, 0);
       {
         const auto develop_kind = plan.Contains(GpuPassKind::UploadRgb)
                                       ? diag::PreviewPassKind::UploadRgb
                                       : diag::PreviewPassKind::UploadRaw;
         diag::PreviewPassInterval develop_pass(plan.sensor_linear_output.producer.Value(),
                                                develop_kind);
+        // A render that needs the AI Denoise model and has no denoised input reports the error;
+        // it never renders the photo without the noise reduction (plan section 1.4).
+        if (const auto* develop_node = document.Develop(); develop_node != nullptr) {
+          RequireDevelopInputForAiDenoise(develop_node->Params().Params(), plan.source);
+        }
         if (BindOrMiss(workspace, invalidation, plan.sensor_linear_output, sensor_extent, completed,
                        stats)) {
           develop_pass.SetState(diag::PreviewExecutionState::Skipped);
@@ -162,6 +183,7 @@ class PlanExecutor {
       workspace.TransientBuffers().Reset();
       workspace.TransientBuffers().ReleaseDeviceMemory();
 
+      report_group(DevelopGroup::LensAndGeometry, 1);
       {
         diag::PreviewPassInterval geometry_pass(plan.geometry_output.producer.Value(),
                                                 diag::PreviewPassKind::GeometryResample);
@@ -182,6 +204,7 @@ class PlanExecutor {
         workspace.ReleaseConsumedImage(plan.sensor_linear_output);
       }
 
+      report_group(DevelopGroup::Color, 2);
       {
         // CameraToAp1 for RAW input, DisplayToAp1 for raster input; both write develop_output.
         const bool                raster = plan.Contains(GpuPassKind::DisplayToAp1);
@@ -219,7 +242,10 @@ class PlanExecutor {
       if (plan.grade_nodes.empty()) {
         ++stats.primary_grade_skip;
       }
+      int grade_index = 0;
       for (const auto& compiled_grade : plan.grade_nodes) {
+        report_group(DevelopGroup::ColorGrade, 3 + grade_index, grade_index);
+        ++grade_index;
         if (compiled_grade.mask_stack.has_value()) {
           for (const auto& source : compiled_grade.mask_stack->sources) {
             if (!MaskSourceIsEnabled(document, compiled_grade.node_id, source.mask_id)) {
@@ -301,6 +327,7 @@ class PlanExecutor {
         }
       }
 
+      report_group(DevelopGroup::Display, group_count - 1);
       {
         // The display result covers both passes: a valid display skips the scene decode too.
         const bool display_valid = BindOrMiss(workspace, invalidation, plan.display_output,

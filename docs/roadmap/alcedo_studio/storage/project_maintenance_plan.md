@@ -8,10 +8,7 @@ Status: PM1-PM5 are implemented and qualified on Windows. Platform and native re
 
 Source audit: `7bcac45d`.
 
-Parent: [Import and Project Maintenance coordination plan](duplicate_image_cleanup_and_import_plan.md).
-
-Related feature: [Import duplicate skipping](import_duplicate_skipping_plan.md).
-Project Maintenance can ship independently of that feature.
+Related designs: [Mounted Folder Plan](mounted_folder_plan.md) and [Import duplicate skipping](https://github.com/zidage/AlcedoStudio/pull/798).
 
 ## 1. Approved product decisions
 
@@ -1080,5 +1077,5 @@ New evidence passed on Windows:
 
 All 53 selected maintenance cases passed: service 13, storage 12, package 11, model 5, controller 12.
 The Release app rebuilt successfully. Shared import/rendering checks and exact commands are in
-[current qualification](import_duplicate_skipping_plan.md#12-current-qualification-2026-11-10).
+[ordinary import verification in PR #798](https://github.com/zidage/AlcedoStudio/pull/798).
 The full suite and macOS execution were not run. No PR or commit was created for this revision.

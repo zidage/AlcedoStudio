@@ -66,6 +66,11 @@ auto ResolveImageExportMetadata(const std::shared_ptr<Image>& image)
                                      : std::nullopt;
 }
 
+auto PathToUtf8(const std::filesystem::path& path) -> std::string {
+  const std::u8string text = path.u8string();
+  return {reinterpret_cast<const char*>(text.data()), text.size()};
+}
+
 auto TemporaryExportPath(const std::filesystem::path& final_path, image_id_t image_id)
     -> std::filesystem::path {
   static std::atomic_uint64_t next_temporary_id{0};
@@ -166,9 +171,28 @@ void ExportService::EnqueueExportTask(const ExportTask& task) {
   export_queue_.push_back(std::move(queued));
 }
 
+void ExportService::EnqueueMissingPhotoTask(sl_element_id_t sleeve_id, image_id_t image_id) {
+  QueuedExport queued;
+  queued.task_.sleeve_id_ = sleeve_id;
+  queued.task_.image_id_  = image_id;
+  queued.source_missing_  = true;
+  std::lock_guard<std::mutex> lock(queue_mutex_);
+  export_queue_.push_back(std::move(queued));
+}
+
 auto ExportService::RunExportRenderTask(const QueuedExport& queued) -> ExportResult {
   const auto&  task = queued.task_;
   ExportResult result;
+  const auto   missing_photo = [&result, &task]() {
+    result.source_missing_ = true;
+    result.failed_stage_   = "load-source";
+    result.message_        = "ExportService: the photo " + std::to_string(task.sleeve_id_) +
+                      " is no longer in the project";
+    return result;
+  };
+  if (queued.source_missing_) {
+    return missing_photo();
+  }
   if (!task.recipe_.has_value()) {
     result.message_      = "ExportService: export recipe is required";
     result.failed_stage_ = "prepare-recipe";
@@ -208,15 +232,29 @@ auto ExportService::RunExportRenderTask(const QueuedExport& queued) -> ExportRes
     temporary_path = TemporaryExportPath(final_path, task.image_id_);
     std::filesystem::remove(temporary_path, cleanup_error);
 
-    stage           = "load-source";
-    // Get the image from image pool service
+    stage = "load-source";
+    // The photo can leave the project between the enqueue and the render.
+    if (!image_pool_service_->Contains(task.image_id_)) {
+      return missing_photo();
+    }
     auto source_img = image_pool_service_->Read<std::shared_ptr<Image>>(
         task.image_id_, [](const std::shared_ptr<Image>& img) { return img; });
     if (!source_img) {
       throw std::runtime_error("[ERROR] ExportService: Failed to load image for id " +
                                std::to_string(task.image_id_));
     }
-    auto       img_src_path    = source_img->image_path_;
+    auto            img_src_path = source_img->image_path_;
+    // Only a source file that does not exist is missing; any other status error is left to the
+    // decoder, which reports it as an ordinary failure.
+    std::error_code source_error;
+    if (std::filesystem::status(img_src_path, source_error).type() ==
+        std::filesystem::file_type::not_found) {
+      result.source_missing_ = true;
+      result.failed_stage_   = std::move(stage);
+      result.message_ =
+          "ExportService: the source file " + PathToUtf8(img_src_path) + " does not exist";
+      return result;
+    }
     const auto export_metadata = ResolveImageExportMetadata(source_img);
 
     stage                      = "render";
@@ -373,7 +411,9 @@ void ExportService::ExportAll(
         result.message_ = "Unknown export error";
       }
 
-      const bool export_ok = result.success_;
+      const bool export_ok      = result.success_;
+      const bool source_missing = result.source_missing_;
+      std::string failure_message = export_ok ? std::string{} : result.message_;
 
       // Store result
       {
@@ -392,14 +432,16 @@ void ExportService::ExportAll(
       if (progress_callback) {
         try {
           progress_callback(ExportProgress{
-              .total_         = queue_size,
-              .completed_     = finished,
-              .succeeded_     = succeeded->load(std::memory_order_acquire),
-              .failed_        = failed->load(std::memory_order_acquire),
-              .sleeve_id_     = task.sleeve_id_,
-              .image_id_      = task.image_id_,
-              .task_finished_ = true,
-              .task_success_  = export_ok,
+              .total_               = queue_size,
+              .completed_           = finished,
+              .succeeded_           = succeeded->load(std::memory_order_acquire),
+              .failed_              = failed->load(std::memory_order_acquire),
+              .sleeve_id_           = task.sleeve_id_,
+              .image_id_            = task.image_id_,
+              .task_finished_       = true,
+              .task_success_        = export_ok,
+              .task_source_missing_ = source_missing,
+              .task_message_        = std::move(failure_message),
           });
         } catch (...) {
         }

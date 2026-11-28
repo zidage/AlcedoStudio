@@ -74,7 +74,10 @@ AppContextMenu {
         enabled: root.addToEnabled
 
         property string filterText: ""
-        readonly property var orderedRows: CollectionTree.orderRows(root.collectionRows, false)
+        // Mounted folders take no link (issue #1008): the list holds the ordinary collections.
+        readonly property var orderedRows: CollectionTree.orderRows(
+                                               CollectionTree.ordinaryRows(root.collectionRows),
+                                               false)
         readonly property var shownRows: CollectionTree.filterRows(orderedRows, filterText)
         // The root row is not a target; it only anchors the tree.
         readonly property int collectionCount: Math.max(0, orderedRows.length - 1)
@@ -186,7 +189,7 @@ AppContextMenu {
                             anchors.rightMargin: appTheme.spaceSm
                             verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideRight
-                            text: collectionRow.isRoot ? qsTr("全部图片")
+                            text: collectionRow.isRoot ? qsTr("Library")
                                                        : String(collectionRow.modelData.name)
                             color: collectionRow.targetEnabled ? appTheme.textColor
                                                                : appTheme.textMutedColor

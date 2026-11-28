@@ -17,6 +17,8 @@ use their own top-level category.
 - [CUDA DemosaicNet Performance Follow-up](alcedo_studio/raw-processing/demosaicnet/cuda_demosaicnet_performance_next.md)
 - [OpenCL NN Forward DemosaicNet Migration and Performance Recovery](alcedo_studio/raw-processing/demosaicnet/opencl_nn_forward_demosaicnet_plan.md)
 - [Metal MPSGraph DemosaicNet Plan](alcedo_studio/raw-processing/demosaicnet/metal_nn_forward_demosaicnet_plan.md)
+- [AI Denoise Integration Master Plan](alcedo_studio/raw-processing/ai_denoise/ai_denoise_integration_plan.md):
+  the UtNet2 Bayer model of alcedo-denoise-lab in the Develop stage, with a stored result file
 - [DCP Camera Profile Plan](alcedo_studio/raw-processing/dcp_camera_profile_plan.md): external DCP
   profiles from a user folder; shipped behavior in [Embedded DNG color profiles](../dng_color_profiles.md)
 - [DCP Profile Tone Curve Study](alcedo_studio/raw-processing/dcp_profile_tone_curve_study.md)
@@ -25,9 +27,11 @@ use their own top-level category.
 
 - [duckorm Query Expression and Album Filter SQL Plan](alcedo_studio/storage/duckorm_query_expression_and_album_filter_sql_plan.md)
 - [Library Search Performance, Recall, and Project Size Plan](alcedo_studio/storage/library_search_and_project_size_plan.md)
-- [Import Duplicate Skipping Plan](alcedo_studio/storage/import_duplicate_skipping_plan.md)
+- [Mounted Folder Plan](alcedo_studio/storage/mounted_folder_plan.md): a collection that mirrors
+  a disk directory through a one-way scan; tracking issue #991
+- [Sleeve Node Cache Plan](alcedo_studio/storage/sleeve_node_cache_plan.md): resident folder
+  tree, file entries on demand, and a dirty list for the sleeve file system; tracking issue #1148
 - [Project Maintenance Plan](alcedo_studio/storage/project_maintenance_plan.md)
-- [Import and Maintenance Coordination and Photos Cleanup Record](alcedo_studio/storage/duplicate_image_cleanup_and_import_plan.md)
 
 ## Alcedo Studio — Image editing pipeline
 

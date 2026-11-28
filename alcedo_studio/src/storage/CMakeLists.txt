@@ -8,7 +8,7 @@ def_library(DuckORM
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_expr.cpp"
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_select.cpp"
     PUBLIC_DEPS DuckDB
-    PRIVATE_DEPS AppDiagnostics
+    PRIVATE_DEPS AppDiagnostics SourceFileUtils
 )
 
 # Query definitions: the SQL of the stats dimensions and of the library search, and the
@@ -37,12 +37,15 @@ set(MAPPER_SRCS
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/edit_history/version_ref_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/edit_history/image_edit_state_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/pipeline/pipeline_mapper.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/mapper/mount/mount_root_mapper.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/mapper/image/source_file_mapper.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/mapper/utc_timestamp_text.cpp"
 )
 
 def_library(SleeveMapper
     SOURCES ${MAPPER_SRCS}
     PUBLIC_DEPS DuckDB DuckORM Image SleeveElement ImagePool PipelineHistory EditPipeline
-        PipelineScheduler StorageQuery StrConv
+        PipelineScheduler StorageQuery StrConv xxHash
 )
 
 # Stores + Storage facade (no storage/service rank)
@@ -52,7 +55,6 @@ set(STORAGE_SRCS
     "${ALCEDO_SRC_ROOT}/storage/store/database.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/duckdb_extension.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/image/image_store.cpp"
-    "${ALCEDO_SRC_ROOT}/storage/store/image/source_file_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/semantic/semantic_model_registry.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/semantic/semantic_embedding_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/semantic/semantic_label_store.cpp"
@@ -62,11 +64,14 @@ set(STORAGE_SRCS
     "${ALCEDO_SRC_ROOT}/storage/store/semantic/semantic_tables.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/ai/ai_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/element_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/sleeve/folder_entry_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/project_maintenance_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/album_query.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/album_edit_state_sql.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/edit_history/commit_graph_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/mask_asset/mask_asset_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/image/source_file_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/mount/mount_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/storage_session.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/storage_maintenance.cpp"
 )
@@ -74,7 +79,7 @@ set(STORAGE_SRCS
 def_library(Storage
     SOURCES ${STORAGE_SRCS}
     PUBLIC_DEPS Ai DuckDB DuckORM SleeveMapper StorageQuery StrConv PipelineScheduler
-    PRIVATE_DEPS AppDiagnostics SourceImageFile
+    PRIVATE_DEPS AppDiagnostics
 )
 # MaskAssetStore compresses R8 pixels with zlib. The bundled gRPC static zlib is used when it
 # exists, so that a target that links both has one zlib (as for Image).

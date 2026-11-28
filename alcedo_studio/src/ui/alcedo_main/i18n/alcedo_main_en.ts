@@ -1332,11 +1332,11 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed</source>
+        <source>Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 failed</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Import canceled: %1 imported, %2 not read, %3 not selected, %4 unsupported, %5 failed</source>
+        <source>Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 unsupported, %6 failed</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -1384,24 +1384,36 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished">The agent gave control back to you.</translation>
     </message>
     <message>
-        <source>Importing: %1 imported, %2 duplicates skipped, %3 failed</source>
-        <translation>Importing: %1 imported, %2 duplicates skipped, %3 failed</translation>
+        <source>AI Denoise is already being changed.</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 failed</source>
-        <translation>Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 failed</translation>
+        <source>AI Denoise is being changed.</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 unsupported, %6 failed</source>
-        <translation>Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 unsupported, %6 failed</translation>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Converted Nikon HE files were reimported: %1 imported, %2 duplicates skipped, %3 failed.</source>
-        <translation>Converted Nikon HE files were reimported: %1 imported, %2 duplicates skipped, %3 failed.</translation>
+        <source>Turn Off AI Denoise</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>%1 source file(s) changed size. Existing edits and ratings now apply to the current files.</source>
-        <translation>%1 source file(s) changed size. Existing edits and ratings now apply to the current files.</translation>
+        <source>No valid image was selected.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Pipeline service is unavailable.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The editor did not accept the change.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise could not be turned off: %1</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -1562,6 +1574,10 @@ Alcedo will use %1 instead.</translation>
         <source>Agent</source>
         <translation type="unfinished">Agent</translation>
     </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>BackgroundTasksDialog</name>
@@ -1690,6 +1706,10 @@ Alcedo will use %1 instead.</translation>
         <source>%1 working</source>
         <translation>%1 working</translation>
     </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>CacheSettingsPanel</name>
@@ -1817,6 +1837,14 @@ Alcedo will use %1 instead.</translation>
 <context>
     <name>CollectionsPanel</name>
     <message>
+        <source>Mount Folder Here...</source>
+        <translation>Mount Folder Here...</translation>
+    </message>
+    <message>
+        <source>Mount Folder</source>
+        <translation>Mount Folder</translation>
+    </message>
+    <message>
         <location filename="../qml/CollectionsPanel.qml" line="+22"/>
         <source>Search</source>
         <translation>Search</translation>
@@ -1893,7 +1921,7 @@ Alcedo will use %1 instead.</translation>
     </message>
     <message>
         <location line="+22"/>
-        <source>Import From Folder</source>
+        <source>Import Folder</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -3475,6 +3503,72 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorRenderProgress</name>
+    <message>
+        <source>Reading RAW</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Developing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 / %2 tiles</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Sensor</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Lens and geometry</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Color</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Color Grade %1 of %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Display</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorAiDenoiseErrorCard</name>
+    <message>
+        <source>AI Denoise model not installed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>This GPU is too slow for AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise does not support this sensor</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Manage</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Turn Off AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>EditorRawDecodePanel</name>
     <message>
         <location filename="../qml/EditorRawDecodePanel.qml" line="+35"/>
@@ -3483,12 +3577,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+1"/>
-        <source>Neural Engine</source>
+        <source>Neural</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="-2"/>
-        <source>Default</source>
+        <source>Auto</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -3630,6 +3724,18 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <source>Display referred</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Not supported for X-Trans sensors</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Not supported for this sensor</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -4156,11 +4262,16 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+2"/>
+        <source>Missing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Queued</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+148"/>
+        <location line="+149"/>
         <source>Quality</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4334,6 +4445,30 @@ Original source files on disk will be kept.</source>
         <source>Export Progress</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>AI Denoise model not installed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>This GPU is too slow for AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise does not support this sensor</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>AI Denoise failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Manage</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Turn Off AI Denoise</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>ExportNamingEditor</name>
@@ -4484,7 +4619,7 @@ Original source files on disk will be kept.</source>
     <name>FolderImportConfirmDialog</name>
     <message>
         <location filename="../qml/FolderImportConfirmDialog.qml" line="+84"/>
-        <source>Import From Folder</source>
+        <source>Import Folder</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -4732,10 +4867,6 @@ Original source files on disk will be kept.</source>
     <message>
         <source>Other photos: %1 of %2 imported</source>
         <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>%1 duplicates skipped</source>
-        <translation>%1 duplicates skipped</translation>
     </message>
 </context>
 <context>
@@ -5206,10 +5337,6 @@ Create a new layer above it and draw the Mask there?</source>
         <location line="-297"/>
         <source>Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</source>
         <translation>Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</translation>
-    </message>
-    <message>
-        <source>%1 / %2 converted files reimported, %3 duplicates skipped, %4 failed</source>
-        <translation>%1 / %2 converted files reimported, %3 duplicates skipped, %4 failed</translation>
     </message>
 </context>
 <context>
@@ -5717,6 +5844,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <source>Skip duplicate imports</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>Create a new layer, then draw</source>
         <translation type="unfinished"></translation>
     </message>
@@ -5732,18 +5863,6 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Saved AI Keys</source>
         <translation type="unfinished"></translation>
     </message>
-    <message>
-        <source>Import</source>
-        <translation>Import</translation>
-    </message>
-    <message>
-        <source>Skip duplicate imports</source>
-        <translation>Skip duplicate imports</translation>
-    </message>
-    <message>
-        <source>Skips repeated imports from the same source path. Files in different folders remain separate.</source>
-        <translation>Skips repeated imports from the same source path. Files in different folders remain separate.</translation>
-    </message>
 </context>
 <context>
     <name>ShellSignals</name>
@@ -5756,6 +5875,13 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+23"/>
         <source>Exported %1 image(s).</source>
         <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%n photo(s) are already in the mounted folder and will not be imported this time.</source>
+        <translation>
+            <numerusform>%n photo is already in the mounted folder and will not be imported this time.</numerusform>
+            <numerusform>%n photos are already in the mounted folder and will not be imported this time.</numerusform>
+        </translation>
     </message>
 </context>
 <context>
@@ -6216,10 +6342,6 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location filename="../qml/WelcomeDialog.qml" line="669"/>
         <source>Quit</source>
         <translation>Quit</translation>
-    </message>
-    <message>
-        <source>Settings</source>
-        <translation>Settings</translation>
     </message>
 </context>
 <context>

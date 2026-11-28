@@ -127,6 +127,13 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
           state_ == EditorSessionState::Interactive && has_image_);
     allow(alcedo::EditorAction::MoveHead, true);
     allow(alcedo::EditorAction::ApplyPaste, true);
+    // Version actions need an interactive image, as in EditorActionPolicy (issue #1125).
+    for (const auto action :
+         {alcedo::EditorAction::CheckoutVersion, alcedo::EditorAction::CreateRootVersion,
+          alcedo::EditorAction::BranchVersion, alcedo::EditorAction::RenameVersion,
+          alcedo::EditorAction::RemoveVersion}) {
+      allow(action, state_ == EditorSessionState::Interactive && has_image_);
+    }
     allow(alcedo::EditorAction::RetrySave, recovery_pending_);
     allow(alcedo::EditorAction::DiscardAndContinue, recovery_pending_);
     allow(alcedo::EditorAction::CancelPendingNavigation, recovery_pending_);

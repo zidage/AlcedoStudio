@@ -11,12 +11,12 @@
 #include <functional>
 #include <memory>
 #include <stdexcept>
-#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
-#include "app/pipeline_service.hpp"
+#include "app/mount_file_importer.hpp"
+#include "app/ordinary_import_sources.hpp"
 #include "app/raw_import_look_source.hpp"
 #include "app/sleeve_service.hpp"
 #include "concurrency/thread_pool.hpp"
@@ -28,6 +28,8 @@
 #include "utils/import/import_log.hpp"
 
 namespace alcedo {
+class Image;
+class PipelineMgmtService;
 
 enum class ImportSortMode : uint8_t {
   NONE      = 0,
@@ -36,8 +38,6 @@ enum class ImportSortMode : uint8_t {
 };
 
 struct ImportOptions {
-  /// Request-local policy, resolved by the caller before work starts.
-  bool               skip_duplicates_                  = true;
   ImportSortMode sort_mode_                        = ImportSortMode::FILE_NAME;
 
   bool           persist_placeholders_immediately_ = false;
@@ -51,20 +51,18 @@ struct ImportOptions {
   /// Paths (native form) that import accepts in every category, whatever allowed_categories_
   /// says: the dropped files of a Library drop that also holds folders (issue #757).
   ImportPathSet      any_category_paths_{};
+
+  /// Ordinary imports skip an existing entry for the same source by default.
+  bool               skip_duplicates = true;
 };
 
 struct ImportProgress {
-  /// Existing same-path entries now using a source with a different recorded size.
-  std::atomic<uint32_t> updated_              = 0;
-  std::atomic<uint32_t> raw_updated_          = 0;
-  std::atomic<uint32_t> duplicates_           = 0;
-  std::atomic<uint32_t> raw_duplicates_       = 0;
   uint32_t              total_                = 0;
 
-  /// Provisional SleeveFile nodes and Image bindings created by admission.
+  // Phase A (fast): created SleeveFile nodes + bindings (image_id -> SleeveFile)
   std::atomic<uint32_t> placeholders_created_ = 0;
 
-  /// Images whose metadata, library binding, root, and source byte size persisted successfully.
+  // Phase B (slow): metadata extracted + ImagePool updated + DB updated (as applicable)
   std::atomic<uint32_t> metadata_done_        = 0;
 
   std::atomic<uint32_t> failed_               = 0;
@@ -91,6 +89,11 @@ struct ImportProgress {
 
   /// Subset of failed_: failed files with a RAW extension.
   std::atomic<uint32_t> raw_failed_           = 0;
+
+  /// Files skipped because the source already has an import entry.
+  std::atomic<uint32_t> duplicates_skipped     = 0;
+  /// Subset of duplicates_skipped with a RAW extension.
+  std::atomic<uint32_t> raw_duplicates_skipped = 0;
 };
 
 struct ImportError {
@@ -99,24 +102,7 @@ struct ImportError {
   std::string     message_{};
 };
 
-/// Change description for refreshing affected previews after a source-size update. The import
-/// owns these IDs and the path through completion; Image and history remain with their owners.
-struct ImportSourceChange {
-  image_path_t                                        path;
-  std::vector<std::pair<sl_element_id_t, image_id_t>> entries;
-};
-
 struct ImportResult {
-  uint32_t                        updated_     = 0;
-  uint32_t                        raw_updated_ = 0;
-  std::vector<ImportSourceChange> source_changes_;
-
-  uint32_t                        duplicates_     = 0;
-  uint32_t                        raw_duplicates_ = 0;
-  /// Per-occurrence errors, including failures before an Image exists.
-  std::vector<ImportError>        errors_;
-  /// Nonempty when restoration failed. Admission stops and affected IDs remain in the log.
-  std::string                     restoration_error_;
   uint32_t requested_ = 0;
   uint32_t imported_  = 0;
   uint32_t failed_    = 0;
@@ -132,6 +118,8 @@ struct ImportResult {
   uint32_t raw_imported_  = 0;
   /// Subset of failed_: files with a RAW extension.
   uint32_t raw_failed_    = 0;
+  uint32_t duplicates_skipped     = 0;
+  uint32_t raw_duplicates_skipped = 0;
 };
 
 class ImportJob {
@@ -139,8 +127,9 @@ class ImportJob {
   using ProgressCallback = std::function<void(const ImportProgress&)>;
   using FinishedCallback = std::function<void(const ImportResult&)>;
 
-  /// Set by the caller to cancel the job. Admission and source reads observe this request;
-  /// unread occurrences report CANCELED. Completed work is finalized.
+  /// Set by the caller to cancel the job. The placeholder loop stops submitting files, and a
+  /// queued metadata task that has not started marks its file CANCELED without reading it.
+  /// Tasks already reading finish, and their roots are written.
   std::atomic<bool>          canceled_{false};
   std::atomic<bool>          cancelation_acked_{false};
   std::atomic<bool>          submission_closed_{false};
@@ -171,12 +160,14 @@ class ImportService {
                               std::shared_ptr<ImportJob> job     = nullptr)
       -> std::shared_ptr<ImportJob>                                                         = 0;
 
-  /// Compatibility operation for existing callers. Completion already includes checked
-  /// persistence and removal; this checks any explicitly requested later sync and throws on error.
+  /// Persist a finished import. Each `metadata_failed_` entry loses its library element and
+  /// its placeholder Image, so a failed import writes no Element, FileImage, or Image row;
+  /// then the image pool, sleeve file system, and recorded sources are written to storage.
+  /// Throws when an image removal or storage write fails.
   virtual void SyncImports(const ImportLogSnapshot& log_snapshot, const image_path_t& dest) = 0;
 };
 
-class ImportServiceImpl final : public ImportService {
+class ImportServiceImpl final : public ImportService, public MountFileImporter {
  public:
   ImportServiceImpl() = delete;
   /// Import with the product Default RAW import look (@ref ProductDefaultRawImportLookSource).
@@ -191,8 +182,8 @@ class ImportServiceImpl final : public ImportService {
   /// @param raw_import_look_source Source of the look of each RAW history root, read once at the
   ///        start of each import.
   /// @throws std::invalid_argument when @p pipeline_service or @p raw_import_look_source is null.
-  ImportServiceImpl(std::shared_ptr<SleeveServiceImpl>         fs_service,
-                    std::shared_ptr<ImagePoolService>          image_pool_service,
+  ImportServiceImpl(std::shared_ptr<SleeveServiceImpl>          fs_service,
+                    std::shared_ptr<ImagePoolService>           image_pool_service,
                     std::shared_ptr<PipelineMgmtService>        pipeline_service,
                     std::shared_ptr<const RawImportLookSource> raw_import_look_source)
       : fs_service_(std::move(fs_service)),
@@ -209,12 +200,6 @@ class ImportServiceImpl final : public ImportService {
 
   ~ImportServiceImpl() = default;
 
- private:
-  // These outlive both executors: submission drains before workers and collaborators.
-  std::atomic<bool> active_{false};
-  std::string       restoration_error_;
-
- public:
   std::shared_ptr<SleeveServiceImpl>    fs_service_;
 
   std::shared_ptr<ImagePoolService> image_pool_service_ = nullptr;
@@ -229,7 +214,8 @@ class ImportServiceImpl final : public ImportService {
   std::shared_ptr<const RawImportLookSource> raw_import_look_source_ = nullptr;
 
  public:
-  /// Parallel metadata reads and root encoding, bounded by the import batch.
+  /// Metadata workers: open RAW headers, read the HDR probe bytes and encode history roots.
+  /// The work is short file reads plus CPU, so it scales with the logical core count.
   ThreadPool thread_pool_{std::max<size_t>(8, std::thread::hardware_concurrency())};
 
   /// Runs the placeholder loop of each import (sleeve element + pinned Image per file, then one
@@ -238,20 +224,40 @@ class ImportServiceImpl final : public ImportService {
   /// destructor finishes a running loop while thread_pool_ still accepts the loop's tasks.
   ThreadPool submission_thread_{1};
 
-  /// Returns immediately. Submission owns admission and checked finalization; workers read
-  /// source bytes and metadata in parallel. Completion runs exactly once after persistence.
-  /// Overlapping calls receive BUSY until finalization completes. Null creates a usable job.
+  /// Start an import and return @p job (or a new job) without waiting for the placeholders: the
+  /// placeholder loop runs on submission_thread_, metadata extraction on thread_pool_.
+  /// job->on_progress_ reports the placeholder count while the loop runs, and job->on_finished_
+  /// fires once every file is imported or failed.
+  /// @throws SleeveOperationError with kMountedFolderStructureIsReadOnly when @p dest is a mounted
+  ///         folder, before any source file is read and with no job started.
   auto ImportToFolder(const std::vector<image_path_t>& paths, const image_path_t& dest,
                       const ImportOptions& options = {}, std::shared_ptr<ImportJob> job = nullptr)
       -> std::shared_ptr<ImportJob> override;
 
   void SyncImports(const ImportLogSnapshot& log_snapshot, const image_path_t& dest) override;
 
+  /// The import of ImportToFolder for the new files of a mount scan: each file gets the mount id
+  /// and the home folder of its request. Waits for the import, then runs SyncImports.
+  auto ImportMountedFiles(std::span<const MountFileImportRequest> requests)
+      -> std::vector<MountFileImportOutcome> override;
+
  private:
-  /// Process bounded parallel batches on the submission executor; no worker mutates counters
-  /// or persists state. A restoration error stops further admission.
-  void RunImport(const std::vector<image_path_t>& paths, const image_path_t& dest,
-                 const ImportOptions& options, const std::shared_ptr<ImportJob>& job,
-                 const std::shared_ptr<const RawImportLook>& raw_import_look);
+  /// Creates the library element of the file @p index of an import, with the name @p file_name,
+  /// inside the lock of the sleeve service. Throws or returns empty when placement fails.
+  using FilePlacement = std::function<std::shared_ptr<SleeveElement>(
+      FileSystem& fs, std::size_t index, const file_name_t& file_name)>;
+
+  void StartImport(const std::vector<image_path_t>& paths, FilePlacement placement,
+                   ImportOptions options, const std::shared_ptr<ImportJob>& job,
+                   std::shared_ptr<OrdinaryImportSources> sources = nullptr);
+
+  void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>&              paths,
+                                   const FilePlacement&                          placement,
+                                   const std::shared_ptr<ImportJob>&             job,
+                                   const std::shared_ptr<ImportLog>&             import_log,
+                                   const std::shared_ptr<ImportProgress>&        progress,
+                                   const ImportOptions&                          options,
+                                   const std::shared_ptr<OrdinaryImportSources>& sources,
+                                   const std::shared_ptr<const RawImportLook>&   raw_import_look);
 };
 };  // namespace alcedo

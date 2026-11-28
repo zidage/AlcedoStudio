@@ -28,12 +28,13 @@ class EditorViewportRenderer;
 class DirectFrameSink;
 
 // Production QML viewport. Thin QML + render-thread boundary only: it owns no
-// pipeline scheduler and exposes no backend selection or host-upload path.
-// Native target creation, mapping, ready-queue, and teardown live in
-// DirectPresentQueue; QRhi import is owned by EditorViewportRenderer.
+// pipeline scheduler. Native target creation, mapping, ready-queue, and teardown
+// live in DirectPresentQueue; QRhi import and host-upload presentation are owned
+// by EditorViewportRenderer.
 //
 // Production call sequence (pipeline worker):
-//   EnsureSize → MapResourceForWrite → GPU write → UnmapResource → NotifyFrameReady
+//   GPU: EnsureSize → MapResourceForWrite → GPU write → UnmapResource → NotifyFrameReady
+//   OpenCL without GL sharing: GPU readback → scene-graph QRhi texture upload
 class EditorViewportItem : public QQuickRhiItem {
   Q_OBJECT
   Q_PROPERTY(QString backendName READ backendName NOTIFY DiagnosticsChanged)

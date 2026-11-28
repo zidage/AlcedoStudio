@@ -215,7 +215,27 @@ target_compile_definitions(AiModelPackageService PRIVATE
 def_library(FSService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_service.cpp"
+        "${ALCEDO_APP_ROOT}/mount_tree.cpp"
     PUBLIC_DEPS SleeveFS PipelineHistory
+)
+
+# Mounted folder scan change list (mounted_folder_plan.md, MF3): compares the records of one
+# mount with a directory listing. No storage, sleeve service, or Qt dependency.
+def_library(MountScanChangeList
+    SOURCES
+        "${ALCEDO_APP_ROOT}/mount_scan_change_list.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mount_scan_change_list.hpp"
+    PUBLIC_DEPS SourceFileUtils
+)
+
+# Mounted folder service (mounted_folder_plan.md, MF4): create, scan, and remove mounts. New files
+# are imported through the MountFileImporter port (ImportServiceImpl), so this library does not
+# depend on ImportService, which depends on ProjectService through PipelineMgmtService.
+def_library(MountService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/mount_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mount_file_importer.hpp"
+    PUBLIC_DEPS FSService Storage ImagePoolService MountScanChangeList SourceFileUtils StrConv
 )
 
 def_library(SleeveFilterService
@@ -397,7 +417,7 @@ def_library(ProjectService
         "${ALCEDO_APP_ROOT}/project_package_backend.cpp"
         "${ALCEDO_APP_ROOT}/project_package_service.cpp"
         "${ALCEDO_SRC_ROOT}/ui/alcedo_main/album_backend/path_utils.cpp"
-    PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService
+    PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService MountService
                 AiSidecarRuntimeService ModelDownloadService SemanticQueryEmbeddingCache
                 StrConv JSON xxHash stduuid EditMaskCore
     PRIVATE_DEPS
@@ -432,6 +452,36 @@ def_library(AdjustmentTransferService
     PRIVATE_DEPS EditorAdjustmentPipeline EditorPipelineCommandService
 )
 
+# Preset files (edit_presets_plan.md, PS1A): the only reader of a preset file, with the safety
+# rules of plan section 3, and the writer.
+def_library(PresetFile
+    SOURCES
+        "${ALCEDO_APP_ROOT}/preset_file.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/preset_file.hpp"
+    PUBLIC_DEPS AdjustmentTransferService Qt6::Core
+)
+
+# The preset folder (edit_presets_plan.md, PS1B): the folder scan and the library service with
+# its package cache.
+def_library(PresetLibraryService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/preset_library_scan.cpp"
+        "${ALCEDO_APP_ROOT}/preset_library_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/preset_library_scan.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/preset_library_service.hpp"
+    PUBLIC_DEPS PresetFile ThreadPool Qt6::Core
+)
+
+# The AI Denoise switch written into the stored history of an image that the editor does not hold
+# (AI Denoise integration plan, DN8): Turn Off AI Denoise of an export queue item.
+def_library(AiDenoiseHistoryWrite
+    SOURCES
+        "${ALCEDO_APP_ROOT}/ai_denoise_history_write.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/ai_denoise_history_write.hpp"
+    PUBLIC_DEPS PipelineMgmtService EditGraph PipelineHistory
+    PRIVATE_DEPS PipelineHistoryApplier EditorPipelineCommandService EditorParameterWrite
+)
+
 # Read-only Version catalog for the Adjustment Transfer source column. Replays
 # one selected Version from the immutable root into an independent document and
 # builds stable node/item descriptors. Qt-free application layer.
@@ -461,14 +511,20 @@ def_library(AiMaskAnalysisImage
     PUBLIC_DEPS PipelineMgmtService EditGraph PipelineHistory xxHash ${ALCEDO_OPENCV_CORE_DEPS}
 )
 
-# The LUT browser preview of one LUT: the import root with the LUT on its primary Color Grade,
-# rendered at a long edge of 256 (issue #598).
-def_library(LutPreviewImage
+# The browser tile previews, rendered at a long edge of 256: the LUT preview (the import root with
+# the LUT on its primary Color Grade, issue #598) and the preset preview (the import root with the
+# preset applied by the Paste planner, edit presets plan PS3).
+def_library(BrowserPreviewImage
     SOURCES
+        "${ALCEDO_APP_ROOT}/browser_preview_render.cpp"
         "${ALCEDO_APP_ROOT}/lut_preview_image.cpp"
+        "${ALCEDO_APP_ROOT}/preset_preview_image.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/browser_preview_render.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_preview_image.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/preset_preview_image.hpp"
     PUBLIC_DEPS PipelineMgmtService EditGraph PipelineHistory EditorParameterWrite
-                ${ALCEDO_OPENCV_CORE_DEPS}
+                AdjustmentTransferService ${ALCEDO_OPENCV_CORE_DEPS}
+    PRIVATE_DEPS PipelineHistoryApplier xxHash JSON
 )
 
 # The open editor comparison: captured working values, selected sources, and the image job of the
@@ -731,7 +787,7 @@ def_library(EditorSessionService
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy
                  EditorSerialFrameAdmission EditorMaskCreationController EditorComparisonService
-                 AiMaskAnalysisImage LutPreviewImage
+                 AiMaskAnalysisImage BrowserPreviewImage
 )
 # The session header holds the coverage preview by value.
 target_link_libraries(EditorSessionService PUBLIC EditorMaskCoveragePreview)
@@ -747,16 +803,18 @@ target_link_libraries(EditorSessionService PUBLIC EditorWorkingDocument)
 
 def_library(ImportService
     SOURCES "${ALCEDO_APP_ROOT}/import_service.cpp"
+            "${ALCEDO_APP_ROOT}/ordinary_import_sources.cpp"
             "${ALCEDO_INCLUDE_ROOT}/app/raw_import_look_source.hpp"
     # Import creates each image's history root through InitializeImageRoot on the
     # PipelineMgmtService injected at construction; it constructs no executor.
-    PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService SourceImageFile
+    PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService
+    PRIVATE_DEPS AlcedoLog Qt6::Core SourceFileUtils
 )
 
 def_library(ProjectMaintenanceService
     SOURCES "${ALCEDO_APP_ROOT}/project_maintenance_service.cpp"
             "${ALCEDO_APP_ROOT}/project_maintenance_package.cpp"
-    PUBLIC_DEPS ProjectService Storage SourceImageFile
+    PUBLIC_DEPS ProjectService Storage SourceFileUtils
 )
 
 def_library(ThumbnailService

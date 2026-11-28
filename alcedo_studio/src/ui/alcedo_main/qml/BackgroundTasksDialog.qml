@@ -124,6 +124,8 @@ Dialog {
         if (kind === "imageDelete") return qsTr("Delete Images")
         if (kind === "maintenanceScan" || kind === "maintenanceApply") return qsTr("Project Maintenance")
         if (kind === "agentControl") return qsTr("Agent")
+        if (kind === "mountScan") return qsTr("Folder Scan")
+        if (kind === "aiDenoiseSwitch") return qsTr("AI Denoise")
         return qsTr("Task")
     }
 

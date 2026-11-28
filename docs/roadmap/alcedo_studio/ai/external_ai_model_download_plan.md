@@ -421,6 +421,12 @@ Details the plan did not specify, chosen in AM2:
   archive content with the committed files.
 - **Not in AM2.** The tools build one model set version per run. A later feed that must keep v1
   for old builds while it adds v2 (P2) needs a prepare run that lists both versions.
+  Resolved on 2026-11-23 by phase DN12 of the
+  [AI Denoise integration plan](../raw-processing/ai_denoise/ai_denoise_integration_plan.md):
+  a run still builds one definition, and it carries every other entry of the verified base feed
+  (by default the live feed; `--base-feed DIR|URL`, `--no-base-feed` for a first feed). The feed
+  lists the AI Mask set and the AI Denoise model (`alcedo-ai-denoise`); the publication uploads
+  only the new archives. The builds 0.3.4 to 0.3.6 ignore the IDs that they do not know.
 
 Operator steps (Windows; the private key stays offline):
 
@@ -593,8 +599,8 @@ Details the plan did not specify, chosen in AM3:
   with the green border) instead of the combo box, the status card, and the four buttons, so
   the app works until AM4 moves this to the AI Models page. The new texts get their Chinese
   entries with the page in AM4.
-- **Terminology.** The dependency link test is named `SemanticGrpcDependencyLinkTest`
-  (touched `tests/app/CMakeLists.txt`). The `EditorPresentation` library and test in
+- **Terminology.** `SemanticGrpcDependencySmokeTest` is now `SemanticGrpcDependencyLinkTest`
+  (touched `tests/app/CMakeLists.txt`). The `EditorRhiContracts` library and test in
   `tests/ui/CMakeLists.txt` are outside AM3: issue
   [#582](https://github.com/zidage/AlcedoStudio/issues/582).
 

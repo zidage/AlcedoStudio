@@ -171,4 +171,18 @@ void ExportQueue::ApplyExportState(quint64 run_id, const QVariantMap& statuses) 
   }
 }
 
+bool ExportQueue::ReturnToQueued(sl_element_id_t element_id) {
+  const auto entry =
+      std::find_if(entries_.begin(), entries_.end(),
+                   [element_id](const Entry& queued) { return queued.element_id == element_id; });
+  if (entry == entries_.end()) {
+    return false;
+  }
+  if (entry->run_id != 0) {
+    entry->run_id = 0;
+    emit QueueChanged();
+  }
+  return true;
+}
+
 }  // namespace alcedo::ui

@@ -47,22 +47,29 @@ void FramePresenter<OpenClBackend>::Present(BasicRenderDevice<OpenClBackend>& de
       throw std::runtime_error(std::string(kPresentationSuspendedMessage) +
                                "OpenClRenderer: the viewport is minimized or hidden");
     }
-    if (!mapping || mapping.pixel_format != FramePixelFormat::RGBA32F ||
-        mapping.memory_domain != FrameMemoryDomain::OpenClDevice ||
-        mapping.target_type != FrameWriteTargetType::OpenClImage || mapping.data == nullptr) {
-      throw std::runtime_error(
-          "OpenClRenderer: sink did not provide an OpenCL image2d RGBA32F target");
+    if (mapping && mapping.memory_domain == FrameMemoryDomain::HostVisible &&
+        mapping.target_type == FrameWriteTargetType::LinearBuffer &&
+        mapping.pixel_format == FramePixelFormat::RGBA32F && mapping.data != nullptr &&
+        mapping.row_bytes == static_cast<std::size_t>(width) * sizeof(float) * 4) {
+      device.Workspace().Device().DownloadTexture2D(
+          texture, {reinterpret_cast<std::byte*>(mapping.data), mapping.row_bytes * height},
+          device.CommandContext());
+    } else {
+      if (!mapping || mapping.pixel_format != FramePixelFormat::RGBA32F ||
+          mapping.memory_domain != FrameMemoryDomain::OpenClDevice ||
+          mapping.target_type != FrameWriteTargetType::OpenClImage || mapping.data == nullptr) {
+        throw std::runtime_error(
+            "OpenClRenderer: sink did not provide an RGBA32F presentation target");
+      }
+      auto*             destination = reinterpret_cast<cl_mem>(mapping.data);
+      const std::size_t origin[3]   = {0, 0, 0};
+      const std::size_t region[3]   = {texture.Width(), texture.Height(), 1};
+      cl_event          copy_event  = nullptr;
+      CheckOpenCl(clEnqueueCopyImage(device.Workspace().Device().NativeQueue(), texture.Native(),
+                                     destination, origin, origin, region, 0, nullptr, &copy_event),
+                  "OpenClRenderer: clEnqueueCopyImage(present)");
+      device.Workspace().Device().TrackKernelEvent(device.CommandContext(), copy_event);
     }
-
-    auto*             destination = reinterpret_cast<cl_mem>(mapping.data);
-    const std::size_t origin[3]   = {0, 0, 0};
-    const std::size_t region[3]   = {texture.Width(), texture.Height(), 1};
-    cl_event          copy_event  = nullptr;
-    CheckOpenCl(clEnqueueCopyImage(device.Workspace().Device().NativeQueue(), texture.Native(),
-                                   destination, origin, origin, region, 0, nullptr, &copy_event),
-                "OpenClRenderer: clEnqueueCopyImage(present)");
-    device.Workspace().Device().TrackKernelEvent(device.CommandContext(), copy_event);
-
     sink.UnmapResource();
     resource_mapped = false;
     device.Workspace().Device().FinalizePresentation(device.CommandContext());
@@ -129,6 +136,18 @@ auto FramePresenter<OpenClBackend>::PresentMaskCoverage(
     throw std::runtime_error("Mask coverage display: the coverage channel has no writable target");
   }
   try {
+    if (mapping.memory_domain == FrameMemoryDomain::HostVisible &&
+        mapping.target_type == FrameWriteTargetType::LinearBuffer &&
+        mapping.pixel_format == FramePixelFormat::RGBA32F && mapping.data != nullptr &&
+        mapping.row_bytes == static_cast<std::size_t>(texture.Width()) * sizeof(float) * 4) {
+      device.Workspace().Device().DownloadTexture2D(
+          texture,
+          {reinterpret_cast<std::byte*>(mapping.data), mapping.row_bytes * texture.Height()},
+          device.CommandContext());
+      sink.UnmapCoverageTarget();
+      device.Workspace().Device().FinalizePresentation(device.CommandContext());
+      return sink.PublishCoverage();
+    }
     if (mapping.pixel_format != FramePixelFormat::RGBA32F ||
         mapping.target_type != FrameWriteTargetType::OpenClImage ||
         mapping.memory_domain != FrameMemoryDomain::OpenClDevice || mapping.data == nullptr) {

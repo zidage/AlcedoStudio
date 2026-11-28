@@ -208,7 +208,7 @@ target_link_libraries(EditorSessionHistoryPortTest
   ProfileToneCurve
   AdjustmentTransferService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   EditorWorkingDocument
   EditorSessionEditController
@@ -248,7 +248,7 @@ target_include_directories(EditorComparisonInputsTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorComparisonInputsTest
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -289,7 +289,7 @@ target_link_libraries(EditorComparisonServiceTest
   EditorSessionService
   EditorComparisonService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -332,7 +332,7 @@ target_link_libraries(EditorMaskCoveragePreviewTest
   AiMaskEditSession
   EditorComparisonService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -371,7 +371,7 @@ target_link_libraries(EditorHistoryMoveDuringInputTest
   EditorSessionService
   EditorComparisonService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -398,6 +398,45 @@ alcedo_ui_gtest_discover_tests(EditorHistoryMoveDuringInputTest
   TEST_PREFIX "EditorHistoryMoveDuringInputTest."
   PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
 alcedo_register_test_target(EditorHistoryMoveDuringInputTest ui)
+
+# AI Denoise integration plan, DN7: the model error of the open photo and the switch through the
+# production session facade over the real history port.
+add_executable(EditorAiDenoiseSessionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_ai_denoise_session_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
+target_include_directories(EditorAiDenoiseSessionTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorAiDenoiseSessionTest
+  EditorSessionService
+  EditorComparisonService
+  AiMaskAnalysisImage
+  BrowserPreviewImage
+  EditorComparisonInputs
+  AdjustmentTransferService
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
+  EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
+  EditorMiniGitMaterializer
+  PipelineMgmtService
+  ProjectService
+  PipelineHistory
+  EditPipeline
+  GTest::gtest_main)
+set_target_properties(EditorAiDenoiseSessionTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
+alcedo_ui_gtest_discover_tests(EditorAiDenoiseSessionTest
+  TEST_PREFIX "EditorAiDenoiseSessionTest."
+  PROPERTIES LABELS "editor_session")
+alcedo_register_test_target(EditorAiDenoiseSessionTest ui)
 
 # Checkpoint storage owns Mini-Git materialization and recovery.
 # Same direct-adapter link rule as history port: avoid AlbumBackendLib for unit runs.
@@ -494,6 +533,17 @@ alcedo_ui_gtest_discover_tests(EditorComparisonLargeRawPairTest
   PROPERTIES LABELS "editor_session;editor_comparison")
 alcedo_register_test_target(EditorComparisonLargeRawPairTest ui)
 
+# AI Denoise integration plan, DN7: the switch owner of the editor.
+def_ui_test(EditorAiDenoiseControlTest editor_ai_denoise_control_test.cpp)
+alcedo_register_test_target(EditorAiDenoiseControlTest ui)
+# AI Denoise integration plan, DN8: Turn Off AI Denoise of an export queue item.
+def_ui_test(ExportAiDenoiseControlTest export_ai_denoise_control_test.cpp)
+alcedo_register_test_target(ExportAiDenoiseControlTest ui)
+
+# AI Denoise integration plan, DN14: the image of the editor viewport before the first frame.
+def_ui_test(EditorViewportPlaceholderTest editor_viewport_placeholder_test.cpp)
+alcedo_register_test_target(EditorViewportPlaceholderTest ui)
+
 def_ui_test(AlbumBackendImportTest   album_backend_import_test.cpp)
 def_ui_test(ProjectMaintenanceModelTest project_maintenance_model_test.cpp)
 alcedo_register_test_target(ProjectMaintenanceModelTest ui)
@@ -515,6 +565,10 @@ alcedo_register_test_target(ClipModelInstallActivationTest ui)
 
 def_ui_test(AlbumBackendFolderTest   album_backend_folder_test.cpp)
 alcedo_register_test_target(AlbumBackendFolderTest ui)
+
+# Mounted folder rows and commands of FolderController (mounted_folder_plan.md, MF6 and MF8).
+def_ui_test(FolderControllerMountTest   folder_controller_mount_test.cpp)
+alcedo_register_test_target(FolderControllerMountTest ui)
 
 def_ui_test(AlbumBackendImageDeleteTest album_backend_image_delete_test.cpp)
 alcedo_register_test_target(AlbumBackendImageDeleteTest ui)
@@ -555,6 +609,9 @@ alcedo_register_test_target(AlbumSectionModelTest ui)
 # Issue 745: justified-rows Library layout geometry, its window model, and the layout setting.
 def_ui_test(JustifiedLayoutTest justified_layout_test.cpp)
 alcedo_register_test_target(JustifiedLayoutTest ui)
+# Issue 1077: the default action of Import Folder.
+def_ui_test(LibraryBehaviorPreferencesTest library_behavior_preferences_test.cpp)
+alcedo_register_test_target(LibraryBehaviorPreferencesTest ui)
 def_ui_test(AlbumBackendLibraryQueryTest album_backend_library_query_test.cpp)
 alcedo_register_test_target(AlbumBackendLibraryQueryTest ui)
 
@@ -569,6 +626,19 @@ alcedo_register_test_target(AlbumBackendBackgroundTaskTest ui)
 
 def_ui_test(AlbumBackendInteractionPolicyTest album_backend_interaction_policy_test.cpp "interaction_policy")
 alcedo_register_test_target(AlbumBackendInteractionPolicyTest ui)
+
+# Directory watchers of the mounted folders (mounted_folder_plan.md, MF7, P11) on real
+# temporary directories.
+def_ui_test(MountDirectoryWatcherTest mount_directory_watcher_test.cpp "mounted_folder")
+target_link_libraries(MountDirectoryWatcherTest PRIVATE MountDirectoryWatcher)
+alcedo_register_test_target(MountDirectoryWatcherTest ui)
+
+# Scan triggers of the mounted folders (mounted_folder_plan.md, MF7): the trigger rules with a
+# test clock, and the platform watcher on a real directory and project database.
+def_ui_test(MountScanCoordinatorTest mount_scan_coordinator_test.cpp "mounted_folder")
+target_link_libraries(MountScanCoordinatorTest PRIVATE MountScanCoordinator OpenImageIO::OpenImageIO)
+alcedo_copy_duckdb_fts_extension(MountScanCoordinatorTest)
+alcedo_register_test_target(MountScanCoordinatorTest ui)
 
 def_ui_test(AgentControlOwnerTest agent_control_owner_test.cpp "interaction_policy")
 alcedo_register_test_target(AgentControlOwnerTest ui)
@@ -612,18 +682,31 @@ alcedo_register_test_target(AdjustmentTransferDialogModelTest ui)
 def_ui_test(AdjustmentTransferControllerTest adjustment_transfer_controller_test.cpp)
 alcedo_register_test_target(AdjustmentTransferControllerTest ui)
 
+# Preset commands of the Versions panel (edit presets plan, PS2).
+def_ui_test(PresetControllerTest preset_controller_test.cpp)
+alcedo_register_test_target(PresetControllerTest ui)
+
+# Apply Preset for many photos and the dialog previews of a library photo (edit presets plan, PS4).
+def_ui_test(PresetApplyTargetsTest preset_apply_targets_test.cpp)
+alcedo_register_test_target(PresetApplyTargetsTest ui)
+
+# Preset browser previews of the open photo (edit presets plan, PS3).
+def_ui_test(PresetPreviewControllerTest preset_preview_controller_test.cpp)
+target_link_libraries(PresetPreviewControllerTest PRIVATE BrowserPreviewImage)
+alcedo_register_test_target(PresetPreviewControllerTest ui)
+
 # Phase 0: deterministic editor RHI checks (backend parse, fixtures, lease schema).
-add_executable(EditorPresentationTest
-    ${ALCEDO_TEST_ROOT}/ui/editor_presentation_test.cpp
+add_executable(EditorRhiContractsTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_rhi_contracts_test.cpp
 )
-target_include_directories(EditorPresentationTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorPresentationTest PRIVATE
-    EditorPresentation
+target_include_directories(EditorRhiContractsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorRhiContractsTest PRIVATE
+    EditorRhiContracts
     GTest::gtest_main
     Qt6::Core
 )
-alcedo_ui_gtest_discover_tests(EditorPresentationTest TEST_PREFIX "EditorPresentationTest.")
-alcedo_register_test_target(EditorPresentationTest ui)
+alcedo_ui_gtest_discover_tests(EditorRhiContractsTest TEST_PREFIX "EditorRhiContractsTest.")
+alcedo_register_test_target(EditorRhiContractsTest ui)
 
 # Phase 0: maintained GPU presentation harness (manual / CI GPU workers).
 if(TARGET EditorRhiHarness)
@@ -795,6 +878,37 @@ target_compile_definitions(MainQmlWorkflowTest
 alcedo_ui_gtest_discover_tests(MainQmlWorkflowTest TEST_PREFIX "MainQmlWorkflowTest.")
 alcedo_register_test_target(MainQmlWorkflowTest ui)
 alcedo_link_quickqanava_qml(MainQmlWorkflowTest)
+
+# The folder section of the Library view (issue #1009) in the production Main.qml, over real
+# mounts.
+add_executable(LibraryFolderSectionQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/library_folder_section_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(LibraryFolderSectionQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(LibraryFolderSectionQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(LibraryFolderSectionQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(LibraryFolderSectionQmlTest
+    TEST_PREFIX "LibraryFolderSectionQmlTest.")
+alcedo_register_test_target(LibraryFolderSectionQmlTest ui)
+alcedo_link_quickqanava_qml(LibraryFolderSectionQmlTest)
 
 # Phase 6C-5 Phase 6B: QML entry surfaces blocked during save and recovered after.
 add_executable(EditorCheckpointQmlIntegrationTest

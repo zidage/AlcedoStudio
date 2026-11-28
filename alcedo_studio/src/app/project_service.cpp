@@ -367,6 +367,7 @@ ProjectService::ProjectService(const std::filesystem::path& db_path,
     RegisterSemanticSearchProvider();
     browse_service_  = std::make_shared<AlbumBrowseService>(sleeve_service_, filter_service_);
     package_service_ = std::make_shared<ProjectPackageService>();
+    mount_service_   = std::make_shared<MountService>(storage_, sleeve_service_, pool_service_);
 
     project_uuid_    = GenerateProjectUUID();
   };
@@ -407,6 +408,7 @@ void ProjectService::StopAiSidecarRuntime() {
 }
 
 ProjectService::~ProjectService() {
+  mount_service_.reset();
   package_service_.reset();
   StopAiSidecarRuntime();
   browse_service_.reset();
@@ -490,8 +492,9 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
     if (!project_pack::ProjectVersionIsSupported(file_version)) {
       throw std::runtime_error(
           "Incompatible project format: project file version '" + file_version +
-          "' is not supported (required " +
-          std::string(project_pack::kMinSupportedProjectFileVersion) + "). "
+          "' is not supported (supported " +
+          std::string(project_pack::kMinSupportedProjectFileVersion) + " to " +
+          std::string(project_pack::kMaxSupportedProjectFileVersion) + "). "
           "This build does not migrate older history, pipeline, or journal layouts.");
     }
   }
@@ -541,6 +544,25 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
           : 0;
 
   storage_ = std::make_shared<Storage>(db_path_);
+
+  // #1015: the metadata start ids are the values of the last save. A database that was written
+  // after that save (a mount scan, then an exit without a save) holds larger ids. Each generator
+  // starts at the larger value, so a new element or image never takes an id that a row holds.
+  {
+    const auto stored = storage_->Maintenance().ReadLargestStoredIds();
+    const auto raise  = [](sl_element_id_t& start, int64_t largest_stored, const char* name) {
+      if (largest_stored > static_cast<int64_t>(start)) {
+        qCWarning(diag::projectLog).noquote()
+            << QStringLiteral("project.open.start_id_raised generator=%1 metadata=%2 stored=%3")
+                   .arg(QString::fromLatin1(name))
+                   .arg(static_cast<qulonglong>(start))
+                   .arg(static_cast<qlonglong>(largest_stored));
+        start = static_cast<sl_element_id_t>(largest_stored);
+      }
+    };
+    raise(start_id, stored.element_id, "element");
+    raise(image_pool_start_id, stored.image_id, "image");
+  }
 
   // Older projects have HNSW indexes on the semantic embedding tables. Search no
   // longer uses them, and while one exists every embedding write needs the vss
@@ -601,6 +623,7 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
   RegisterSemanticSearchProvider();
   browse_service_  = std::make_shared<AlbumBrowseService>(sleeve_service_, filter_service_);
   package_service_ = std::make_shared<ProjectPackageService>();
+  mount_service_   = std::make_shared<MountService>(storage_, sleeve_service_, pool_service_);
 }
 
 void ProjectService::RecreateSleeveService(sl_element_id_t start_id) {

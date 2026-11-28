@@ -22,6 +22,7 @@
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -31,6 +32,9 @@
 #include "app/album_browse_service.hpp"
 #include "app/editor_adjustment_context.hpp"
 #include "app/image_pool_service.hpp"
+#include "app/project_service.hpp"
+#include "app/sleeve_error.hpp"
+#include "app/sleeve_service.hpp"
 #include "app/thumbnail_service.hpp"
 #include "image/color_label.hpp"
 #include "image/image.hpp"
@@ -88,16 +92,23 @@ auto RootFolderId(ProjectService& project) -> std::optional<sl_element_id_t> {
   return root->element_id_;
 }
 
-/// Depth-first folder list below @p folder_path, parents before children.
-void AppendFolders(const AlbumBrowseService& browse, const std::filesystem::path& folder_path,
-                   sl_element_id_t parent_id, int depth, QJsonArray* folders) {
-  for (const auto& folder : browse.ListFolders(folder_path)) {
+/// The folders below the root @p root_id, parents before children, from one folder tree read.
+void AppendFolders(const AlbumBrowseService& browse, sl_element_id_t root_id, QJsonArray* folders) {
+  // The id and the depth of each listed path; the tree lists a parent before its children.
+  std::map<std::filesystem::path, std::pair<sl_element_id_t, int>> listed{
+      {ui::album_util::RootFsPath(), {root_id, 0}}};
+  for (const auto& folder : browse.ListFolderTree()) {
+    const auto parent = listed.find(folder.folder_path_.parent_path());
+    if (parent == listed.end()) {
+      continue;
+    }
+    const auto [parent_id, parent_depth] = parent->second;
     folders->push_back(QJsonObject{{"folder_id", static_cast<double>(folder.folder_id_)},
                                    {"parent_id", static_cast<double>(parent_id)},
                                    {"name", QString::fromStdWString(folder.folder_name_)},
                                    {"path", PathText(folder.folder_path_)},
-                                   {"depth", depth}});
-    AppendFolders(browse, folder.folder_path_, folder.folder_id_, depth + 1, folders);
+                                   {"depth", parent_depth + 1}});
+    listed.emplace(folder.folder_path_, std::pair{folder.folder_id_, parent_depth + 1});
   }
 }
 
@@ -190,6 +201,12 @@ struct ThumbnailBatch {
   QPointer<AutomationCommandWait> wait_;
 };
 
+/// The `data` of a -32002 (rejected) answer to a request that SleeveServiceImpl refused (Mounted
+/// Folder Plan, MF5): `error` is the SleeveErrorName of the rule.
+auto SleeveRefusalData(const QString& error, const QString& message) -> QJsonObject {
+  return QJsonObject{{"reason", message}, {"error", error}};
+}
+
 /// Answers a library.delete command with the DeleteTargetsFinished @p result: the deleted and
 /// failed ids, or an error when nothing was deleted.
 void AnswerDelete(AutomationCommandWait* wait, const QVariantMap& result) {
@@ -197,16 +214,30 @@ void AnswerDelete(AutomationCommandWait* wait, const QVariantMap& result) {
     return;
   }
   const QString    message = result.value(QStringLiteral("message")).toString();
+  const QString    refusal = result.value(QStringLiteral("refusal")).toString();
   const QJsonArray deleted =
       QJsonArray::fromVariantList(result.value(QStringLiteral("deletedElementIds")).toList());
+  if (deleted.isEmpty() && !refusal.isEmpty()) {
+    wait->SendError(AutomationErrorCode::Rejected, message, SleeveRefusalData(refusal, message));
+    return;
+  }
   if (deleted.isEmpty()) {
     wait->SendOwnerError(AutomationErrorCode::Failed, message);
     return;
   }
   const QJsonArray failed =
       QJsonArray::fromVariantList(result.value(QStringLiteral("failedElementIds")).toList());
-  wait->SendResult(
-      QJsonObject{{"deleted_ids", deleted}, {"failed_ids", failed}, {"message", message}});
+  // The photos that the delete left out (#1135): the mounted photos of a delete from the
+  // project, and the photos that a running task holds.
+  QJsonArray skipped =
+      QJsonArray::fromVariantList(result.value(QStringLiteral("keptMountedElementIds")).toList());
+  for (const QVariant& id : result.value(QStringLiteral("lockedElementIds")).toList()) {
+    skipped.push_back(QJsonValue::fromVariant(id));
+  }
+  wait->SendResult(QJsonObject{{"deleted_ids", deleted},
+                               {"failed_ids", failed},
+                               {"skipped_ids", skipped},
+                               {"message", message}});
 }
 
 /// Answers the library.thumbnails request of @p batch with every item.
@@ -401,14 +432,13 @@ auto PhotoInfoItem(ImagePoolService* image_pool, const SearchResultRow& row) -> 
 /// ImportExportHandler does not start it.
 void StartImportAndAnswer(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracker,
                           const std::vector<image_path_t>& paths, ImportCategoryMask allowed,
-                          AutomationReply&    reply,
-                          std::optional<bool> skip_duplicates = std::nullopt) {
+                          AutomationReply& reply) {
   if (paths.empty()) {
     // An import of zero supported files finishes with counts, not with an error.
     reply.SendResult(QJsonObject{{"task_id", tracker->RecordEmptyImport()}});
     return;
   }
-  host->import_export()->StartImportPaths(paths, false, allowed, skip_duplicates);
+  host->import_export()->StartImportPaths(paths, false, allowed);
   if (!host->import_export()->ImportRunning()) {
     SendAutomationOwnerError(reply, AutomationErrorCode::Rejected, host->project()->TaskStatus());
     return;
@@ -417,8 +447,7 @@ void StartImportAndAnswer(ui::ApplicationModuleHost* host, AutomationTaskTracker
 }
 
 void ImportFolder(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracker,
-                  const QString& folder, bool recursive, AutomationReply reply,
-                  std::optional<bool> skip_duplicates) {
+                  const QString& folder, bool recursive, AutomationReply reply) {
   if (!recursive) {
     std::vector<image_path_t> paths;
     const QFileInfoList       entries =
@@ -429,15 +458,14 @@ void ImportFolder(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracke
         paths.push_back(path);
       }
     }
-    StartImportAndAnswer(host, tracker, paths, kAllImportCategories, reply, skip_duplicates);
+    StartImportAndAnswer(host, tracker, paths, kAllImportCategories, reply);
     return;
   }
   // The recursive folder import of the GUI: the folder scan model, then StartFolderImport.
   ui::FolderImportScanModel* scan = host->import_export()->FolderScan();
   auto*                      wait = new AutomationCommandWait(std::move(reply), host);
   QObject::connect(
-      scan, &ui::FolderImportScanModel::ScanStateChanged, wait,
-      [host, tracker, scan, wait, skip_duplicates]() {
+      scan, &ui::FolderImportScanModel::ScanStateChanged, wait, [host, tracker, scan, wait]() {
         if (scan->Scanning()) {
           return;
         }
@@ -452,9 +480,7 @@ void ImportFolder(ui::ApplicationModuleHost* host, AutomationTaskTracker* tracke
           wait->SendResult(QJsonObject{{"task_id", tracker->RecordEmptyImport()}});
           return;
         }
-        host->import_export()->StartImportPaths(
-            scan->TakeFilePaths(), false,
-            static_cast<ImportCategoryMask>(scan->AllowedCategories()), skip_duplicates);
+        host->import_export()->StartFolderImport();
         if (!host->import_export()->ImportRunning()) {
           wait->SendOwnerError(AutomationErrorCode::Rejected, host->project()->TaskStatus());
           return;
@@ -761,7 +787,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   import_files.description = QStringLiteral(
       "Imports the files 'paths', or the supported files of 'folder' (with its subfolders when "
       "'recursive', the default), into the current folder of the open project. Returns a task "
-      "id for tasks.wait as soon as the import starts.");
+      "id for tasks.wait as soon as the import starts. A mounted current folder answers -32002 "
+      "(rejected) with data.error 'mounted_folder_structure_is_read_only': a mounted folder "
+      "takes its files from its disk directory.");
   import_files.changes_state = true;
   import_files.params_schema = AutomationClosedParamsSchema(QJsonObject{
       {"paths", QJsonObject{{"type", "array"},
@@ -769,25 +797,12 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
                             {"minItems", 1},
                             {"description", "Files to import."}}},
       {"folder", QJsonObject{{"type", "string"}, {"description", "A folder to import."}}},
-      {"skip_duplicates",
-       QJsonObject{
-           {"type", "boolean"},
-           {"description", "Override the saved duplicate-import preference for this request."}}},
       {"recursive", QJsonObject{{"type", "boolean"},
                                 {"default", true},
                                 {"description", "Include the subfolders of 'folder'."}}}});
   import_files.result_schema = AutomationObjectSchema(
       QJsonObject{{"task_id", QJsonObject{{"type", "string"}}}}, QJsonArray{"task_id"});
   import_files.handler = [host, tracker](const QJsonObject& params, AutomationReply reply) {
-    std::optional<bool> skip_duplicates;
-    if (params.contains("skip_duplicates")) {
-      if (!params.value("skip_duplicates").isBool()) {
-        SendAutomationParamError(reply, QStringLiteral("/skip_duplicates"),
-                                 QStringLiteral("must be a boolean"));
-        return;
-      }
-      skip_duplicates = params.value("skip_duplicates").toBool();
-    }
     const bool has_paths  = params.contains("paths");
     const bool has_folder = params.contains("folder");
     if (has_paths == has_folder) {
@@ -814,7 +829,18 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
                                QStringLiteral("the folder does not exist: %1").arg(folder));
       return;
     }
-    if (!AutomationEnteredProject(host, reply)) {
+    const auto project = AutomationEnteredProject(host, reply);
+    if (!project) {
+      return;
+    }
+    try {
+      project->GetSleeveService()->CheckFolderStructureEditable(
+          host->folders()->CurrentFolderFsPath());
+    } catch (const SleeveOperationError& refusal) {
+      const QString message = QString::fromUtf8(refusal.what());
+      reply.SendError(
+          AutomationErrorCode::Rejected, message,
+          SleeveRefusalData(QString::fromLatin1(SleeveErrorName(refusal.Code())), message));
       return;
     }
     if (host->import_export()->ImportRunning()) {
@@ -824,11 +850,10 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
     }
     if (has_paths) {
       // The caller named these files, so every importable category is allowed.
-      StartImportAndAnswer(host, tracker, paths, kAllImportCategories, reply, skip_duplicates);
+      StartImportAndAnswer(host, tracker, paths, kAllImportCategories, reply);
       return;
     }
-    ImportFolder(host, tracker, folder, params.value("recursive").toBool(true), std::move(reply),
-                 skip_duplicates);
+    ImportFolder(host, tracker, folder, params.value("recursive").toBool(true), std::move(reply));
   };
   RegisterOrFail(registry, std::move(import_files), &ok, error);
 
@@ -857,7 +882,13 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
                                 {"name", ""},
                                 {"path", PathText(ui::album_util::RootFsPath())},
                                 {"depth", 0}}};
-    AppendFolders(*browse, ui::album_util::RootFsPath(), *root_id, 1, &list);
+    try {
+      AppendFolders(*browse, *root_id, &list);
+    } catch (const std::exception&) {
+      SendAutomationOwnerError(reply, AutomationErrorCode::Failed,
+                               QStringLiteral("The folder tree cannot be read."));
+      return;
+    }
     reply.SendResult(QJsonObject{{"folders", list}});
   };
   RegisterOrFail(registry, std::move(folders), &ok, error);
@@ -1449,9 +1480,14 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   remove.description = QStringLiteral(
       "Deletes 'element_ids'. With scope 'project' the photos leave the project; this needs the "
       "root folder as the current folder. With scope 'album' they leave the current album. "
-      "Answers -32002 (rejected) while a task holds the photos: a mark, rating, or paste "
-      "adjustments batch that is saving, or another delete. Send it again after tasks.wait. "
-      "Other start failures answer -32007 (failed).");
+      "A photo that a task holds (a mark, rating, or paste adjustments batch that is saving) "
+      "and a mounted photo in a delete from the project stay; 'skipped_ids' lists them, and the "
+      "other photos are deleted. Answers -32002 (rejected) when a task holds every photo or "
+      "another delete runs. Send it again after tasks.wait. A delete that the mounted folder "
+      "rules refuse for every photo answers -32002 with data.error "
+      "'mounted_folder_structure_is_read_only', 'mounted_photo_is_present', or "
+      "'mounted_photo_is_missing'; the Delete mark stays available. Other start failures answer "
+      "-32007 (failed).");
   remove.changes_state = true;
   remove.params_schema = AutomationClosedParamsSchema(
       QJsonObject{
@@ -1460,8 +1496,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
       QJsonArray{"element_ids", "scope"});
   remove.result_schema =
       AutomationObjectSchema(QJsonObject{{"deleted_ids", QJsonObject{{"type", "array"}}},
-                                         {"failed_ids", QJsonObject{{"type", "array"}}}},
-                             QJsonArray{"deleted_ids", "failed_ids"});
+                                         {"failed_ids", QJsonObject{{"type", "array"}}},
+                                         {"skipped_ids", QJsonObject{{"type", "array"}}}},
+                             QJsonArray{"deleted_ids", "failed_ids", "skipped_ids"});
   remove.handler = [host](const QJsonObject& params, AutomationReply reply) {
     const auto project = AutomationEnteredProject(host, reply);
     if (!project) {
@@ -1503,6 +1540,9 @@ auto RegisterAutomationLibraryCommands(AutomationCommandRegistry& registry,
   };
   RegisterOrFail(registry, std::move(remove), &ok, error);
 
+  if (ok && !RegisterAutomationMountCommands(registry, host, error)) {
+    ok = false;
+  }
   return ok;
 }
 

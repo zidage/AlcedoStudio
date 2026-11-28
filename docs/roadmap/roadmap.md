@@ -35,10 +35,6 @@
 
 ## Still Planned
 
-- [ ] Skip duplicate imports by normalized full source path and byte size, with a
-      default-on preference in Settings > Default Behavior. Preserve edits and ratings when a source
-      changes size, refresh affected views, and accept undetected same-size changes; see the
-      [Import Duplicate Skipping Plan](alcedo_studio/storage/import_duplicate_skipping_plan.md).
 - [ ] Add Project Maintenance below Background Tasks to scan and review duplicate, missing, and
       invalid project entries, then remove selected eligible entries after a verified backup; see
       the [Project Maintenance Plan](alcedo_studio/storage/project_maintenance_plan.md).

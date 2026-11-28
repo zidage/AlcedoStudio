@@ -166,10 +166,12 @@ auto RequireObject(const json& model_json, std::string_view field, std::string* 
 // ---------------------------------------------------------------------------------------------
 // raw_decode: demosaic method and highlight reconstruction of a RAW document.
 
+// Labels of AI Denoise integration plan, DN7: `Auto` resolves from the CFA; `Neural` is the
+// DemosaicNet student on the GPU (the model of AI Denoise runs on the Apple Neural Engine).
 constexpr std::array kRawMethodOptions = {
-    EditorParameterOption{"default", "Default"},
+    EditorParameterOption{"default", "Auto"},
     EditorParameterOption{"legacy", "Legacy"},
-    EditorParameterOption{"neural_engine", "Neural Engine"},
+    EditorParameterOption{"neural_engine", "Neural"},
 };
 
 constexpr std::array kRawDecodeProperties = {

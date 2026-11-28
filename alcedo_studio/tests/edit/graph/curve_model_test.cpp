@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <stdexcept>
 #include <vector>
 
 #include "json.hpp"
@@ -15,6 +16,14 @@ namespace {
 
 const std::vector<CurvePoint> kRgbCurve{{0.0f, 0.0f}, {0.25f, 0.18f}, {0.6f, 0.7f}, {1.0f, 1.0f}};
 const std::vector<CurvePoint> kBlueCurve{{0.0f, 0.05f}, {0.5f, 0.42f}, {1.0f, 0.95f}};
+
+auto RgbCurveJson() -> nlohmann::json {
+  nlohmann::json points = nlohmann::json::array();
+  for (const auto& point : kRgbCurve) {
+    points.push_back({{"x", point.x}, {"y", point.y}});
+  }
+  return points;
+}
 
 TEST(CurveModelTest, IdentityChannelCurvesEncodeWithoutTheChannelKeys) {
   CurveModel model;
@@ -96,6 +105,31 @@ TEST(CurveModelTest, ApplyChangesOnlyTheGivenCurvesInOneRevision) {
   reset_blue.blue = std::vector<CurvePoint>{};
   model.ApplyUpdate(reset_blue);
   EXPECT_EQ(model.ChannelPoints(CurveChannel::Blue), IdentityCurvePoints());
+}
+
+// A curve that LoadJson accepts is a valid spline input, so a stored or transferred curve never
+// fails at render (#1095). A refused load changes no point.
+TEST(CurveModelTest, LoadRefusesCurvesThatTheSplineSolverRefuses) {
+  CurveModel model;
+  model.SetPoints(kRgbCurve);
+  const auto before = model.ToJson();
+
+  nlohmann::json too_many = nlohmann::json::array();
+  for (int index = 0; index <= 16; ++index) {
+    too_many.push_back({{"x", index / 16.0}, {"y", index / 16.0}});
+  }
+  EXPECT_THROW(model.LoadJson({{"points", too_many}}), std::invalid_argument);
+  const auto unordered = nlohmann::json::array({{{"x", 0.6}, {"y", 0.0}}, {{"x", 0.2}, {"y", 1.0}}});
+  EXPECT_THROW(model.LoadJson({{"points", unordered}}), std::invalid_argument);
+  const auto above_float = nlohmann::json::array({{{"x", 0.0}, {"y", 1e39}}, {{"x", 1.0}, {"y", 1.0}}});
+  EXPECT_THROW(model.LoadJson({{"points", above_float}}), std::invalid_argument);
+  EXPECT_THROW(model.LoadJson({{"points", RgbCurveJson()}, {"blue", unordered}}),
+               std::invalid_argument);
+  EXPECT_EQ(model.ToJson(), before);
+
+  too_many.erase(too_many.size() - 1);
+  EXPECT_NO_THROW(model.LoadJson({{"points", too_many}}));
+  EXPECT_EQ(model.Points().size(), 16U);
 }
 
 }  // namespace

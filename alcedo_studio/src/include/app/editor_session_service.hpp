@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
@@ -36,10 +37,12 @@
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/input/ai_denoise_error.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/runtime/curve_input_histogram.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "json.hpp"
 #include "sidecar_client/dto/segmentation.hpp"
 
@@ -141,8 +144,19 @@ struct EditorLutPreviewRequest {
   EditorLutWrite write;
 };
 
-/// Terminal state of one LUT preview request.
-enum class EditorLutPreviewStatus : std::uint8_t {
+/// One preset browser preview (edit presets plan 2.4): the import root of the open image with one
+/// preset, and the sensor settings of the current Version.
+struct EditorPresetPreviewRequest {
+  /// Image the caller keys the preview with. The session refuses the request (Rejected) when
+  /// the open image is another one, so a preview is never stored under the wrong image.
+  image_id_t                                       image_id = 0;
+  /// The checked package of the preset (PresetLibraryService::PackageFor). Immutable and shared
+  /// with the package cache of the preset library; the session only reads it.
+  std::shared_ptr<const AdjustmentTransferPackage> package;
+};
+
+/// Terminal state of one browser tile preview request (LUT or preset).
+enum class EditorBrowserPreviewStatus : std::uint8_t {
   /// The preview rendered.
   Completed,
   /// The session cannot render the open image now; the message says why.
@@ -151,16 +165,20 @@ enum class EditorLutPreviewStatus : std::uint8_t {
   Failed,
 };
 
-/// One rendered LUT preview.
-struct EditorLutPreviewResult {
-  EditorLutPreviewStatus status = EditorLutPreviewStatus::Failed;
-  std::string            message;
+/// One rendered browser tile preview.
+struct EditorBrowserPreviewResult {
+  EditorBrowserPreviewStatus status = EditorBrowserPreviewStatus::Failed;
+  std::string                message;
   /// Host pixels of the preview; set only when Completed.
-  RenderedPipelineImage  image;
+  RenderedPipelineImage      image;
+  /// Preset previews: PresetPreviewSensorKey of the working document whose sensor settings the
+  /// preview document took. Set when the session built the document; empty for a LUT preview.
+  std::string                sensor_key;
 };
 
-/// Receives the outcome of RenderLutPreview, once, on the session owner or the render worker.
-using EditorLutPreviewCompletion = std::function<void(EditorLutPreviewResult result)>;
+/// Receives the outcome of RenderLutPreview or RenderPresetPreview, once, on the session owner
+/// or the render worker.
+using EditorBrowserPreviewCompletion = std::function<void(EditorBrowserPreviewResult result)>;
 
 /**
  * @brief Outcome of one OpenAiMaskEdit request (SM5 section 7.3).
@@ -300,14 +318,6 @@ class IEditorSessionBackend {
     return result;
   }
   virtual auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult   = 0;
-  /// Save the current document and reload the matching source without changing its history.
-  /// Backends without source loading report an explicit unsupported operation.
-  virtual auto ReloadSource(sl_element_id_t, image_id_t) -> EditorSessionResult {
-    EditorSessionResult result;
-    result.kind    = EditorSessionResultKind::Rejected;
-    result.message = "Source reload is not supported by this backend";
-    return result;
-  }
   virtual auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult = 0;
   /// Check out another Version on the open image after a save checkpoint.
   virtual auto CheckoutVersion(const version_ref_id_t& /*version_id*/) -> EditorSessionResult {
@@ -688,17 +698,38 @@ class IEditorSessionBackend {
    *
    * Builds the preview document from the import root of the open image
    * (IEditorHistoryPort::BuildLutPreviewDocument) and renders it with the image render port at
-   * the LUT preview size (MakeLutPreviewRenderRequest), after the image jobs accepted before it.
-   * Edits of the image do not change the document. Presents nothing and writes nothing.
+   * the browser preview size (MakeBrowserPreviewRenderRequest), after the image jobs accepted
+   * before it. Edits of the image do not change the document. Presents nothing and writes nothing.
    * @return Rejected only when the command queue refuses the command. Every other outcome,
    *         including a refusal on the owner, reaches @p on_complete exactly once.
    */
   virtual auto RenderLutPreview(EditorLutPreviewRequest /*request*/,
-                                EditorLutPreviewCompletion /*on_complete*/) -> EditorSessionResult {
+                                EditorBrowserPreviewCompletion /*on_complete*/)
+      -> EditorSessionResult {
     EditorSessionResult result;
     result.kind    = EditorSessionResultKind::Rejected;
     result.state   = state();
     result.message = "LUT previews are not supported by this backend";
+    return result;
+  }
+  /**
+   * @brief Render the preset browser preview of @p request (edit presets plan 2.4).
+   *
+   * Builds the preview document from the import root of the open image with the preset applied
+   * by the Paste planner and the sensor settings of the working document
+   * (IEditorHistoryPort::BuildPresetPreviewDocument), and renders it as RenderLutPreview does.
+   * The result carries the sensor key of the working document that the session used. Presents
+   * nothing and writes nothing.
+   * @return Rejected only when the command queue refuses the command. Every other outcome,
+   *         including a refusal on the owner, reaches @p on_complete exactly once.
+   */
+  virtual auto RenderPresetPreview(EditorPresetPreviewRequest /*request*/,
+                                   EditorBrowserPreviewCompletion /*on_complete*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.state   = state();
+    result.message = "Preset previews are not supported by this backend";
     return result;
   }
   /**
@@ -869,6 +900,17 @@ class IEditorSessionBackend {
     return {};
   }
   [[nodiscard]] virtual auto first_frame_time_ms() const -> double { return -1.0; }
+  /// The AI Denoise error of the last frame of the open photo (integration plan, DN7); a change
+  /// notifies the change notifier. Default fakes have none.
+  [[nodiscard]] virtual auto ai_denoise_error() const -> std::optional<AiDenoiseRenderError> {
+    return std::nullopt;
+  }
+  /// The step of the render of the open photo that reads the RAW file or runs the AI Denoise
+  /// model (AI Denoise plan, DN14); a change notifies the render progress observer. Default
+  /// fakes have none.
+  [[nodiscard]] virtual auto render_progress() const -> std::optional<RenderProgress> {
+    return std::nullopt;
+  }
 
  protected:
   [[nodiscard]] auto RejectComparison(std::string message) const -> EditorSessionResult {
@@ -1031,8 +1073,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   void SetSuspendedForGpuRelease(bool suspended) override;
 
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
-  auto ReloadSource(sl_element_id_t element_id, image_id_t image_id)
-      -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto CheckoutVersion(const version_ref_id_t& version_id) -> EditorSessionResult override;
   /// Phase 7A: create a root Version and check it out.
@@ -1138,7 +1178,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto RenderAiMaskAnalysisImage(EditorAiMaskAnalysisContent    content,
                                  EditorAiMaskAnalysisCompletion on_complete)
       -> EditorSessionResult override;
-  auto RenderLutPreview(EditorLutPreviewRequest request, EditorLutPreviewCompletion on_complete)
+  auto RenderLutPreview(EditorLutPreviewRequest request, EditorBrowserPreviewCompletion on_complete)
+      -> EditorSessionResult override;
+  auto RenderPresetPreview(EditorPresetPreviewRequest     request,
+                           EditorBrowserPreviewCompletion on_complete)
       -> EditorSessionResult override;
   auto               OpenAiMaskEdit(const NodeId& grade_id, std::optional<MaskId> mask_id,
                                     EditorAiMaskEditOpenCompletion on_complete) -> EditorSessionResult override;
@@ -1178,6 +1221,12 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto render_diagnostics() const -> EditorRenderCoordinatorDiagnostics override {
     return render_.render_diagnostics();
   }
+  [[nodiscard]] auto ai_denoise_error() const -> std::optional<AiDenoiseRenderError> override {
+    return render_.ai_denoise_error();
+  }
+  [[nodiscard]] auto render_progress() const -> std::optional<RenderProgress> override {
+    return render_.render_progress();
+  }
   [[nodiscard]] auto first_frame_time_ms() const -> double override {
     return render_.first_frame_time_ms();
   }
@@ -1191,9 +1240,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   void NotifyRenderResult(const EditorRenderResult& render_result);
 
  private:
-  /// Route normal opens and explicit source reloads through the same owner and save boundary.
-  auto OpenOrReload(sl_element_id_t element_id, image_id_t image_id, bool reload_source)
-      -> EditorSessionResult;
   using CommandReducer = std::function<EditorSessionResult(const EditorSessionCommand&)>;
 
   /// Submit a typed command and reduce it on the session owner thread. The
@@ -1223,6 +1269,24 @@ class EditorSessionService final : public IEditorSessionBackend {
    */
   auto CloseComparisonOnOwner(bool refresh_current_view, std::optional<ViewportRenderRegion> region)
       -> bool;
+  /// Builds the document of one browser tile preview from the working preview @p current: sets
+  /// @p preview, and @p sensor_key for a preset preview; false with @p error set on failure.
+  using BrowserPreviewDocumentBuilder =
+      std::function<bool(const std::shared_ptr<const PipelineGraphSnapshot>& current,
+                         std::shared_ptr<const PipelineGraphSnapshot>*       preview,
+                         std::string* sensor_key, std::string* error)>;
+  /**
+   * @brief Render one browser tile preview of image @p image_id on the owner thread.
+   *
+   * Checks the session (interactive, history held, image port, requested image), builds the
+   * document with @p build, and schedules it on the image render port at the browser preview size.
+   * Every outcome reaches @p on_complete exactly once. @p noun names the preview in messages
+   * ("LUT preview", "preset preview").
+   */
+  auto RenderBrowserPreviewOnOwner(image_id_t image_id, std::string_view noun,
+                                   const BrowserPreviewDocumentBuilder& build,
+                                   EditorBrowserPreviewCompletion       on_complete)
+      -> EditorSessionResult;
   /// End the open AI Mask edit on the owner thread and release its lease. Returns true when one
   /// was open.
   auto               EndAiMaskEditOnOwner() -> bool;
@@ -1433,6 +1497,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   bool                                           published_input_sequence_open_ = false;
   std::atomic<bool>                              consume_wakeup_posted_{false};
   bool                                           last_published_render_busy_ = false;
+  std::optional<RenderProgress>                  last_published_render_progress_;
   /// When the last frame finished (ready, failed, or cancelled); preview diagnostics only.
   std::atomic<std::int64_t>                      last_frame_finished_ns_{0};
   std::vector<EditorSessionResult>               results_;

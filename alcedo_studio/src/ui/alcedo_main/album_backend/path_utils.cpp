@@ -84,6 +84,22 @@ auto InputToPath(const QString& raw) -> std::optional<std::filesystem::path> {
 #endif
 }
 
+auto MountPointDisplay(const std::filesystem::path& mount_point) -> QString {
+  if (mount_point.empty()) {
+    return {};
+  }
+  const auto normal = mount_point.lexically_normal();
+  // A drive (`E:\`) shows as `E:`.
+  if (!normal.root_name().empty() && normal.relative_path().empty()) {
+    return PathToQString(normal.root_name());
+  }
+  QString text = PathToQString(normal);
+  while (text.size() > 1 && (text.endsWith(QLatin1Char('/')) || text.endsWith(QLatin1Char('\\')))) {
+    text.chop(1);
+  }
+  return text;
+}
+
 auto FolderPathToDisplay(const std::filesystem::path& path) -> QString {
   if (path.empty()) {
     return RootPathText();

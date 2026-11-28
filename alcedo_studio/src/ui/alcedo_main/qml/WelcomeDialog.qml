@@ -6,7 +6,7 @@ import QtQuick.Effects
 // Welcome surface (DESIGN.md "Welcome surface", welcome overview plan section 3).
 // A modal two-column card over the blurred shell:
 //   left   - wordmark, description, Open Project…, New Project…; at the bottom
-//            the language selector, Settings, and Quit.
+//            the language selector and Quit.
 //   right  - "overview": the previewed project (WelcomeProjectOverview) and the
 //            other recent projects (WelcomeRecentProjectList);
 //            "empty": the first-project well when no recent project exists;
@@ -29,6 +29,8 @@ Dialog {
     y: 0
 
     property Item blurSource: null
+    // Main window: a drag on the backdrop around the card moves it.
+    property var windowHost: null
     property var adapter: null
     property var recentProjects: []
     property var languageOptions: []
@@ -70,7 +72,6 @@ Dialog {
     signal openRequested()
     signal createRequested(string storageLocation, string projectName)
     signal exitRequested()
-    signal settingsRequested()
     signal languageRequested(string languageCode)
     signal acceleratorWarningAcknowledged()
 
@@ -301,6 +302,11 @@ Dialog {
             onTriggered: dialog.updateService.CheckForUpdates()
         }
 
+        WindowBackdropDragArea {
+            host: dialog.windowHost
+            card: shell
+        }
+
         Rectangle {
             id: shell
             objectName: "welcomeCard"
@@ -324,7 +330,7 @@ Dialog {
             readonly property real columnGap: appTheme.spaceXl + appTheme.spaceXs
 
             // The items are declared in Tab order (section 3.7): left column
-            // actions, the right column, then the language selector, Settings, and Quit.
+            // actions, the right column, then the language selector and Quit.
 
             // Left column, upper part: wordmark, description, project actions.
             ColumnLayout {
@@ -543,7 +549,7 @@ Dialog {
                 }
             }
 
-            // Left column, footer: divider, language selector, Settings, Quit.
+            // Left column, footer: divider, language selector, Quit.
             ColumnLayout {
                 x: sidebarTop.x
                 width: sidebarTop.width
@@ -661,14 +667,6 @@ Dialog {
 
                     Item {
                         Layout.fillWidth: true
-                    }
-
-                    WelcomeActionButton {
-                        objectName: "welcomeSettingsButton"
-                        kind: "quiet"
-                        compact: true
-                        text: qsTr("Settings")
-                        onClicked: dialog.settingsRequested()
                     }
 
                     WelcomeActionButton {

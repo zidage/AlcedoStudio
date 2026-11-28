@@ -46,6 +46,20 @@ Item {
     property string physicalUnit: recipeDefaults.print_unit
     property string dpiText: String(recipeDefaults.dpi)
 
+    // The AI Models page, from Manage of an item whose AI Denoise model is not installed.
+    signal aiModelsPageRequested()
+    // A refusal or a failure of Turn Off AI Denoise, for the snackbar of the window.
+    signal messageRequested(string message)
+
+    Connections {
+        target: appModules.exportAiDenoise
+        ignoreUnknownSignals: true
+        function onTurnOffFinished(result) {
+            if (result && result.message)
+                root.messageRequested(result.message)
+        }
+    }
+
     readonly property int queuePreviewLimit: 36
     readonly property int queueListMaxHeight: 180
     readonly property bool settingsValid: exportRecipe.ValidateOptions(root.recipeOptions()).valid
@@ -186,14 +200,38 @@ Item {
         return String(value)
     }
 
-    function exportStatusText(status) {
+    // The AI Denoise error {kind, text} of a row whose status is ai_denoise (DN8).
+    function aiDenoiseErrorForRow(statusKey) {
+        const map = appModules.importExport.exportItemAiDenoiseErrors
+        return statusKey && map && map[statusKey] ? map[statusKey] : ({})
+    }
+
+    // The titles of the editor error card (EditorAiDenoiseErrorCard).
+    function aiDenoiseErrorTitle(kind) {
+        switch (kind) {
+        case "model_not_installed":
+            return qsTr("AI Denoise model not installed")
+        case "device_too_slow":
+            return qsTr("This GPU is too slow for AI Denoise")
+        case "sensor_not_supported":
+            return qsTr("AI Denoise does not support this sensor")
+        default:
+            return qsTr("AI Denoise failed")
+        }
+    }
+
+    function exportStatusText(status, statusKey) {
         switch (status) {
+        case "ai_denoise":
+            return root.aiDenoiseErrorTitle(String(root.aiDenoiseErrorForRow(statusKey).kind || ""))
         case "running":
             return qsTr("Exporting")
         case "succeeded":
             return qsTr("Done")
         case "failed":
             return qsTr("Failed")
+        case "missing":
+            return qsTr("Missing")
         default:
             return qsTr("Queued")
         }
@@ -206,6 +244,8 @@ Item {
         case "succeeded":
             return appTheme.backgroundTaskFinishedColor
         case "failed":
+        case "missing":
+        case "ai_denoise":
             return appTheme.backgroundTaskFailedColor
         default:
             return appTheme.textMutedColor
@@ -1201,6 +1241,7 @@ Item {
                                         }
 
                                         RowLayout {
+                                            Layout.fillWidth: true
                                             spacing: appTheme.spaceXs
                                             visible: !summaryRow
 
@@ -1212,10 +1253,53 @@ Item {
                                             }
 
                                             Label {
-                                                text: root.exportStatusText(itemStatus)
+                                                Layout.fillWidth: true
+                                                text: root.exportStatusText(itemStatus,
+                                                                            modelData.statusKey)
+                                                wrapMode: Text.Wrap
                                                 color: root.exportStatusColor(itemStatus)
                                                 font.family: appTheme.uiFontFamily
                                                 font.pixelSize: appTheme.fontSizeCaption
+                                            }
+                                        }
+
+                                        // Turn Off AI Denoise of an item whose model run failed, and
+                                        // Manage for a missing model (AI Denoise plan, DN8).
+                                        RowLayout {
+                                            readonly property string errorKind: String(
+                                                root.aiDenoiseErrorForRow(modelData.statusKey).kind || "")
+                                            spacing: appTheme.spaceXs
+                                            visible: !summaryRow && itemStatus === "ai_denoise"
+
+                                            DialogActionButton {
+                                                objectName: "exportQueueManageAiModelsButton"
+                                                visible: parent.errorKind === "model_not_installed"
+                                                kind: "normal"
+                                                text: qsTr("Manage")
+                                                buttonWidth: contentItem.implicitWidth + 2 * appTheme.spaceSm
+                                                buttonHeight: appTheme.iconButtonHitSizeCompact
+                                                buttonRadius: appTheme.controlRadiusSmall
+                                                font.pixelSize: appTheme.fontSizeCaption
+                                                onClicked: root.aiModelsPageRequested()
+                                            }
+
+                                            DialogActionButton {
+                                                objectName: "exportQueueTurnOffAiDenoiseButton"
+                                                kind: "normal"
+                                                enabled: root.controlsEnabled
+                                                         && appModules.exportAiDenoise.running !== true
+                                                text: qsTr("Turn Off AI Denoise")
+                                                buttonWidth: contentItem.implicitWidth + 2 * appTheme.spaceSm
+                                                buttonHeight: appTheme.iconButtonHitSizeCompact
+                                                buttonRadius: appTheme.controlRadiusSmall
+                                                font.pixelSize: appTheme.fontSizeCaption
+                                                onClicked: {
+                                                    const elementId = Number(String(modelData.statusKey).split(":")[0])
+                                                    const result = appModules.exportAiDenoise
+                                                                   .turnOffForExportItem(elementId)
+                                                    if (result && result.started !== true && result.message)
+                                                        root.messageRequested(result.message)
+                                                }
                                             }
                                         }
                                     }

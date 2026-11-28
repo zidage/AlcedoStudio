@@ -1,88 +1,61 @@
-// Copyright 2026 Yurun Zi
-// SPDX-License-Identifier: GPL-3.0-only
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
 #include "storage/store/image/source_file_store.hpp"
 
-#include <array>
+#include <algorithm>
 #include <stdexcept>
-#include <variant>
+#include <utility>
+#include <vector>
 
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
-#include "utils/file/source_image_path.hpp"
-#include "utils/string/convert.hpp"
+#include "storage/mapper/image/source_file_mapper.hpp"
 
 namespace alcedo {
-namespace expr = duckorm::expr;
 
-auto SourceFileStore::FindBindings(const std::set<std::wstring>& paths)
-    -> std::map<std::wstring, std::vector<SourceFileBinding>> {
-  std::map<std::wstring, std::vector<SourceFileBinding>> matches;
-  if (paths.empty()) return matches;
-  auto                                        guard = database_.GetConnectionGuard();
-  auto                                        lock  = guard.Lock();
-  const std::array<duckorm::DuckFieldDesc, 5> fields{
-      {{"id", duckorm::DuckDBType::INT64, 0},
-       {"image_path", duckorm::DuckDBType::STRING, 0},
-       {"file_id", duckorm::DuckDBType::INT64, 0},
-       {"byte_size", duckorm::DuckDBType::UINT64, 0},
-       {"source_id", duckorm::DuckDBType::NULLABLE_INT64, 0}}};
-  const auto rows = duckorm::select_by_query(
-      guard.conn_, fields, fields.size(),
-      "SELECT DISTINCT i.id, i.image_path, f.file_id, s.byte_size, s.image_id "
-      "FROM Image i JOIN FileImage f ON f.image_id = i.id "
-      "JOIN PipelineRoot r ON r.element_id = f.file_id "
-      "LEFT JOIN ImageSourceSize s ON s.image_id = i.id");
-  for (const auto& row : rows) {
-    const auto path = image_path_t(conv::FromBytes(duckorm::cell_text(row[1])));
-    if (!path.is_absolute()) continue;
-    auto normalized = NormalizeSourceImagePath(path);
-    if (!paths.contains(normalized)) continue;
-    const auto size = std::get<std::optional<int64_t>>(row[4])
-                          ? std::optional<uint64_t>(std::get<uint64_t>(row[3]))
-                          : std::nullopt;
-    matches[normalized].push_back({static_cast<image_id_t>(std::get<int64_t>(row[0])),
-                                   static_cast<sl_element_id_t>(std::get<int64_t>(row[2])), size});
+void SourceFileStore::UpsertSourceFiles(std::span<const SourceFileRecord> records) {
+  if (records.empty()) {
+    return;
   }
-  return matches;
-}
+  std::vector<SourceFileMapperParams> rows;
+  std::vector<sl_element_id_t>        element_ids;
+  rows.reserve(records.size());
+  element_ids.reserve(records.size());
+  for (const auto& record : records) {
+    rows.push_back(SourceFileMapper::ToParams(record));
+    element_ids.push_back(record.element_id);
+  }
+  std::sort(element_ids.begin(), element_ids.end());
+  if (std::adjacent_find(element_ids.begin(), element_ids.end()) != element_ids.end()) {
+    throw std::invalid_argument("SourceFileStore: two source records name one element");
+  }
 
-void SourceFileStore::RecordSizes(std::span<const std::pair<image_id_t, uint64_t>> sizes) {
-  if (sizes.empty()) return;
-  std::string ids;
-  std::string values;
-  for (const auto& [id, size] : sizes) {
-    if (!ids.empty()) {
-      ids += ',';
-      values += ',';
-    }
-    ids += std::to_string(id);
-    values += '(' + std::to_string(id) + ',' + std::to_string(size) + ')';
-  }
-  auto                 guard = database_.GetConnectionGuard();
-  auto                 lock  = guard.Lock();
+  auto                 guard   = database_.GetConnectionGuard();
+  auto                 db_lock = guard.Lock();
   duckorm::Transaction transaction(guard.conn_);
-  const auto           count = duckorm::select_int64(
-      guard.conn_, expr::raw("SELECT count(DISTINCT i.id) FROM Image i "
-                             "JOIN FileImage f ON f.image_id = i.id WHERE i.id IN (" +
-                             ids + ')'));
-  if (count.value_or(0) != static_cast<int64_t>(sizes.size())) {
-    throw std::runtime_error("Source size requires distinct live image bindings");
-  }
-  duckorm::execute(guard.conn_, expr::raw("INSERT INTO ImageSourceSize VALUES " + values +
-                                          " ON CONFLICT(image_id) DO UPDATE "
-                                          "SET byte_size = excluded.byte_size"));
+  SourceFileMapper(guard.conn_).UpsertParamsRows(rows);
   transaction.commit();
 }
 
-void SourceFileStore::Remove(std::span<const image_id_t> ids) {
-  if (ids.empty()) return;
-  std::string list;
-  for (auto id : ids) {
-    if (!list.empty()) list += ',';
-    list += std::to_string(id);
+auto SourceFileStore::ReadSourceFile(sl_element_id_t element_id) const
+    -> std::optional<SourceFileRecord> {
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  auto row     = SourceFileMapper(guard.conn_).GetById(element_id);
+  if (!row.has_value()) {
+    return std::nullopt;
   }
-  auto guard = database_.GetConnectionGuard();
-  auto lock  = guard.Lock();
-  duckorm::execute(guard.conn_,
-                   expr::raw("DELETE FROM ImageSourceSize WHERE image_id IN (" + list + ')'));
+  return SourceFileMapper::FromParams(std::move(*row));
 }
+
+void SourceFileStore::RemoveSourceFiles(std::span<const sl_element_id_t> element_ids) {
+  if (element_ids.empty()) {
+    return;
+  }
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  SourceFileMapper(guard.conn_).RemoveByIds(element_ids);
+}
+
 }  // namespace alcedo

@@ -1082,7 +1082,7 @@ TEST_F(FilterServiceTests, FolderIndexTest_DateRange) {
   EXPECT_EQ(result_opt->size(), 7u);
 }
 
-TEST_F(FilterServiceTests, ListFilesInFolderByIdMatchesPathBasedList) {
+TEST_F(FilterServiceTests, ListFilesInFolderByIdMatchesTheSleeveFolderFiles) {
   if (!BatchFixturesAvailable()) {
     GTEST_SKIP() << "No filter RAW fixtures available in raw/batch/";
   }
@@ -1098,17 +1098,16 @@ TEST_F(FilterServiceTests, ListFilesInFolderByIdMatchesPathBasedList) {
       [](FileSystem& fs) { return fs.Get(L"/", false); });
   ASSERT_NE(root_folder, nullptr);
 
-  const auto path_based = browse->ListFilesInFolder(std::filesystem::path(L"/"));
-  const auto id_based   = browse->ListFilesInFolderById(root_folder->element_id_);
-  ASSERT_EQ(path_based.size(), id_based.size());
+  // The files of the folder in the sleeve file system (store rows plus pending changes).
+  const auto sleeve_ids = sleeve_service->Read<std::vector<sl_element_id_t>>(
+      [&root_folder](FileSystem& fs) { return fs.ListFileIds(root_folder->element_id_); });
+  const auto id_based = browse->ListFilesInFolderById(root_folder->element_id_);
+  ASSERT_EQ(sleeve_ids.size(), id_based.size());
 
-  std::unordered_set<sl_element_id_t> path_ids;
-  for (const auto& f : path_based) {
-    path_ids.insert(f.file_id_);
-  }
+  const std::unordered_set<sl_element_id_t> folder_ids(sleeve_ids.begin(), sleeve_ids.end());
   for (const auto& f : id_based) {
-    EXPECT_TRUE(path_ids.contains(f.file_id_))
-        << "DB-first result file_id " << f.file_id_ << " not in path-based list";
+    EXPECT_TRUE(folder_ids.contains(f.file_id_))
+        << "DB-first result file_id " << f.file_id_ << " not in the folder files";
   }
 }
 

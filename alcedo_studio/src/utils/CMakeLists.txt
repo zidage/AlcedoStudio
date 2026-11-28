@@ -6,14 +6,6 @@ def_library(TimeProvider
     SOURCES ${ALCEDO_SRC_ROOT}/utils/clock/time_provider.cpp
 )
 
-def_library(SourceImageFile
-    SOURCES
-        ${ALCEDO_SRC_ROOT}/utils/file/source_image_path.cpp
-        ${ALCEDO_SRC_ROOT}/utils/file/source_image_status.cpp
-        ${ALCEDO_SRC_ROOT}/utils/file/source_file_reader.cpp
-    PUBLIC_DEPS Qt6::Core
-)
-
 # Qt-free logging of the core libraries (utils/logging/log.hpp). On Windows it is a DLL: the CUDA
 # implementation libraries are DLLs too, and every module must share one handler and one set of
 # enabled levels. A static copy in each DLL would keep the default stderr handler there.
@@ -100,3 +92,38 @@ def_library(LutMetadata
     PUBLIC_DEPS Qt6::Core
     PRIVATE_DEPS JSON ThreadPool
 )
+
+# Shared read-only utilities for source path normalization, attributes, fingerprints, directory
+# listings, and volume identity.
+set(ALCEDO_SOURCE_FILE_UTILS_SOURCES
+    ${ALCEDO_SRC_ROOT}/utils/file/source_file.cpp
+    ${ALCEDO_SRC_ROOT}/utils/file/source_image_status.cpp
+    ${ALCEDO_SRC_ROOT}/utils/file/source_file_fingerprint.cpp
+    ${ALCEDO_SRC_ROOT}/utils/file/mount_directory_listing.cpp
+    ${ALCEDO_SRC_ROOT}/include/utils/file/source_file_fingerprint.hpp
+    ${ALCEDO_SRC_ROOT}/include/utils/file/mount_directory_listing.hpp
+    ${ALCEDO_SRC_ROOT}/include/utils/file/volume_identity.hpp
+)
+if(WIN32)
+    list(APPEND ALCEDO_SOURCE_FILE_UTILS_SOURCES
+        ${ALCEDO_SRC_ROOT}/utils/file/volume_identity_windows.cpp)
+elseif(APPLE)
+    list(APPEND ALCEDO_SOURCE_FILE_UTILS_SOURCES
+        ${ALCEDO_SRC_ROOT}/utils/file/volume_identity_macos.mm)
+    set_source_files_properties(${ALCEDO_SRC_ROOT}/utils/file/volume_identity_macos.mm
+        PROPERTIES LANGUAGE OBJCXX COMPILE_FLAGS "-fobjc-arc")
+else()
+    list(APPEND ALCEDO_SOURCE_FILE_UTILS_SOURCES
+        ${ALCEDO_SRC_ROOT}/utils/file/volume_identity_linux.cpp)
+endif()
+def_library(SourceFileUtils
+    SOURCES ${ALCEDO_SOURCE_FILE_UTILS_SOURCES}
+    PUBLIC_DEPS xxHash
+    PRIVATE_DEPS Qt6::Core
+)
+if(WIN32)
+    # WNetGetConnectionW: the share of a mapped network drive.
+    target_link_libraries(SourceFileUtils PRIVATE mpr)
+elseif(APPLE)
+    target_link_libraries(SourceFileUtils PRIVATE "-framework Foundation")
+endif()

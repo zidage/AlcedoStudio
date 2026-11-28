@@ -1301,6 +1301,28 @@ auto AppTheme::editorScopeHeight() const -> int { return 192; }
 auto AppTheme::editorScopeHeightMin() const -> int { return 160; }
 // EXIF caption line + spaceXs + compact Mask-tool hit row (DESIGN.md).
 auto AppTheme::editorAdjustmentHeaderMinHeight() const -> int { return 58; }
+// Viewport render alert (DESIGN.md "Viewport render alert", #1056). The alert stands on the
+// blurred viewport: a black scrim keeps white text readable over a bright photo, and the
+// secondary text and the detail well are tints of it, not panel surfaces.
+auto AppTheme::viewportAlertWidth() const -> int { return 380; }
+auto AppTheme::viewportAlertButtonHeight() const -> int { return 32; }
+auto AppTheme::viewportAlertDetailMaxLines() const -> int { return 8; }
+auto AppTheme::viewportAlertCopiedMs() const -> int { return 1500; }
+auto AppTheme::viewportAlertScrimColor() const -> QColor { return QColor(0, 0, 0, 140); }
+auto AppTheme::viewportAlertSecondaryTextColor() const -> QColor {
+  return WithAlpha(textColor(), 170);
+}
+auto AppTheme::viewportAlertDetailFillColor() const -> QColor { return QColor(0, 0, 0, 97); }
+// Viewport render progress (DESIGN.md "Viewport render progress", DN14). The pill and the bar
+// stand on the photo, so they are dark and white tints that read on a bright and a dark photo.
+auto AppTheme::viewportProgressPillHeight() const -> int { return 26; }
+auto AppTheme::viewportProgressDotSize() const -> int { return 6; }
+auto AppTheme::viewportProgressBarHeight() const -> int { return 3; }
+auto AppTheme::viewportProgressSegmentGap() const -> int { return 2; }
+auto AppTheme::viewportProgressFadeMs() const -> int { return 200; }
+auto AppTheme::viewportProgressPillColor() const -> QColor { return QColor(18, 18, 18, 184); }
+auto AppTheme::viewportProgressTrackColor() const -> QColor { return QColor(255, 255, 255, 36); }
+auto AppTheme::viewportProgressFillColor() const -> QColor { return QColor(255, 255, 255, 230); }
 // LUT browser rail page (DESIGN.md "LUT browser"): filter card + tile grid card.
 auto AppTheme::editorLutBrowserPanelWidth() const -> int { return 560; }
 auto AppTheme::editorLutBrowserPanelWidthMin() const -> int { return 280; }
@@ -1309,7 +1331,26 @@ auto AppTheme::editorLutTileMinWidth() const -> int { return 128; }
 // Narrowest single tile column the docked filter sidebar leaves beside it.
 auto AppTheme::editorLutTileCompactWidth() const -> int { return 88; }
 auto AppTheme::editorLutTileIconSize() const -> int { return 36; }
-auto AppTheme::collectionsSidebarWidth() const -> int { return 276; }
+// Versions panel presets (DESIGN.md "Versions panel presets").
+auto AppTheme::editorPresetPaneHeight() const -> int { return 240; }
+auto AppTheme::editorVersionsPartMinHeight() const -> int { return 160; }
+auto AppTheme::editorPresetTileMinWidth() const -> int { return 104; }
+// List rows of the LUT and preset browsers (DESIGN.md "Browser list rows").
+auto AppTheme::editorBrowserListThumbWidth() const -> int { return 48; }
+auto AppTheme::collectionsSidebarWidth() const -> int { return 264; }
+auto AppTheme::collectionsSidebarMinWidth() const -> int { return 208; }
+auto AppTheme::collectionsSidebarMaxWidth() const -> int { return 420; }
+auto AppTheme::collectionsSidebarFoldWidth() const -> int { return 160; }
+auto AppTheme::collectionsRailWidth() const -> int { return 52; }
+auto AppTheme::collectionsPeekDelayMs() const -> int { return 250; }
+auto AppTheme::collectionsTreeRowHeight() const -> int { return 28; }
+auto AppTheme::collectionsTreeIndentStep() const -> int { return 12; }
+// Indent guides of the sidebar tree: a faint line, brighter for the folder that holds the
+// selection (VS Code Explorer pattern, #1028).
+auto AppTheme::collectionsTreeGuideColor() const -> QColor { return WithAlpha(textColor(), 20); }
+auto AppTheme::collectionsTreeGuideActiveColor() const -> QColor {
+  return WithAlpha(textColor(), 64);
+}
 auto AppTheme::collectionRowHeight() const -> int { return 26; }
 auto AppTheme::collectionIndentStep() const -> int { return 14; }
 auto AppTheme::collectionMenuMaxRows() const -> int { return 12; }

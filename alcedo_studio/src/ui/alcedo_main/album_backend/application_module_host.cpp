@@ -8,6 +8,7 @@
 #include <QDeadlineTimer>
 #include <QDebug>
 #include <QEventLoop>
+#include <QGuiApplication>
 #include <QMetaObject>
 #include <QPointer>
 #include <QQmlEngine>
@@ -24,14 +25,21 @@
 #include <system_error>
 #include <vector>
 
+#include "app/ai_denoise_history_write.hpp"
+#include "app/ai_model_package_install.hpp"
 #include "app/editor_adjustment_context.hpp"
 #include "app/editor_pending_input.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/image_pool_service.hpp"
+#include "app/model_asset_catalog.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/input/ai_denoise_model_session.hpp"
+#include "edit/input/raw_sensor_layout.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/lens/lens_calibration_resolver.hpp"
+#include "io/image/embedded_preview_reader.hpp"
 #include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/display_profile_readout.hpp"
@@ -44,12 +52,14 @@
 #include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
 #include "ui/alcedo_main/album_backend/justified_layout_model.hpp"
+#include "ui/alcedo_main/album_backend/library_preset_preview_source.hpp"
 #include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "utils/diagnostics/app_logging.hpp"
+#include "utils/logging/log.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -151,6 +161,22 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
         std::make_unique<alcedo::LutPackageService>(std::move(lut_package_options), *lut_library_);
   }
   RecordConstruction("LutPackageService", lut_packages_.get());
+  // Scans the preset folder on its worker (edit presets plan, PS1). A saved preset refers to a
+  // LUT of the LUT library by its library reference (plan 3.3).
+  {
+    alcedo::PresetLibraryServiceOptions preset_options =
+        package_services.preset_library_options ? package_services.preset_library_options()
+                                                : alcedo::PresetLibraryServiceOptions{};
+    if (!preset_options.lut_reference_for_path) {
+      preset_options.lut_reference_for_path = [library = lut_library_.get()](
+                                                  const std::filesystem::path& path) {
+        return library->ReferenceForPath(path);
+      };
+    }
+    preset_library_ = std::make_unique<alcedo::PresetLibraryService>(std::move(preset_options));
+  }
+  RecordConstruction("PresetLibraryService", preset_library_.get());
+  preset_library_->Start();
   // Reads the DCP folder setting and starts the first scan on its worker (DCP plan C2).
   camera_profiles_ = std::make_unique<alcedo::CameraProfileLibraryService>();
   RecordConstruction("CameraProfileLibraryService", camera_profiles_.get());
@@ -160,6 +186,15 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   // Every project's editor, thumbnail, and export executors resolve LUT references through
   // the library (plan L4).
   project_->SetLutResources(lut_library_->Resources());
+  // AI Denoise reads its FP16 graph from the AI Denoise package of the AI model folder of the
+  // settings (alcedo-ai-denoise-v<N>, integration plan DN12), found again at each check of the
+  // installed model. The session of the executors is reached through PipelineExecutor: on
+  // Windows the executors are in a DLL with their own copy.
+  alcedo::PipelineExecutor::ProcessAiDenoiseSession()->SetGraphLocator([] {
+    alcedo::AiDenoiseGraphLocation location = alcedo::ResolveAiDenoiseGraph(
+        std::filesystem::path(alcedo::ConfiguredSemanticModelDirectory().toStdWString()));
+    return alcedo::AiDenoiseGraphLookup{std::move(location.graph), std::move(location.problem)};
+  });
   library_ = std::make_unique<LibraryModule>(project_.get(), this);
   RecordConstruction("LibraryModule", library_.get());
   folders_ =
@@ -221,9 +256,6 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       std::make_unique<ImportExportHandler>(project_.get(), library_.get(), folders_.get(),
                                             project_.get(), this);
   RecordConstruction("ImportExportHandler", import_export_.get());
-  import_behavior_ = std::make_unique<ImportBehaviorPreferences>(this);
-  RecordConstruction("ImportBehaviorPreferences", import_behavior_.get());
-  import_export_->SetImportPreferences(import_behavior_.get());
   import_export_->SetInteractionPolicy(interaction_policy_.get());
   export_queue_ = std::make_unique<ExportQueue>(project_.get(), import_export_.get(), this);
   RecordConstruction("ExportQueue", export_queue_.get());
@@ -237,6 +269,11 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       project_.get(), library_.get(), import_export_.get(), background_tasks_.get(), this);
   RecordConstruction("AdjustmentTransferController", adjustment_transfer_.get());
   adjustment_transfer_->SetInteractionPolicy(interaction_policy_.get());
+  presets_ = std::make_unique<PresetController>(preset_library_.get(),
+                                                adjustment_transfer_->dialog_model());
+  RecordConstruction("PresetController", presets_.get());
+  // Apply Preset to library photos takes the multi-target Paste (edit presets plan, PS4).
+  presets_->SetAdjustmentTransfer(adjustment_transfer_.get());
   // Phase 5B/5E: wire runtime first-frame ports, direct presentation, and
   // BackgroundTaskController-backed editor_save registration into the session
   // runtime. The session scheduler accepts intents without completing when
@@ -364,13 +401,163 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   ai_mask_tool_ =
       std::make_unique<EditorAiMaskTool>(editor_session_.get(), std::move(ai_mask_services), this);
   RecordConstruction("EditorAiMaskTool", ai_mask_tool_.get());
+  // AI Denoise integration plan, DN7: the switch of the RAW Decode card.
+  EditorAiDenoiseControl::Services ai_denoise_services;
+  ai_denoise_services.platform_available = [] {
+    return alcedo::PipelineExecutor::ProcessAiDenoiseSession()->IsPlatformAvailable();
+  };
+  ai_denoise_services.installed_model_version = [] {
+    return alcedo::PipelineExecutor::ProcessAiDenoiseSession()->InstalledModelVersion();
+  };
+  const auto image_path = [this](std::uint32_t image_id) -> std::filesystem::path {
+    if (project_ == nullptr || project_->handler().project() == nullptr) {
+      return {};
+    }
+    auto pool = project_->handler().project()->GetImagePoolService();
+    if (!pool) {
+      return {};
+    }
+    try {
+      return pool->Read<std::filesystem::path>(
+          image_id, [](const std::shared_ptr<alcedo::Image>& image) {
+            return image ? std::filesystem::path(image->image_path_) : std::filesystem::path{};
+          });
+    } catch (const std::exception&) {
+      return {};
+    }
+  };
+  ai_denoise_services.image_path         = image_path;
+  ai_denoise_services.read_sensor_layout = &alcedo::ReadRawSensorLayout;
+  ai_denoise_ = std::make_unique<EditorAiDenoiseControl>(std::move(ai_denoise_services),
+                                                         editor_session_.get(), this);
+  RecordConstruction("EditorAiDenoiseControl", ai_denoise_.get());
+  // AI Denoise integration plan, DN8: Turn Off AI Denoise of an export queue item. Several photos
+  // get the switch through Copy and Paste Adjustments (the RAW Decode item).
+  ExportAiDenoiseControl::Services export_denoise_services;
+  export_denoise_services.user_refusal = [this] {
+    return UserStateChangeRefusal(interaction_policy_.get());
+  };
+  export_denoise_services.stored_history_writer =
+      [this]() -> ExportAiDenoiseControl::StoredHistoryWriter {
+    auto pipeline = project_ != nullptr ? project_->handler().pipeline_service() : nullptr;
+    if (!pipeline) {
+      return {};
+    }
+    return [pipeline = std::move(pipeline)](
+               sl_element_id_t element_id, const std::optional<alcedo::DevelopAiDenoise>& denoise) {
+      return alcedo::WriteAiDenoiseSwitchToStoredHistory(*pipeline, element_id, denoise);
+    };
+  };
+  export_denoise_services.editor_element_id = [session = editor_session_.get()] {
+    return session->has_image() ? static_cast<sl_element_id_t>(session->element_id())
+                                : sl_element_id_t{0};
+  };
+  export_denoise_services.turn_off_editor_photo = [control = ai_denoise_.get()] {
+    return control->turnOff();
+  };
+  export_denoise_services.refresh_written_photo =
+      [this](sl_element_id_t element_id, const alcedo::AiDenoiseHistoryWrite& write) {
+        const auto* item     = library_->FindAlbumItem(element_id);
+        const auto  image_id = item != nullptr ? item->image_id : image_id_t{0};
+        library_->SetAlbumItemEditState(element_id, 0, write.head_created_at_ns,
+                                        QString::fromStdString(write.version_name));
+        if (auto thumbnails = project_->handler().thumbnail_service()) {
+          try {
+            thumbnails->InvalidateThumbnail(element_id);
+          } catch (const std::exception& error) {
+            ALCEDO_LOG_WARN(Render)
+                << "AI Denoise: thumbnail of " << element_id << ": " << error.what();
+          }
+        }
+        if (image_id != 0 && !library_->thumbs().RefreshCurrentThumbnail(element_id, image_id)) {
+          library_->thumbs().UpdateThumbnailState(element_id, QString(), false, false);
+        }
+        // The write changes stored edits; an edit-ordered library shows them.
+        library_->NoteEditHistoryChanged(editor_session_->active());
+      };
+  export_ai_denoise_ = std::make_unique<ExportAiDenoiseControl>(
+      std::move(export_denoise_services), background_tasks_.get(), export_queue_.get(), this);
+  RecordConstruction("ExportAiDenoiseControl", export_ai_denoise_.get());
+  // AI Denoise integration plan, DN14: the image of the viewport before the first frame.
+  editor_placeholder_image_ = std::make_shared<EditorPlaceholderImage>([this] {
+    const auto store = library_ != nullptr ? library_->thumbs().image_store() : nullptr;
+    return store ? store->Destination() : nullptr;
+  });
+  EditorViewportPlaceholder::Services placeholder_services;
+  placeholder_services.held_thumbnail = [this](sl_element_id_t element_id)
+      -> std::optional<EditorViewportPlaceholder::EncodedImage> {
+    const auto store = library_ != nullptr ? library_->thumbs().image_store() : nullptr;
+    if (!store) {
+      return std::nullopt;
+    }
+    for (const std::uint32_t max_edge : {2048U, 1024U, 512U, 256U}) {
+      auto image = store->Get(element_id, max_edge);
+      if (!image.isNull()) {
+        return EditorViewportPlaceholder::EncodedImage{
+            std::move(image), store->Encoding(element_id, max_edge).value_or(ViewerDisplayConfig{})};
+      }
+    }
+    return std::nullopt;
+  };
+  placeholder_services.image_path             = image_path;
+  placeholder_services.crop_or_rotation_check = [this](sl_element_id_t element_id)
+      -> std::function<bool()> {
+    auto pipeline = project_ != nullptr ? project_->handler().pipeline_service() : nullptr;
+    if (!pipeline) {
+      return {};
+    }
+    return [pipeline = std::move(pipeline), element_id] {
+      const auto snapshot = pipeline->AcquireCommittedSnapshot(element_id);
+      const auto& geometry = snapshot->Document().Geometry();
+      return !geometry.CropRect().IsFullFrame() || geometry.RotationDegrees() != 0.0f;
+    };
+  };
+  placeholder_services.read_camera_preview = [](const std::filesystem::path& path) -> QImage {
+    // A shorter edge of at least 768 px: enough for the viewport at the fit zoom of most windows;
+    // a large JPEG preview then decodes at a reduced scale.
+    const auto preview = alcedo::EmbeddedPreviewReader::Read(path, 768);
+    if (!preview.has_value() || preview->rgb8.empty()) {
+      return {};
+    }
+    const auto& rgb = preview->rgb8;
+    return QImage(rgb.data, rgb.cols, rgb.rows, static_cast<qsizetype>(rgb.step),
+                  QImage::Format_RGB888)
+        .copy();
+  };
+  editor_placeholder_ = std::make_unique<EditorViewportPlaceholder>(
+      std::move(placeholder_services), editor_placeholder_image_, this);
+  RecordConstruction("EditorViewportPlaceholder", editor_placeholder_.get());
+  QObject::connect(editor_session_.get(), &EditorSessionController::StateChanged,
+                   editor_placeholder_.get(),
+                   [session = editor_session_.get(), placeholder = editor_placeholder_.get()] {
+                     if (!session->has_image()) {
+                       placeholder->SetWaitingPhoto(0U, 0U);
+                       return;
+                     }
+                     switch (session->session_state()) {
+                       case alcedo::EditorSessionState::Acquiring:
+                       case alcedo::EditorSessionState::Loading:
+                       case alcedo::EditorSessionState::Switching:
+                         placeholder->SetWaitingPhoto(session->element_id(), session->image_id());
+                         break;
+                       case alcedo::EditorSessionState::Interactive:
+                         // The image stays until the viewport composes the frame (QML release).
+                         placeholder->SetFirstFrameReady();
+                         break;
+                       default:
+                         placeholder->SetWaitingPhoto(0U, 0U);
+                         break;
+                     }
+                   });
+  QObject::connect(editor_session_.get(), &EditorSessionController::StateChanged, ai_denoise_.get(),
+                   [session = editor_session_.get(), control = ai_denoise_.get()] {
+                     control->SetImage(session->has_image() ? session->image_id() : 0U);
+                   });
   // A published inventory or root can change which LUT bytes the open image renders.
   QObject::connect(lut_library_.get(), &alcedo::LutLibraryService::InventoryChanged,
                    editor_session_.get(),
                    [session = editor_session_.get()] { session->NotifyLutResourcesChanged(); });
   editor_session_->SetInteractionPolicy(interaction_policy_.get());
-  QObject::connect(import_export_.get(), &ImportExportHandler::SourceFileChanged,
-                   editor_session_.get(), &EditorSessionController::NotifySourceChanged);
   editor_session_->SetAlbumCatalog(library_.get());
   // control.acquire waits while the user drags a slider: the pending input of the editor has a
   // sequence that no Release or Cancel boundary sealed. Every session result and state change
@@ -419,19 +606,20 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     } catch (const std::exception&) {
       return {};
     }
-    // A fixed-lens camera (GFX100RF, Ricoh GR III) writes no lens name. Lens Correction then uses
-    // the profile of the built-in lens (#960), so Auto names that profile too.
-    if (display.lens_model.empty() && !display.camera_model.empty()) {
-      alcedo::LensInputMeta meta;
-      meta.cam_maker_         = display.camera_make;
-      meta.cam_model_         = display.camera_model;
-      meta.focal_length_mm_   = display.focal_mm.value_or(0.0f);
-      meta.aperture_f_number_ = display.aperture.value_or(0.0f);
-      if (const auto profile = alcedo::LensCalibrationResolver::FixedLensProfile(
-              meta, alcedo::DevelopPayload{}.lens_profile_db_path)) {
-        display.lens_make  = profile->maker_;
-        display.lens_model = profile->model_;
-      }
+    // Auto names the profile that Lens Correction matches for the image lens, so enabling the
+    // correction with Auto checked writes the lens that the render already uses. A fixed-lens
+    // camera without a lens name gets its built-in lens profile (#960).
+    alcedo::LensInputMeta meta;
+    meta.cam_maker_         = display.camera_make;
+    meta.cam_model_         = display.camera_model;
+    meta.lens_maker_        = display.lens_make;
+    meta.lens_model_        = display.lens_model;
+    meta.focal_length_mm_   = display.focal_mm.value_or(0.0f);
+    meta.aperture_f_number_ = display.aperture.value_or(0.0f);
+    if (const auto profile = alcedo::LensCalibrationResolver::ShotLensProfile(
+            meta, alcedo::DevelopPayload{}.lens_profile_db_path)) {
+      display.auto_lens_make  = profile->maker_;
+      display.auto_lens_model = profile->model_;
     }
     return display;
   });
@@ -440,6 +628,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     alcedo::LensCalibrationResolver::PreloadDatabase(alcedo::DevelopPayload{}.lens_profile_db_path);
   });
   adjustment_transfer_->SetEditorSession(editor_session_.get());
+  presets_->SetEditorSession(editor_session_.get());
   connect(adjustment_transfer_.get(), &AdjustmentTransferController::PackageChanged,
           editor_session_.get(), [this]() {
             if (editor_session_) {
@@ -515,11 +704,28 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   lut_preview_->setLibrary(lut_library_.get());
   lut_preview_->setEditorSession(editor_session_.get());
   RecordConstruction("LutPreviewController", lut_preview_.get());
+  preset_preview_ = std::make_unique<PresetPreviewController>();
+  preset_preview_->SetLibrary(preset_library_.get());
+  preset_preview_->SetEditorSession(editor_session_.get());
+  RecordConstruction("PresetPreviewController", preset_preview_.get());
+  // The previews of the Apply Preset dialog on its first library photo (plan PS4, step 3), on the
+  // thumbnail executors of the open project. A provider of its own: the display ids of the two
+  // controllers are independent.
+  preset_dialog_preview_ = std::make_unique<PresetPreviewController>();
+  preset_dialog_preview_->SetImageStore(SharedPresetDialogPreviewImageStore());
+  preset_dialog_preview_->SetOwnedSource(std::make_unique<LibraryPresetPreviewSource>(
+      preset_library_.get(),
+      [project = project_.get()] { return project->handler().pipeline_service(); },
+      [project = project_.get()] { return project->handler().thumbnail_service(); }));
+  preset_dialog_preview_->SetLibrary(preset_library_.get());
+  RecordConstruction("PresetPreviewController", preset_dialog_preview_.get());
   workspace_router_ = std::make_unique<WorkspaceRouter>(editor_session_.get(), this);
   workspace_router_->SetInteractionPolicy(interaction_policy_.get());
   RecordConstruction("WorkspaceRouter", workspace_router_.get());
   editor_behavior_ = std::make_unique<EditorBehaviorPreferences>(this);
   RecordConstruction("EditorBehaviorPreferences", editor_behavior_.get());
+  library_behavior_ = std::make_unique<LibraryBehaviorPreferences>(this);
+  RecordConstruction("LibraryBehaviorPreferences", library_behavior_.get());
   library_view_ = std::make_unique<LibraryViewPreferences>(this);
   RecordConstruction("LibraryViewPreferences", library_view_.get());
   // The application QSettings, which the import service of project_handler.cpp reads.
@@ -552,6 +758,47 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   library_mutations_->SetInteractionPolicy(interaction_policy_.get());
   connect(library_mutations_.get(), &LibraryMutationOperations::ElementsDeleted,
           export_queue_.get(), &ExportQueue::RemoveElements);
+
+  MountScanCoordinatorDependencies mount_scan_dependencies;
+  mount_scan_dependencies.tasks           = background_tasks_.get();
+  mount_scan_dependencies.clock           = CreateSteadyMountScanClock();
+  mount_scan_dependencies.watcher         = CreatePlatformMountDirectoryWatcher();
+  mount_scan_dependencies.on_batch_stored = [library = library_.get(),
+                                             folders = folders_.get()](mount_id_t) {
+    // The Library shows the photos of each stored batch in place.
+    library->RequestLibraryContentRefresh();
+    folders->RefreshImageCounts();
+  };
+  mount_scan_dependencies.on_scan_ended = [library = library_.get(), folders = folders_.get()](
+                                              mount_id_t, const MountScanResult& result) {
+    const bool folders_changed = result.folders_added_count + result.folders_removed_count > 0;
+    if (folders_changed) {
+      library->ReloadFolderTree();
+    }
+    if (folders_changed || MountScanChangedPhotos(result)) {
+      library->RequestLibraryContentRefresh();
+    }
+    // The count read also reads the mount states: an offline or relocated mount changes its
+    // rows with no photo change.
+    folders->RefreshImageCounts();
+  };
+  mount_scans_ = std::make_unique<MountScanCoordinator>(std::move(mount_scan_dependencies));
+  RecordConstruction("MountScanCoordinator", mount_scans_.get());
+  folders_->BindMountScans(mount_scans_.get());
+  application_close_->BindMountScans(mount_scans_.get());
+  // #1016: a user import and a delete hold the scans for their length.
+  import_export_->BindMountScans(mount_scans_.get());
+  images_->BindMountScans(mount_scans_.get());
+  if (auto* gui = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+    connect(gui, &QGuiApplication::applicationStateChanged, mount_scans_.get(),
+            [scans = mount_scans_.get()](Qt::ApplicationState state) {
+              scans->HandleApplicationActiveChanged(state == Qt::ApplicationActive);
+            });
+  }
+  connect(project_.get(), &ProjectModule::ProjectEnteredChanged, this,
+          [this] { SyncMountScans(); });
+  connect(project_.get(), &ProjectModule::ProjectLoadStateChanged, this,
+          [this] { SyncMountScans(); });
 
   library_->BindCollaborators(folders_.get(), search_.get(), stats_.get());
   library_->SetSemanticLabelProvider(
@@ -631,13 +878,12 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
                                     semantic = semantic_generation_.get(),
                                     editor_session = editor_session_.get(),
                                     project = project_.get()] {
-    const auto preferred_folder_path =
-        folders ? folders->current_folder_path() : std::filesystem::path{};
     if (import_export) {
       import_export->ResetExportState();
     }
     if (library) {
-      library->ReloadFolderTree(preferred_folder_path);
+      // The tree read keeps the current folder (the root after ClearState).
+      library->ReloadFolderTree();
     }
     if (stats) {
       stats->ClearFilters();
@@ -690,7 +936,61 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       emit import_export->exportStateChanged();
     }
   };
+  lifecycle_hooks.stop_mount_scans = [scans = mount_scans_.get()] {
+    if (scans) {
+      scans->Stop();
+    }
+  };
+  lifecycle_hooks.begin_stop_mount_scans = [scans = mount_scans_.get()] {
+    return scans ? scans->BeginStop() : std::shared_future<void>{};
+  };
+  lifecycle_hooks.resume_mount_scans = [this] { SyncMountScans(); };
   project_->SetLifecycleHooks(std::move(lifecycle_hooks));
+}
+
+void ApplicationModuleHost::SyncMountScans() {
+  if (!mount_scans_) {
+    return;
+  }
+  auto&      handler    = project_->handler();
+  const auto project    = handler.project();
+  auto*      importer   = handler.import_service();
+  const bool should_run = !shutting_down_ && project && importer != nullptr &&
+                          handler.project_entered() && !handler.project_loading() &&
+                          project->GetMountService();
+  if (!should_run) {
+    // No wait on the UI thread: the project load, the project close, and the exit each wait for
+    // the scan worker before they save or replace the project.
+    (void)mount_scans_->BeginStop();
+    return;
+  }
+  if (mount_scans_->IsStarted()) {
+    return;
+  }
+  auto invalidate_thumbnail =
+      [library = QPointer<LibraryModule>(library_.get())](sl_element_id_t element_id) {
+        // Called on the scan worker; the thumbnail state belongs to the UI thread.
+        QMetaObject::invokeMethod(
+            library,
+            [library, element_id] {
+              if (!library || library->project() == nullptr) {
+                return;
+              }
+              if (auto thumbnails = library->project()->handler().thumbnail_service()) {
+                thumbnails->InvalidateThumbnail(element_id);
+              }
+              const auto* item = library->FindAlbumItem(element_id);
+              if (item != nullptr) {
+                (void)library->thumbs().RefreshCurrentThumbnail(element_id, item->image_id);
+              }
+            },
+            Qt::QueuedConnection);
+      };
+  // #1015: a scan that stored changes saves the project file on its worker, like the finalize
+  // step of a user import.
+  mount_scans_->Start(std::make_shared<ProjectMountScanPort>(project->GetMountService(), importer,
+                                                             std::move(invalidate_thumbnail),
+                                                             handler.MakeSaveAndPackageJob()));
 }
 
 void ApplicationModuleHost::ShutdownModules() {
@@ -708,6 +1008,11 @@ void ApplicationModuleHost::ShutdownModules() {
     if (background_tasks_) {
       background_tasks_->CancelAll();
     }
+    // The stop request returns at once. The event wait below runs until the scan worker has
+    // ended (IsIdle); the project save runs after it.
+    if (mount_scans_) {
+      (void)mount_scans_->BeginStop();
+    }
     if (semantic_generation_) {
       semantic_generation_->CancelGeneration();
     }
@@ -719,6 +1024,9 @@ void ApplicationModuleHost::ShutdownModules() {
     // Cancel an AI model download and wait for its install worker (AI Models plan, AM1).
     if (ai_model_packages_) {
       ai_model_packages_->Shutdown();
+    }
+    if (preset_library_) {
+      preset_library_->Shutdown();
     }
     if (lut_library_) {
       lut_library_->Shutdown();
@@ -761,6 +1069,11 @@ void ApplicationModuleHost::ShutdownModules() {
     while (!IsIdle() && !deadline.hasExpired()) {
       QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
     }
+    // A scan worker that outlived the deadline still writes its batch. The save needs each
+    // batch stored in full, so this call waits for the worker.
+    if (mount_scans_) {
+      mount_scans_->Stop();
+    }
     // The runtime workspace is removed in the destructor, after ProjectModule closes the
     // project database (RemovePendingWorkspace).
     if (project_) {
@@ -772,6 +1085,9 @@ void ApplicationModuleHost::ShutdownModules() {
       QString ignored_error;
       (void)project_->handler().PersistProjectForClose(&ignored_error);
     }
+    // No render runs after the export and the editor scheduler ended; the AI Denoise session
+    // ends before ONNX Runtime and DirectML unload.
+    alcedo::PipelineExecutor::ProcessAiDenoiseSession()->Release();
   } catch (...) {
   }
 }
@@ -797,6 +1113,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
     pointer.reset();
     RecordDestruction(type_name, object);
   };
+  destroy(mount_scans_, "MountScanCoordinator");
   destroy(library_mutations_, "LibraryMutationOperations");
   destroy(maintenance_, "ProjectMaintenanceController");
   destroy(maintenance_service_, "ProjectMaintenanceService");
@@ -805,11 +1122,17 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(log_folder_, "LogFolderController");
   destroy(raw_import_look_, "RawImportLookSettingsModel");
   destroy(library_view_, "LibraryViewPreferences");
+  destroy(library_behavior_, "LibraryBehaviorPreferences");
   destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");
+  destroy(preset_dialog_preview_, "PresetPreviewController");
+  destroy(preset_preview_, "PresetPreviewController");
   destroy(lut_preview_, "LutPreviewController");
   destroy(lut_target_, "LutLibraryController");
   destroy(lut_browser_, "LutLibraryModel");
+  destroy(editor_placeholder_, "EditorViewportPlaceholder");
+  destroy(export_ai_denoise_, "ExportAiDenoiseControl");
+  destroy(ai_denoise_, "EditorAiDenoiseControl");
   destroy(ai_mask_tool_, "EditorAiMaskTool");
   destroy(editor_comparison_, "EditorComparisonController");
   destroy(editor_session_, "EditorSessionController");
@@ -823,12 +1146,12 @@ ApplicationModuleHost::~ApplicationModuleHost() {
     RecordDestruction("EditorSessionService", editor_session_runtime_->service.get());
     editor_session_runtime_.reset();
   }
+  destroy(presets_, "PresetController");
   destroy(adjustment_transfer_, "AdjustmentTransferController");
   destroy(nikon_he_recovery_, "NikonHeRecoveryController");
   destroy(export_recipe_, "ExportRecipeBuilder");
   destroy(export_queue_, "ExportQueue");
   destroy(import_export_, "ImportExportHandler");
-  destroy(import_behavior_, "ImportBehaviorPreferences");
   destroy(semantic_generation_, "SemanticGenerationController");
   destroy(ai_provider_profiles_, "AiProviderProfileController");
   destroy(ai_model_download_tasks_, "AiModelDownloadTaskPublisher");
@@ -845,6 +1168,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   RemovePendingWorkspace();
   destroy(camera_profiles_, "CameraProfileLibraryService");
   destroy(lut_packages_, "LutPackageService");
+  destroy(preset_library_, "PresetLibraryService");
   destroy(lut_library_, "LutLibraryService");
   destroy(updates_, "UpdateService");
   destroy(model_download_service_, "ModelDownloadService");
@@ -859,6 +1183,10 @@ void ApplicationModuleHost::Shutdown() { ShutdownModules(); }
 auto ApplicationModuleHost::IsIdle() const -> bool {
   if (background_tasks_ &&
       background_tasks_->ActiveCountExcept(BackgroundTaskKind::AgentControl) > 0) {
+    return false;
+  }
+  // An automatic scan shows no task until it changes the library, but it writes the project.
+  if (mount_scans_ && mount_scans_->HasPendingScans()) {
     return false;
   }
   return !import_export_ ||
@@ -885,7 +1213,15 @@ void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
   engine->addImageProvider(QString::fromUtf8(kComparisonImageProviderId),
                            new ComparisonImageProvider(SharedComparisonImageStore()));
   engine->addImageProvider(QString::fromUtf8(kLutPreviewImageProviderId),
-                           new LutPreviewImageProvider(SharedLutPreviewImageStore()));
+                           new BrowserPreviewImageProvider(SharedLutPreviewImageStore()));
+  engine->addImageProvider(QString::fromUtf8(kPresetPreviewImageProviderId),
+                           new BrowserPreviewImageProvider(SharedPresetPreviewImageStore()));
+  engine->addImageProvider(QString::fromUtf8(kPresetDialogPreviewImageProviderId),
+                           new BrowserPreviewImageProvider(SharedPresetDialogPreviewImageStore()));
+  if (editor_placeholder_image_) {
+    engine->addImageProvider(QString::fromUtf8(kEditorPlaceholderImageProviderId),
+                             new EditorPlaceholderImageProvider(editor_placeholder_image_));
+  }
 
   if (library_ == nullptr) {
     return;
@@ -907,6 +1243,12 @@ void ApplicationModuleHost::AttachDisplayWindow(QWindow* window) {
   }
   if (lut_preview_) {
     lut_preview_->SetDisplayWindow(window);
+  }
+  if (preset_preview_) {
+    preset_preview_->SetDisplayWindow(window);
+  }
+  if (preset_dialog_preview_) {
+    preset_dialog_preview_->SetDisplayWindow(window);
   }
   if (library_) {
     library_->SetDisplayWindow(window);

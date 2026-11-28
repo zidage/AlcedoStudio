@@ -184,7 +184,7 @@ auto FilmGrainHistoryChainHash(const root_id_t& root_id, const std::vector<EditC
 }  // namespace
 
 TEST(PipelineHistoryFormatTable, PublishedConstantsIdentifyTheDocumentHistoryCutover) {
-  EXPECT_EQ(kProjectFileVersion, "0.11.0");
+  EXPECT_EQ(kProjectFileVersion, "0.15.0");
   EXPECT_EQ(kMinSupportedProjectFileVersion, "0.10.0");
   EXPECT_EQ(kMaxSupportedProjectFileVersion, kProjectFileVersion);
   EXPECT_EQ(kPackedProjectFormatVersion, 7u);
@@ -228,6 +228,36 @@ TEST(PipelineDocumentCheckpointFormat, RootExpectedSerializedBindsOwnerDocumentA
   EXPECT_EQ(decoded.element_id, 42u);
   EXPECT_EQ(ComputeRootId(42, decoded.document, decoded.raw_color_context),
             ComputeRootId(42, document, nlohmann::json{{"CameraModel", "RootStateCamera"}}));
+}
+
+TEST(PipelineDocumentCheckpointFormat, AiDenoiseKeyIsAbsentWhileTheSwitchIsOff) {
+  // raw_root_before_raster_input.json was written before AI Denoise existed (see
+  // ExistingRawRootDocumentsSerializeByteIdenticalAfterRasterChange).
+  const auto root_bytes = LoadExpectedBytes("raw_root_before_raster_input.json");
+  auto       root       = DecodePipelineRootState(nlohmann::json::parse(root_bytes));
+  ASSERT_NE(root.document.Develop(), nullptr);
+  auto& develop = root.document.Develop()->Params();
+  EXPECT_FALSE(develop.AiDenoise().has_value());
+  EXPECT_FALSE(develop.ToJson().contains("ai_denoise"));
+  const auto root_id = ComputeRootId(root.element_id, root.document, root.raw_color_context);
+
+  // On: the root holds the version and decodes to the same document and root id.
+  develop.ApplyAiDenoiseUpdate(DevelopAiDenoise{std::string(64, 'c')});
+  const auto on_root =
+      EncodePipelineRootState(root.element_id, root.document, root.raw_color_context);
+  const auto on_root_id = ComputeRootId(root.element_id, root.document, root.raw_color_context);
+  EXPECT_NE(on_root_id, root_id);
+  const auto decoded = DecodePipelineRootState(on_root);
+  ASSERT_TRUE(decoded.document.Develop()->Params().AiDenoise().has_value());
+  EXPECT_EQ(decoded.document.Develop()->Params().AiDenoise()->model_version, std::string(64, 'c'));
+  EXPECT_EQ(ComputeRootId(decoded.element_id, decoded.document, decoded.raw_color_context),
+            on_root_id);
+
+  // Off again: the bytes and the root id of the document before the switch.
+  develop.ApplyAiDenoiseUpdate(std::nullopt);
+  EXPECT_EQ(EncodePipelineRootState(root.element_id, root.document, root.raw_color_context).dump(),
+            root_bytes);
+  EXPECT_EQ(ComputeRootId(root.element_id, root.document, root.raw_color_context), root_id);
 }
 
 TEST(PipelineDocumentCheckpointFormat, CheckpointExpectedSerializedCarriesRootHeadChainAndDocument) {

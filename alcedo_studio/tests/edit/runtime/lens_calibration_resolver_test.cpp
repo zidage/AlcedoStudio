@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -91,10 +92,12 @@ struct LensFixture {
   const char* catalog_lens_model;
 };
 
+// Float fields compare within 4 ULP: the Lensfun auto-scale search rounds differently on arm64 and
+// x64 (resolved_scale 1.03895819 and 1.03895831 for the DNG warp fixture).
 void ExpectFloatField(const nlohmann::json& expected, const char* name, float actual,
                       const std::string& context) {
   ASSERT_TRUE(expected.contains(name)) << context << " missing " << name;
-  EXPECT_EQ(expected.at(name).get<float>(), actual) << context << " field " << name;
+  EXPECT_FLOAT_EQ(expected.at(name).get<float>(), actual) << context << " field " << name;
 }
 
 void ExpectIntField(const nlohmann::json& expected, const char* name, std::int32_t actual,
@@ -110,7 +113,7 @@ void ExpectFloatArray(const nlohmann::json& expected, const char* name, const fl
   const auto& values = expected.at(name);
   ASSERT_EQ(values.size(), N) << context << " field " << name;
   for (std::size_t i = 0; i < N; ++i) {
-    EXPECT_EQ(values.at(i).get<float>(), actual[i])
+    EXPECT_FLOAT_EQ(values.at(i).get<float>(), actual[i])
         << context << " field " << name << "[" << i << "]";
   }
 }
@@ -179,6 +182,7 @@ TEST(LensCalibDevelopResolve, LensResolverMatchesStoredLensParametersForFixtureS
     prepared.color_context.lens_model_ = expected.at("exif_lens_model").get<std::string>();
     const auto extent                  = prepared.CompileSource().develop_output_extent;
     const bool warp                    = prepared.dng_warp_rectilinear.has_value();
+    const auto warp_corrections        = dng::CorrectionsOf(prepared.dng_warp_rectilinear);
     ASSERT_EQ(expected.at("develop_extent").at(0).get<std::uint32_t>(), extent.width)
         << fixture.expected_file;
     ASSERT_EQ(expected.at("develop_extent").at(1).get<std::uint32_t>(), extent.height)
@@ -191,7 +195,7 @@ TEST(LensCalibDevelopResolve, LensResolverMatchesStoredLensParametersForFixtureS
     payload.lens_maker           = fixture.catalog_lens_maker;
     payload.lens_model           = fixture.catalog_lens_model;
     const auto runtime =
-        LensCalibrationResolver::Resolve(payload, prepared.color_context, extent, warp);
+        LensCalibrationResolver::Resolve(payload, prepared.color_context, extent, warp_corrections);
 
     ASSERT_EQ(expected.at("resolved").get<bool>(), runtime.has_value()) << fixture.expected_file;
     if (runtime.has_value()) {
@@ -206,7 +210,7 @@ TEST(LensCalibDevelopResolve, LensResolverMatchesStoredLensParametersForFixtureS
 
 TEST(LensCalibDevelopResolve, UserCatalogIdentityResolvesWhenRawLensNameIsEmpty) {
   const auto runtime = LensCalibrationResolver::Resolve(TouitPayload(true), FocalOnlyContext(),
-                                                        Extent2D{96, 64}, false);
+                                                        Extent2D{96, 64}, {});
   ASSERT_TRUE(runtime.has_value());
   EXPECT_EQ(runtime->apply_vignetting, 1);
   EXPECT_EQ(runtime->vignetting_model, static_cast<std::int32_t>(LensCalibVignettingModel::PA));
@@ -218,7 +222,7 @@ TEST(LensCalibDevelopResolve, UserCatalogIdentityResolvesWhenRawLensNameIsEmpty)
 
 TEST(LensCalibDevelopResolve, DisabledPayloadReturnsNoRuntime) {
   const auto runtime = LensCalibrationResolver::Resolve(TouitPayload(false), FocalOnlyContext(),
-                                                        Extent2D{96, 64}, false);
+                                                        Extent2D{96, 64}, {});
   EXPECT_FALSE(runtime.has_value());
 }
 
@@ -227,7 +231,7 @@ TEST(LensCalibDevelopResolve, EmptyCatalogIdentityWithoutRawLensNameReturnsNoRun
   payload.lens_maker = {};
   payload.lens_model = {};
   const auto runtime =
-      LensCalibrationResolver::Resolve(payload, FocalOnlyContext(), Extent2D{96, 64}, false);
+      LensCalibrationResolver::Resolve(payload, FocalOnlyContext(), Extent2D{96, 64}, {});
   EXPECT_FALSE(runtime.has_value());
 }
 
@@ -237,13 +241,13 @@ TEST(LensCalibDevelopResolve, CatalogIdentityWithoutFocalLengthReturnsNoRuntime)
   context.aperture_f_number_   = 0.0f;
   context.lens_metadata_valid_ = false;
   const auto runtime =
-      LensCalibrationResolver::Resolve(TouitPayload(true), context, Extent2D{96, 64}, false);
+      LensCalibrationResolver::Resolve(TouitPayload(true), context, Extent2D{96, 64}, {});
   EXPECT_FALSE(runtime.has_value());
 }
 
 TEST(LensCalibDevelopResolve, EnabledPayloadWithEmptyExtentThrows) {
   EXPECT_THROW((void)LensCalibrationResolver::Resolve(TouitPayload(true), FocalOnlyContext(),
-                                                      Extent2D{0, 0}, false),
+                                                      Extent2D{0, 0}, {}),
                std::runtime_error);
 }
 
@@ -253,15 +257,79 @@ TEST(LensCalibDevelopResolve, ProfileStatusNamesMissingIdentityAndUnknownLens) {
 
   LensInputMeta no_focal;
   no_focal.lens_model_ = "Touit 1.8/32";
-  EXPECT_EQ(LensCalibrationResolver::ResolveProfile(no_focal, settings, false).status_,
+  EXPECT_EQ(LensCalibrationResolver::ResolveProfile(no_focal, settings, {}).status_,
             LensProfileStatus::MissingLensIdentity);
 
   LensInputMeta unknown;
   unknown.lens_maker_      = "Nonexistent Optics";
   unknown.lens_model_      = "Imaginary 7.3/1234 Mk IX";
   unknown.focal_length_mm_ = 1234.0f;
-  EXPECT_EQ(LensCalibrationResolver::ResolveProfile(unknown, settings, false).status_,
+  EXPECT_EQ(LensCalibrationResolver::ResolveProfile(unknown, settings, {}).status_,
             LensProfileStatus::LensNotInDatabase);
+}
+
+namespace {
+
+/// Warp of three planes with kr0..kr3 per plane and no tangential terms.
+auto ThreePlaneWarp(const std::array<std::array<double, 4>, 3>& radial) -> dng::WarpRectilinear {
+  dng::WarpRectilinear warp;
+  warp.coefficient_set_count = 3;
+  for (std::size_t plane = 0; plane < radial.size(); ++plane) {
+    for (std::size_t term = 0; term < radial[plane].size(); ++term) {
+      warp.coefficient_sets[plane][term] = radial[plane][term];
+    }
+  }
+  return warp;
+}
+
+/// OpcodeList3 of an Adobe Camera Raw Enhanced DNG of a Sony ILCE-7RM3 with the Tamron
+/// 28-200mm A071: red and blue move, green is the identity (issue #1144).
+auto CameraRawLateralCaWarp() -> dng::WarpRectilinear {
+  return ThreePlaneWarp(
+      {{{0.9998897514917477, 0.0005055739768886625, -0.0011587295601298564, 0.0010821022163653993},
+        {1.0, 0.0, 0.0, 0.0},
+        {1.0003718791627394, 0.0006991645819134362, -0.0009717152039527832,
+         2.4391552233993252e-05}}});
+}
+
+/// A warp whose planes all correct the same barrel distortion.
+auto DistortionWarp() -> dng::WarpRectilinear {
+  return ThreePlaneWarp(
+      {{{1.0, -0.02, 0.003, 0.0}, {1.0, -0.02, 0.003, 0.0}, {1.0, -0.02, 0.003, 0.0}}});
+}
+
+}  // namespace
+
+TEST(LensCalibDevelopResolve, DngWarpCorrectionsNameWhatTheWarpMoves) {
+  EXPECT_FALSE(dng::CorrectionsOf(std::optional<dng::WarpRectilinear>{}).distortion);
+
+  const auto identity = dng::CorrectionsOf(
+      ThreePlaneWarp({{{1.0, 0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}}}));
+  EXPECT_FALSE(identity.distortion);
+  EXPECT_FALSE(identity.lateral_ca);
+
+  const auto lateral_ca = dng::CorrectionsOf(CameraRawLateralCaWarp());
+  EXPECT_FALSE(lateral_ca.distortion);
+  EXPECT_TRUE(lateral_ca.lateral_ca);
+
+  const auto distortion = dng::CorrectionsOf(DistortionWarp());
+  EXPECT_TRUE(distortion.distortion);
+  EXPECT_FALSE(distortion.lateral_ca);
+
+  // One coefficient set applies to every plane: it can correct only distortion.
+  dng::WarpRectilinear single  = DistortionWarp();
+  single.coefficient_set_count = 1;
+  EXPECT_TRUE(dng::CorrectionsOf(single).distortion);
+  EXPECT_FALSE(dng::CorrectionsOf(single).lateral_ca);
+
+  // A tangential term alone moves the reference plane too.
+  dng::WarpRectilinear tangential =
+      ThreePlaneWarp({{{1.0, 0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}, {1.0, 0.0, 0.0, 0.0}}});
+  for (auto& set : tangential.coefficient_sets) {
+    set[4] = 0.001;
+  }
+  EXPECT_TRUE(dng::CorrectionsOf(tangential).distortion);
+  EXPECT_FALSE(dng::CorrectionsOf(tangential).lateral_ca);
 }
 
 TEST(LensCalibDevelopResolve, DngWarpKeepsVignettingAndDisablesGeometryCorrections) {
@@ -269,9 +337,9 @@ TEST(LensCalibDevelopResolve, DngWarpKeepsVignettingAndDisablesGeometryCorrectio
   payload.apply_tca  = true;
   payload.apply_crop = true;
   const auto without_warp =
-      LensCalibrationResolver::Resolve(payload, FocalOnlyContext(), Extent2D{96, 64}, false);
-  const auto with_warp =
-      LensCalibrationResolver::Resolve(payload, FocalOnlyContext(), Extent2D{96, 64}, true);
+      LensCalibrationResolver::Resolve(payload, FocalOnlyContext(), Extent2D{96, 64}, {});
+  const auto with_warp = LensCalibrationResolver::Resolve(
+      payload, FocalOnlyContext(), Extent2D{96, 64}, dng::CorrectionsOf(DistortionWarp()));
   ASSERT_TRUE(without_warp.has_value());
   ASSERT_TRUE(with_warp.has_value());
   EXPECT_EQ(without_warp->apply_distortion, 1);
@@ -280,6 +348,26 @@ TEST(LensCalibDevelopResolve, DngWarpKeepsVignettingAndDisablesGeometryCorrectio
   EXPECT_EQ(with_warp->apply_projection, 0);
   EXPECT_EQ(with_warp->apply_crop, 0);
   EXPECT_EQ(with_warp->apply_vignetting, 1);
+}
+
+// Issue #1144: Camera Raw corrects the distortion of the lens with a lens profile outside the
+// file and writes a warp that corrects only lateral chromatic aberration. Lensfun then corrects
+// the distortion; only its TCA would correct the same error twice.
+TEST(LensCalibDevelopResolve, DngWarpOfLateralCaOnlyKeepsLensfunDistortion) {
+  auto payload       = TouitPayload(true);
+  payload.apply_tca  = true;
+  payload.apply_crop = true;
+  const auto without_warp =
+      LensCalibrationResolver::Resolve(payload, FocalOnlyContext(), Extent2D{96, 64}, {});
+  const auto with_warp = LensCalibrationResolver::Resolve(
+      payload, FocalOnlyContext(), Extent2D{96, 64}, dng::CorrectionsOf(CameraRawLateralCaWarp()));
+  ASSERT_TRUE(without_warp.has_value());
+  ASSERT_TRUE(with_warp.has_value());
+  EXPECT_EQ(with_warp->apply_distortion, 1);
+  EXPECT_EQ(with_warp->distortion_model, without_warp->distortion_model);
+  EXPECT_EQ(with_warp->apply_crop, without_warp->apply_crop);
+  EXPECT_EQ(with_warp->apply_vignetting, 1);
+  EXPECT_EQ(with_warp->apply_tca, 0);
 }
 
 TEST(LensCalibDevelopResolve, MalformedDatabaseSkipsLensCorrectionWithoutError) {
@@ -301,20 +389,20 @@ TEST(LensCalibDevelopResolve, MalformedDatabaseSkipsLensCorrectionWithoutError) 
   meta.lens_maker_      = "Zeiss";
   meta.lens_model_      = "Touit 1.8/32";
   meta.focal_length_mm_ = 32.0f;
-  EXPECT_EQ(LensCalibrationResolver::ResolveProfile(meta, settings, false).status_,
+  EXPECT_EQ(LensCalibrationResolver::ResolveProfile(meta, settings, {}).status_,
             LensProfileStatus::LensNotInDatabase);
 
   auto payload                 = TouitPayload(true);
   payload.lens_profile_db_path = broken_root.string();
   std::optional<LensCalibGpuParams> runtime;
   EXPECT_NO_THROW(runtime = LensCalibrationResolver::Resolve(payload, FocalOnlyContext(),
-                                                             Extent2D{96, 64}, false));
+                                                             Extent2D{96, 64}, {}));
   EXPECT_FALSE(runtime.has_value());
 
   // The database cache reloads the valid directory on the next call.
-  EXPECT_TRUE(LensCalibrationResolver::Resolve(TouitPayload(true), FocalOnlyContext(),
-                                               Extent2D{96, 64}, false)
-                  .has_value());
+  EXPECT_TRUE(
+      LensCalibrationResolver::Resolve(TouitPayload(true), FocalOnlyContext(), Extent2D{96, 64}, {})
+          .has_value());
   std::filesystem::remove_all(broken_root);
 }
 
@@ -359,7 +447,7 @@ auto AllCorrectionsSettings() -> LensCorrectionSettings {
 void ExpectProfileMatches(const LensMatchCase& lens) {
   const std::string context = std::string(lens.camera_model) + " + " + lens.lens_model;
   const auto        result =
-      LensCalibrationResolver::ResolveProfile(MetaFor(lens), AllCorrectionsSettings(), false);
+      LensCalibrationResolver::ResolveProfile(MetaFor(lens), AllCorrectionsSettings(), {});
   ASSERT_EQ(result.status_, LensProfileStatus::Resolved) << context;
   EXPECT_EQ(result.matched_lens_maker_, lens.expected_profile_maker) << context;
   EXPECT_EQ(result.matched_lens_model_, lens.expected_profile_model) << context;
@@ -472,7 +560,7 @@ TEST(LensCalibDevelopResolve, RevisedTamron17To70ProfileUsesUpdatedDistortionCoe
   lens.profile_has_vignetting = true;
 
   const auto result =
-      LensCalibrationResolver::ResolveProfile(MetaFor(lens), AllCorrectionsSettings(), false);
+      LensCalibrationResolver::ResolveProfile(MetaFor(lens), AllCorrectionsSettings(), {});
   ASSERT_EQ(result.status_, LensProfileStatus::Resolved);
   ASSERT_EQ(result.params_.distortion_model,
             static_cast<std::int32_t>(LensCalibDistortionModel::PTLENS));
@@ -504,6 +592,209 @@ TEST(LensCalibDevelopResolve, RenamedSony16To50ProfileMatchesVersionOneAndTwoNam
   }
 }
 
+// The EXIF lens name writes the aperture with an upper-case "F". Lensfun reads the focal range
+// from the searched name only with a lower-case "f"; without it, "E 15-30mm F2.8" matched the Zeiss
+// "E 21mm F2.8" by its words. The database has no profile for this lens.
+TEST(LensCalibDevelopResolve, ExifNameFocalRangeRejectsProfileWithOtherFocalLengths) {
+  LensInputMeta meta;
+  meta.cam_maker_         = "Sony";
+  meta.cam_model_         = "ILCE-7RM3";
+  meta.lens_model_        = "E 15-30mm F2.8";
+  meta.focal_length_mm_   = 15.0f;
+  meta.aperture_f_number_ = 10.0f;
+  meta.distance_m_        = 10.0f;
+  const auto result = LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), {});
+  EXPECT_EQ(result.status_, LensProfileStatus::LensNotInDatabase)
+      << "matched " << result.matched_lens_maker_ << " / " << result.matched_lens_model_;
+  EXPECT_FALSE(LensCalibrationResolver::ShotLensProfile(meta, LensDatabasePath()).has_value());
+
+  // The search by words, which follows when the first search finds nothing, also keeps the named
+  // focal range: a shot at 21 mm fits the Zeiss range, but its name states 21 mm, not 15-30 mm.
+  meta.focal_length_mm_ = 21.0f;
+  EXPECT_EQ(LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), {}).status_,
+            LensProfileStatus::LensNotInDatabase);
+}
+
+namespace {
+
+/// A RAW lens name of a Panasonic DC-S5M2 shot, without a lens maker, as the Sigma L-mount
+/// lenses write it.
+auto S5M2Shot(const char* lens_model, float focal_length_mm) -> LensInputMeta {
+  LensInputMeta meta;
+  meta.cam_maker_         = "Panasonic";
+  meta.cam_model_         = "DC-S5M2";
+  meta.lens_model_        = lens_model;
+  meta.focal_length_mm_   = focal_length_mm;
+  meta.aperture_f_number_ = 2.8f;
+  meta.distance_m_        = 10.0f;
+  return meta;
+}
+
+constexpr const char* kSigma28To70Profile = "28-70mm F2.8 DG DN | Contemporary 021";
+
+}  // namespace
+
+// Issue #1142: the Sigma L-mount EXIF name writes spaces around the dash. Lensfun read
+// "28 - 70mm f2.8" as a 70 mm lens and matched the Sigma 70mm f/2.8 DG Macro.
+TEST(LensCalibDevelopResolve, FocalRangeWithSpacesOrEnDashMatchesItsProfile) {
+  const char* names[] = {
+      "28 - 70mm F2.8 DG DN | Contemporary 021",
+      "28-70mm F2.8 DG DN | Contemporary 021",
+      "28\xE2\x80\x93"
+      "70mm F2.8 DG DN | Contemporary 021",
+      "  28 -70mm  F2.8 DG DN | Contemporary 021 ",
+  };
+  for (const char* name : names) {
+    for (const float focal_mm : {28.0f, 50.0f, 70.0f}) {
+      const auto meta = S5M2Shot(name, focal_mm);
+      const auto result =
+          LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), {});
+      ASSERT_EQ(result.status_, LensProfileStatus::Resolved) << name << " at " << focal_mm;
+      EXPECT_EQ(result.matched_lens_maker_, "Sigma") << name << " at " << focal_mm;
+      EXPECT_EQ(result.matched_lens_model_, kSigma28To70Profile) << name << " at " << focal_mm;
+      EXPECT_EQ(result.params_.apply_distortion, 1) << name << " at " << focal_mm;
+
+      const auto shown = LensCalibrationResolver::ShotLensProfile(meta, LensDatabasePath());
+      ASSERT_TRUE(shown.has_value()) << name << " at " << focal_mm;
+      EXPECT_EQ(shown->model_, kSigma28To70Profile) << name << " at " << focal_mm;
+    }
+  }
+}
+
+// A profile whose focal range does not contain the shooting focal length names another lens: a
+// shot at 28 mm is not a shot with a 70 mm prime, whatever the words of the name.
+TEST(LensCalibDevelopResolve, ShotFocalLengthOutsideTheProfileRangeRejectsTheProfile) {
+  const char* macro = "70mm F2.8 DG Macro | Art 018";
+  const auto  at_28 =
+      LensCalibrationResolver::ResolveProfile(S5M2Shot(macro, 28.0f), AllCorrectionsSettings(), {});
+  EXPECT_EQ(at_28.status_, LensProfileStatus::LensNotInDatabase)
+      << "matched " << at_28.matched_lens_maker_ << " / " << at_28.matched_lens_model_;
+  EXPECT_FALSE(LensCalibrationResolver::ShotLensProfile(S5M2Shot(macro, 28.0f), LensDatabasePath())
+                   .has_value());
+
+  const auto at_70 =
+      LensCalibrationResolver::ResolveProfile(S5M2Shot(macro, 70.0f), AllCorrectionsSettings(), {});
+  ASSERT_EQ(at_70.status_, LensProfileStatus::Resolved);
+  EXPECT_EQ(at_70.matched_lens_model_, "Sigma 70mm f/2.8 DG Macro | Art 018");
+}
+
+// Lensfun compares the aperture only with a value that the profile XML states, and most profiles
+// state none. The names state it: an f/2 lens is not the f/3.5-5.6 lens of the same focal range.
+TEST(LensCalibDevelopResolve, NamedApertureRejectsProfileOfAnotherAperture) {
+  const LensMatchCase lenses[] = {
+      {"SONY", "ILCE-1M2", "", "FE 28-70mm F2 GM", 28.0f, 2.0f, "", "", false},
+      {"NIKON CORPORATION", "NIKON Z 8", "", "Viltrox AF 35mm f/1.2 LAB Z", 35.0f, 1.2f, "", "",
+       false},
+      {"NIKON CORPORATION", "NIKON D300", "", "18-125mm f/3.8-5.6", 86.0f, 5.6f, "", "", false},
+  };
+  for (const auto& lens : lenses) {
+    const auto result =
+        LensCalibrationResolver::ResolveProfile(MetaFor(lens), AllCorrectionsSettings(), {});
+    EXPECT_EQ(result.status_, LensProfileStatus::LensNotInDatabase)
+        << lens.lens_model << " matched " << result.matched_lens_maker_ << " / "
+        << result.matched_lens_model_;
+  }
+}
+
+// RAW names that the checks of auto-detect keep matching: a short name whose profile name adds
+// words, and a shot whose recorded focal length (0.2 mm) is no measurement.
+TEST(LensCalibDevelopResolve, ShortRawNameAndUnmeasuredFocalLengthKeepTheirProfiles) {
+  const struct {
+    LensMatchCase lens;
+    const char*   expected_model;
+  } cases[] = {
+      {{"NIKON CORPORATION", "NIKON D7000", "", "17-55mm f/2.8", 35.0f, 2.8f, "", "", false},
+       "Nikon AF-S DX Zoom-Nikkor 17-55mm f/2.8G IF-ED"},
+      {{"SONY", "ILCE-7M5", "", "24-70mm F2.8 DG DN II | Art 024", 0.2f, 2.8f, "", "", false},
+       "24-70mm F2.8 DG DN II | Art 024"},
+  };
+  for (const auto& c : cases) {
+    const auto result =
+        LensCalibrationResolver::ResolveProfile(MetaFor(c.lens), AllCorrectionsSettings(), {});
+    ASSERT_EQ(result.status_, LensProfileStatus::Resolved) << c.lens.lens_model;
+    EXPECT_EQ(result.matched_lens_model_, c.expected_model) << c.lens.lens_model;
+  }
+}
+
+TEST(LensCalibDevelopResolve, PanasonicS5M2DngWithSigma28To70ResolvesItsProfile) {
+  const auto sample_path =
+      std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "lumix" / "s5ii" / "P2625177.dng";
+  if (!std::filesystem::exists(sample_path)) {
+    GTEST_SKIP() << "Sample DNG not found: " << sample_path.string();
+  }
+  const auto prepared = RawInputLoader::LoadEncoded(ReadBytes(sample_path), DecodeRes::EIGHTH);
+  EXPECT_EQ(prepared.color_context.lens_model_, "28 - 70mm F2.8 DG DN | Contemporary 021");
+
+  LensInputMeta meta;
+  meta.cam_maker_         = prepared.color_context.camera_make_;
+  meta.cam_model_         = prepared.color_context.camera_model_;
+  meta.lens_maker_        = prepared.color_context.lens_make_;
+  meta.lens_model_        = prepared.color_context.lens_model_;
+  meta.focal_length_mm_   = prepared.color_context.focal_length_mm_;
+  meta.aperture_f_number_ = prepared.color_context.aperture_f_number_;
+  const auto shown        = LensCalibrationResolver::ShotLensProfile(meta, LensDatabasePath());
+  ASSERT_TRUE(shown.has_value());
+  EXPECT_EQ(shown->model_, kSigma28To70Profile);
+
+  DevelopPayload payload;
+  payload.lens_enabled         = true;
+  payload.lens_profile_db_path = LensDatabasePath();
+  const auto runtime           = LensCalibrationResolver::Resolve(
+      payload, prepared.color_context, prepared.CompileSource().develop_output_extent, {});
+  ASSERT_TRUE(runtime.has_value());
+  EXPECT_EQ(runtime->apply_distortion, 1);
+}
+
+// A catalog selection names the lens on the camera, also a lens of another mount on an adapter.
+// The Lensfun search used to reject such a profile for its mount, so a selected Tamron, Pentax, or
+// Canon lens corrected nothing on a Sony E camera.
+TEST(LensCalibDevelopResolve, CatalogSelectionOfAnotherMountResolvesOnTheCamera) {
+  const char* selections[][2] = {
+      {"Tamron", "Tamron SP 15-30mm f/2.8 Di VC USD (A012)"},
+      {"Pentax", "HD Pentax-D FA 15-30mm f/2.8 ED SDM WR"},
+      {"Canon", "Canon RF 15-30mm F4.5-6.3 IS STM"},
+  };
+  for (const auto& selection : selections) {
+    LensInputMeta meta;
+    meta.cam_maker_         = "Sony";
+    meta.cam_model_         = "ILCE-7RM3";
+    meta.lens_maker_        = selection[0];
+    meta.lens_model_        = selection[1];
+    meta.focal_length_mm_   = 15.0f;
+    meta.aperture_f_number_ = 10.0f;
+    meta.lens_selected_     = true;
+    const auto result = LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), {});
+    ASSERT_EQ(result.status_, LensProfileStatus::Resolved) << selection[1];
+    EXPECT_EQ(result.matched_lens_maker_, selection[0]);
+    EXPECT_EQ(result.matched_lens_model_, selection[1]);
+    EXPECT_EQ(result.params_.apply_distortion, 1) << selection[1];
+
+    // The RAW lens name keeps the mount check.
+    meta.lens_selected_ = false;
+    EXPECT_EQ(LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), {}).status_,
+              LensProfileStatus::LensNotInDatabase)
+        << selection[1];
+  }
+
+  // Develop marks the payload lens as a selection.
+  RawRuntimeColorContext context;
+  context.valid_             = true;
+  context.camera_make_       = "Sony";
+  context.camera_model_      = "ILCE-7RM3";
+  context.lens_model_        = "E 15-30mm F2.8";
+  context.focal_length_mm_   = 15.0f;
+  context.aperture_f_number_ = 10.0f;
+  DevelopPayload payload;
+  payload.lens_enabled         = true;
+  payload.lens_profile_db_path = LensDatabasePath();
+  EXPECT_FALSE(
+      LensCalibrationResolver::Resolve(payload, context, Extent2D{96, 64}, {}).has_value());
+  payload.lens_maker = "Tamron";
+  payload.lens_model = "Tamron SP 15-30mm f/2.8 Di VC USD (A012)";
+  const auto runtime = LensCalibrationResolver::Resolve(payload, context, Extent2D{96, 64}, {});
+  ASSERT_TRUE(runtime.has_value());
+  EXPECT_EQ(runtime->apply_distortion, 1);
+}
 // Issue #714: the Panasonic maker note names the lens with the Lensfun model name.
 TEST(LensCalibDevelopResolve, PanasonicMakerNoteLensNameMatchesLensfunProfile) {
   ExpectProfileMatches({"Panasonic", "DC-G9", "", "LEICA DG 12-60/F2.8-4.0", 32.0f, 8.0f,
@@ -526,7 +817,7 @@ TEST(LensCalibDevelopResolve, Rw2EmbeddedJpegLensNameResolvesProfileWithoutUserS
   payload.lens_enabled         = true;
   payload.lens_profile_db_path = LensDatabasePath();
   const auto runtime           = LensCalibrationResolver::Resolve(
-      payload, prepared.color_context, prepared.CompileSource().develop_output_extent, false);
+      payload, prepared.color_context, prepared.CompileSource().develop_output_extent, {});
   EXPECT_TRUE(runtime.has_value());
 }
 
@@ -549,7 +840,7 @@ auto NamelessLensShot(const char* camera_maker, const char* camera_model, float 
 // Issue #960: a fixed-lens camera writes no lens name; the camera names its built-in lens.
 TEST(LensCalibDevelopResolve, FixedLensCameraWithoutLensNameResolvesBuiltInLensProfile) {
   const auto gfx = LensCalibrationResolver::ResolveProfile(
-      NamelessLensShot("Fujifilm", "GFX100RF", 35.0f, 7.1f), AllCorrectionsSettings(), false);
+      NamelessLensShot("Fujifilm", "GFX100RF", 35.0f, 7.1f), AllCorrectionsSettings(), {});
   ASSERT_EQ(gfx.status_, LensProfileStatus::Resolved);
   EXPECT_EQ(gfx.matched_lens_maker_, "Fujifilm");
   EXPECT_EQ(gfx.matched_lens_model_, "GFX100RF & compatibles (Standard)");
@@ -558,14 +849,14 @@ TEST(LensCalibDevelopResolve, FixedLensCameraWithoutLensNameResolvesBuiltInLensP
             static_cast<std::int32_t>(LensCalibDistortionModel::PTLENS));
 
   const auto gr3x = LensCalibrationResolver::ResolveProfile(
-      NamelessLensShot("Ricoh", "GR IIIx", 26.1f, 5.0f), AllCorrectionsSettings(), false);
+      NamelessLensShot("Ricoh", "GR IIIx", 26.1f, 5.0f), AllCorrectionsSettings(), {});
   ASSERT_EQ(gr3x.status_, LensProfileStatus::Resolved);
   EXPECT_EQ(gr3x.matched_lens_model_, "Ricoh GR IIIx & compatibles");
   EXPECT_EQ(gr3x.params_.apply_distortion, 1);
   EXPECT_EQ(gr3x.params_.apply_vignetting, 1);
 
   const auto gr3 = LensCalibrationResolver::ResolveProfile(
-      NamelessLensShot("Ricoh", "GR III", 18.3f, 2.8f), AllCorrectionsSettings(), false);
+      NamelessLensShot("Ricoh", "GR III", 18.3f, 2.8f), AllCorrectionsSettings(), {});
   ASSERT_EQ(gr3.status_, LensProfileStatus::Resolved);
   EXPECT_EQ(gr3.matched_lens_model_, "Ricoh GR III & compatibles + GW-4");
   EXPECT_EQ(gr3.params_.apply_distortion, 1);
@@ -575,44 +866,55 @@ TEST(LensCalibDevelopResolve, FixedLensCameraWithoutLensNameResolvesBuiltInLensP
   // The EXIF names, which the Lensfun entry lists first, select the same camera.
   const auto gr3x_exif = LensCalibrationResolver::ResolveProfile(
       NamelessLensShot("RICOH IMAGING COMPANY, LTD.", "RICOH GR IIIx", 26.1f, 5.0f),
-      AllCorrectionsSettings(), false);
+      AllCorrectionsSettings(), {});
   ASSERT_EQ(gr3x_exif.status_, LensProfileStatus::Resolved);
   EXPECT_EQ(gr3x_exif.matched_lens_model_, "Ricoh GR IIIx & compatibles");
 }
 
 TEST(LensCalibDevelopResolve, FixedLensCameraWithUnknownLensNameResolvesBuiltInLensProfile) {
-  auto meta        = NamelessLensShot("Fujifilm", "GFX100RF", 35.0f, 7.1f);
-  meta.lens_model_ = "GF 35mm F4";
-  const auto result =
-      LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), false);
+  auto meta         = NamelessLensShot("Fujifilm", "GFX100RF", 35.0f, 7.1f);
+  meta.lens_model_  = "GF 35mm F4";
+  const auto result = LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), {});
   ASSERT_EQ(result.status_, LensProfileStatus::Resolved);
   EXPECT_EQ(result.matched_lens_model_, "GFX100RF & compatibles (Standard)");
 }
 
 TEST(LensCalibDevelopResolve, InterchangeableLensCameraWithoutLensNameHasNoLensIdentity) {
-  EXPECT_EQ(
-      LensCalibrationResolver::ResolveProfile(NamelessLensShot("Fujifilm", "GFX100S", 35.0f, 4.0f),
-                                              AllCorrectionsSettings(), false)
-          .status_,
-      LensProfileStatus::MissingLensIdentity);
   EXPECT_EQ(LensCalibrationResolver::ResolveProfile(
-                NamelessLensShot("Sony", "ILCE-7M4", 50.0f, 1.4f), AllCorrectionsSettings(), false)
+                NamelessLensShot("Fujifilm", "GFX100S", 35.0f, 4.0f), AllCorrectionsSettings(), {})
+                .status_,
+            LensProfileStatus::MissingLensIdentity);
+  EXPECT_EQ(LensCalibrationResolver::ResolveProfile(
+                NamelessLensShot("Sony", "ILCE-7M4", 50.0f, 1.4f), AllCorrectionsSettings(), {})
                 .status_,
             LensProfileStatus::MissingLensIdentity);
 }
 
-TEST(LensCalibDevelopResolve, FixedLensProfileNamesOnlyBuiltInLenses) {
-  const auto gfx = LensCalibrationResolver::FixedLensProfile(
+// The auto-detect control shows the profile that ResolveProfile matches, so enabling the correction
+// writes the lens that the render uses.
+TEST(LensCalibDevelopResolve, ShotLensProfileNamesTheProfileThatResolveProfileMatches) {
+  const auto gfx = LensCalibrationResolver::ShotLensProfile(
       NamelessLensShot("Fujifilm", "GFX100RF", 35.0f, 7.1f), LensDatabasePath());
   ASSERT_TRUE(gfx.has_value());
   EXPECT_EQ(gfx->maker_, "Fujifilm");
   EXPECT_EQ(gfx->model_, "GFX100RF & compatibles (Standard)");
 
-  EXPECT_FALSE(LensCalibrationResolver::FixedLensProfile(
+  auto named        = NamelessLensShot("Sony", "ILCE-7M4", 50.0f, 1.4f);
+  named.lens_model_ = "FE 50mm F1.4 GM";
+  const auto sony   = LensCalibrationResolver::ShotLensProfile(named, LensDatabasePath());
+  ASSERT_TRUE(sony.has_value());
+  EXPECT_EQ(sony->maker_, "Sony");
+  EXPECT_EQ(sony->model_, "FE 50mm f/1.4 GM");
+  const auto resolved =
+      LensCalibrationResolver::ResolveProfile(named, AllCorrectionsSettings(), {});
+  EXPECT_EQ(resolved.matched_lens_maker_, sony->maker_);
+  EXPECT_EQ(resolved.matched_lens_model_, sony->model_);
+
+  EXPECT_FALSE(LensCalibrationResolver::ShotLensProfile(
                    NamelessLensShot("Fujifilm", "GFX100S", 35.0f, 4.0f), LensDatabasePath())
                    .has_value());
-  EXPECT_FALSE(LensCalibrationResolver::FixedLensProfile(NamelessLensShot("", "", 35.0f, 4.0f),
-                                                         LensDatabasePath())
+  EXPECT_FALSE(LensCalibrationResolver::ShotLensProfile(NamelessLensShot("", "", 35.0f, 4.0f),
+                                                        LensDatabasePath())
                    .has_value());
 }
 
@@ -643,7 +945,7 @@ TEST(LensCalibDevelopResolve, FixedLensCameraRawsResolveProfileWithoutUserSelect
     meta.focal_length_mm_   = prepared.color_context.focal_length_mm_;
     meta.aperture_f_number_ = prepared.color_context.aperture_f_number_;
     const auto profile =
-        LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), false);
+        LensCalibrationResolver::ResolveProfile(meta, AllCorrectionsSettings(), {});
     ASSERT_EQ(profile.status_, LensProfileStatus::Resolved)
         << sample.path << " camera \"" << meta.cam_maker_ << "\" / \"" << meta.cam_model_ << "\"";
     EXPECT_EQ(profile.matched_lens_model_, sample.expected_profile_model) << sample.path;
@@ -653,7 +955,7 @@ TEST(LensCalibDevelopResolve, FixedLensCameraRawsResolveProfileWithoutUserSelect
     payload.lens_profile_db_path = LensDatabasePath();
     const auto runtime           = LensCalibrationResolver::Resolve(
         payload, prepared.color_context, prepared.CompileSource().develop_output_extent,
-        prepared.dng_warp_rectilinear.has_value());
+        dng::CorrectionsOf(prepared.dng_warp_rectilinear));
     EXPECT_TRUE(runtime.has_value()) << sample.path;
   }
   if (checked == 0) {

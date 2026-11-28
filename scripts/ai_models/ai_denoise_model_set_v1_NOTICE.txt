@@ -1,0 +1,54 @@
+Alcedo Studio AI Denoise model set, version 1
+=============================================
+
+This package contains the AI Denoise model of Alcedo Studio. The model is not part of the Alcedo
+Studio installer. Alcedo Studio downloads this package from the Alcedo download server
+(https://static.aoraw.org) when the user installs the AI Denoise model on the AI Models settings
+page. package-inventory.json lists the size and SHA-256 of every file of the package.
+model_set.json names the model set version and the revision of the weights.
+
+The license texts are in the licenses/ folder:
+
+- licenses/GPL-3.0.txt: GNU General Public License version 3
+- licenses/CC-BY-4.0.txt: Creative Commons Attribution 4.0 International
+
+
+1. UtNet2 Bayer denoiser (dark area loss, step 10000)
+-----------------------------------------------------
+
+File: utnet2_bayer_dark_loss_10k_fp16.onnx (the same file on Windows and macOS).
+
+Source: alcedo-denoise-lab, https://github.com/zidage/alcedo-denoise-lab, checkpoint
+models/dark_area_loss/checkpoint_10000.pt (SHA-256
+b2244dec55f9f0ee82eaded6b9b053b7460a60638814ed1f2faa5ea1bb7a5818), exported as the weights file
+utnet2_bayer_dark_loss_10k.safetensors (SHA-256
+0bfb9ddb07e6e6c20e6764dfc30336d9314d5760f875992f2144f13dd0df13a5), release
+export-utnet2-bayer-dark-loss-10k of that repository.
+License: GNU General Public License version 3 and Creative Commons Attribution 4.0 International
+(licenses/GPL-3.0.txt, licenses/CC-BY-4.0.txt), the licenses of the public weights that the
+model starts from.
+Changes: Alcedo Studio fine-tuned the public RawNIND UtNet2 Bayer weights (below) for 10,000 steps
+with a loss that weights the dark areas of the image. For this package, the layers were rescaled
+exactly and the graph was exported to ONNX in 16-bit float (output_scale 170.34 in the metadata of
+the graph). The model reads the packed Bayer mosaic of a RAW photo and writes camera RGB at the
+size of the mosaic, so it also does the demosaic.
+
+Starting weights: the RawNIND UtNet2 Bayer model by Benoit Brummer and Christophe De
+Vleeschouwer, https://github.com/trougnouf/rawnind_jddc (commit
+e80fb7b14dc440bba38c01f312fd3cc02deb566c), checkpoint iter_4350000.pt of the experiment
+DenoiserTrainingBayerToProfiledRGB_4ch_2024-02-21-bayer_ms-ssim_mgout_notrans_valeither_-4
+(SHA-256 c1f7de3de24cb12f4803ee65e11cfb467e9a5b80c3cb7126746ef026106c15e0). The authors license
+the weights under the GNU General Public License version 3 and Creative Commons Attribution 4.0
+International. Paper: "Learning Joint Denoising, Demosaicing, and Compression from the Raw Natural
+Image Noise Dataset", arXiv 2501.08924.
+
+Training data: the Bayer scenes of the Raw Natural Image Noise Dataset (RawNIND) by Benoit
+Brummer and Christophe De Vleeschouwer, Universite catholique de Louvain,
+https://doi.org/10.14428/DVN/DEQCIM, licensed under Creative Commons Attribution-ShareAlike 4.0
+International (https://creativecommons.org/licenses/by-sa/4.0/). The test scenes of the authors
+were not used for training. alcedo-denoise-lab treats the fine-tuned weights as adapted material
+of the dataset and licenses them under the GNU General Public License version 3, a license that
+Creative Commons lists as compatible with CC BY-SA 4.0. The FP16 rescale was calibrated on RawNIND
+photos outside the test scenes.
+
+You decide whether the model and its output can be used for your purpose.

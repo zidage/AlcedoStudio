@@ -42,6 +42,7 @@
 #include "app/project_service.hpp"
 #include "library_search_test_support.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
+#include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "sleeve/sleeve_filter/filter_factory.hpp"
 #include "storage/mapper/sleeve/element/element_mapper.hpp"
@@ -51,6 +52,7 @@
 #include "storage/store/semantic/semantic_records.hpp"
 #include "storage/store/semantic/semantic_vector_search.hpp"
 #include "storage/store/sleeve/element_store.hpp"
+#include "type/album_scope.hpp"
 #include "support/non_raw_import_files.hpp"
 #include "support/test_temp_directory.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -204,10 +206,10 @@ class AlbumQueryTest : public ::testing::Test {
 
   auto ReadAll(ProjectService& project, const AlbumQueryOptions& options,
                const std::optional<duckorm::SqlFragment>& filter = std::nullopt,
-               sl_element_id_t folder_id = 0, const std::string& model = kActiveModel)
+               const AlbumScope& scope = AlbumScope{}, const std::string& model = kActiveModel)
       -> AlbumQueryResult {
     return Store(project).ReadAlbumQuery(
-        folder_id, filter, options, model,
+        scope, filter, options, model,
         AlbumQueryRead{
             .offset_ = 0, .limit_ = 1000, .read_groups_ = true, .read_statistics_ = true});
   }
@@ -938,8 +940,8 @@ TEST_F(AlbumQueryTest, AlbumScopeAndEmptyScopeUseTheSameQuery) {
   EXPECT_TRUE(empty.rows_.empty());
 }
 
-// Issue #733: one grouped read gives the Collections tree the photo count of every folder,
-// equal to the total of the library view of that folder; an empty folder has no entry.
+// Issue #733: one read gives the Collections tree the photo count of every folder; an empty
+// folder has no entry. A leaf folder counts the total of its library view.
 TEST_F(AlbumQueryTest, FolderImageCountsMatchEveryFolderScope) {
   ProjectService project(db_path_, meta_path_);
   BuildFixture(project);
@@ -969,13 +971,161 @@ TEST_F(AlbumQueryTest, FolderImageCountsMatchEveryFolderScope) {
   EXPECT_EQ(counts.folder_photo_counts_.at(day_id), 1u);
   EXPECT_FALSE(counts.folder_photo_counts_.contains(empty_id));
   EXPECT_EQ(store.CountFilesInFolder(empty_id), 0u);
-  for (const auto& [folder_id, count] : counts.folder_photo_counts_) {
-    EXPECT_EQ(count, store.CountFilesInFolder(folder_id)) << "folder " << folder_id;
-  }
+  EXPECT_EQ(counts.folder_photo_counts_.at(day_id), store.CountFilesInFolder(day_id));
 
   // Removing a photo from a folder is seen by the next read.
   ASSERT_TRUE(sleeve->DeleteFileFromFolder(ids_[0], trip_id).success_);
   EXPECT_EQ(store.ReadFolderImageCounts().folder_photo_counts_.at(trip_id), 2u);
+}
+
+// Issue #1007: the count of a folder is the number of distinct photos in its subtree. A parent
+// with photos only in its children counts them, and a photo linked into two children counts
+// once.
+TEST_F(AlbumQueryTest, FolderImageCountsCoverTheSubtree) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  auto       sleeve = project.GetSleeveService();
+  const auto a      = sleeve->CreateFolder(L"/", L"A");
+  ASSERT_TRUE(a.second.success_);
+  const auto b = sleeve->CreateFolder(L"/A", L"B");
+  const auto c = sleeve->CreateFolder(L"/A", L"C");
+  ASSERT_TRUE(b.second.success_);
+  ASSERT_TRUE(c.second.success_);
+  const auto d = sleeve->CreateFolder(L"/A/C", L"D");
+  ASSERT_TRUE(d.second.success_);
+  const auto a_id = a.first->element_id_;
+  const auto b_id = b.first->element_id_;
+  const auto c_id = c.first->element_id_;
+  const auto d_id = d.first->element_id_;
+  for (const auto index : {0, 1, 2}) {
+    ASSERT_TRUE(sleeve->LinkFileToFolder(ids_[index], b_id).success_);
+  }
+  for (const auto index : {2, 3}) {
+    ASSERT_TRUE(sleeve->LinkFileToFolder(ids_[index], c_id).success_);
+  }
+  // A grandchild photo counts in C and in A; ids_[0] is in B already.
+  for (const auto index : {0, 4}) {
+    ASSERT_TRUE(sleeve->LinkFileToFolder(ids_[index], d_id).success_);
+  }
+
+  auto&      store  = Store(project);
+  const auto counts = store.ReadFolderImageCounts();
+  EXPECT_EQ(counts.project_photo_count_, ids_.size());
+  EXPECT_EQ(store.CountFilesInFolder(a_id), 0u);
+  ASSERT_TRUE(counts.folder_photo_counts_.contains(a_id));
+  EXPECT_EQ(counts.folder_photo_counts_.at(a_id), 5u);  // ids 0..4
+  EXPECT_EQ(counts.folder_photo_counts_.at(b_id), 3u);
+  EXPECT_EQ(counts.folder_photo_counts_.at(c_id), 4u);  // ids 0, 2, 3, 4
+  EXPECT_EQ(counts.folder_photo_counts_.at(d_id), 2u);
+  // The root row has its own count (#1076); the folder map has no entry for it.
+  EXPECT_FALSE(counts.folder_photo_counts_.contains(0));
+  EXPECT_EQ(counts.library_root_photo_count_, ids_.size());
+}
+
+namespace {
+
+constexpr mount_id_t kCountMount = 7;
+
+/// A mount tree `/Card` with the child folder `/Card/Day 1`, without a MountRoot row. The photos
+/// of @p in_root and @p in_day get their home link there and the mount id, as a scan places
+/// them. Returns the ids of the two folders.
+auto AddMountTree(SleeveServiceImpl& sleeve, const std::vector<sl_element_id_t>& in_root,
+                  const std::vector<sl_element_id_t>& in_day)
+    -> std::pair<sl_element_id_t, sl_element_id_t> {
+  auto [card, card_sync] = sleeve.CreateMountRootFolder(L"Card", kCountMount);
+  EXPECT_TRUE(card_sync.success_) << card_sync.message_;
+  const auto card_id  = card->element_id_;
+  auto [day_id, sync] = sleeve.Write<sl_element_id_t>([&](FileSystem& fs) {
+    auto day       = fs.CreateFolderIn(card_id, L"Day 1");
+    day->mount_id_ = kCountMount;
+    const auto place = [&fs](sl_element_id_t file_id, sl_element_id_t folder_id) {
+      auto file       = fs.Get(file_id);
+      file->mount_id_ = kCountMount;
+      file->MarkModified();
+      fs.LinkFileToFolder(file_id, folder_id);
+    };
+    for (const auto file_id : in_root) {
+      place(file_id, card_id);
+    }
+    for (const auto file_id : in_day) {
+      place(file_id, day->element_id_);
+    }
+    return day->element_id_;
+  });
+  EXPECT_TRUE(sync.success_) << sync.message_;
+  return {card_id, day_id};
+}
+
+}  // namespace
+
+// #1076: the library root row counts the photos that no other folder holds and the photos of
+// the ordinary collections. A mounted photo counts only when an ordinary collection holds it.
+// All Photos counts every photo.
+TEST_F(AlbumQueryTest, LibraryRootCountLeavesOutTheMountTrees) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  ASSERT_GE(ids_.size(), 5u);
+  auto       sleeve = project.GetSleeveService();
+  const auto trip   = sleeve->CreateFolder(L"/", L"Trip");
+  ASSERT_TRUE(trip.second.success_);
+  const auto trip_id = trip.first->element_id_;
+  // ids_[1] and ids_[2] are mounted in the root of the mount, ids_[3] in its child folder.
+  const auto [card_id, day_id] = AddMountTree(*sleeve, {ids_[1], ids_[2]}, {ids_[3]});
+  ASSERT_TRUE(sleeve->LinkFileToFolder(ids_[0], trip_id).success_);
+  // Add to: the mounted ids_[2] is also in the ordinary collection.
+  ASSERT_TRUE(sleeve->LinkFileToFolder(ids_[2], trip_id).success_);
+
+  const auto counts = Store(project).ReadFolderImageCounts();
+  EXPECT_EQ(counts.project_photo_count_, ids_.size());
+  EXPECT_EQ(counts.library_root_photo_count_, ids_.size() - 2);  // without ids_[1], ids_[3]
+  EXPECT_EQ(counts.folder_photo_counts_.at(trip_id), 2u);
+  EXPECT_EQ(counts.folder_photo_counts_.at(card_id), 3u);
+  EXPECT_EQ(counts.folder_photo_counts_.at(day_id), 1u);
+}
+
+// #1076: the library root scope lists only the photos that no folder other than the root holds:
+// not the photos of a collection, and not the mounted photos. Every read of the album query
+// takes the scope.
+TEST_F(AlbumQueryTest, LibraryRootScopeListsOnlyThePhotosThatNoOtherFolderHolds) {
+  ProjectService project(db_path_, meta_path_);
+  BuildFixture(project);
+  ASSERT_GE(ids_.size(), 5u);
+  auto       sleeve = project.GetSleeveService();
+  const auto trip   = sleeve->CreateFolder(L"/", L"Trip");
+  ASSERT_TRUE(trip.second.success_);
+  ASSERT_TRUE(sleeve->LinkFileToFolder(ids_[0], trip.first->element_id_).success_);
+  (void)AddMountTree(*sleeve, {ids_[1]}, {ids_[2]});
+
+  std::vector<sl_element_id_t> expected(ids_.begin() + 3, ids_.end());
+  std::sort(expected.begin(), expected.end());
+  const AlbumQueryOptions options{};
+  auto root_ids = RowIds(ReadAll(project, options, std::nullopt, AlbumScope::LibraryRoot()));
+  std::sort(root_ids.begin(), root_ids.end());
+  EXPECT_EQ(root_ids, expected);
+
+  // All Photos keeps every photo.
+  EXPECT_EQ(ReadAll(project, options).unique_file_count_, static_cast<int64_t>(ids_.size()));
+
+  auto& store = Store(project);
+  EXPECT_FALSE(store
+                   .ReadAlbumFilePosition(AlbumScope::LibraryRoot(), std::nullopt, options,
+                                          kActiveModel, ids_[0], std::nullopt)
+                   .has_value());
+  EXPECT_TRUE(store
+                  .ReadAlbumFilePosition(AlbumScope::LibraryRoot(), std::nullopt, options,
+                                         kActiveModel, ids_[3], std::nullopt)
+                  .has_value());
+  auto file_ids = store.ReadAlbumFileIds(AlbumScope::LibraryRoot(), std::nullopt, options,
+                                         kActiveModel, 0, 1000);
+  std::sort(file_ids.begin(), file_ids.end());
+  EXPECT_EQ(file_ids, expected);
+
+  // A photo removed from its collection is in the root scope again.
+  ASSERT_TRUE(sleeve->DeleteFileFromFolder(ids_[0], trip.first->element_id_).success_);
+  EXPECT_TRUE(store
+                  .ReadAlbumFilePosition(AlbumScope::LibraryRoot(), std::nullopt, options,
+                                         kActiveModel, ids_[0], std::nullopt)
+                  .has_value());
 }
 
 TEST_F(AlbumQueryTest, InvalidOptionsAndPageBoundsAreRejectedBeforeSql) {

@@ -2,23 +2,26 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "app/project_service.hpp"
+
 #include <duckdb.h>
 #include <gtest/gtest.h>
 
 #include <QString>
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <json.hpp>
 #include <stdexcept>
 #include <string>
 
-#include <json.hpp>
-
 #include "app/project_package_backend.hpp"
-#include "app/project_service.hpp"
-#include "utils/string/convert.hpp"
+#include "sleeve/sleeve_element/sleeve_file.hpp"
+#include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "support/storage_invariants.hpp"
 #include "support/test_temp_directory.hpp"
+#include "utils/string/convert.hpp"
 
 namespace alcedo {
 namespace {
@@ -200,7 +203,7 @@ TEST_F(ProjectServiceUUIDTests, CopyPreservesUUID) {
   }
 }
 
-/// A new project saves the current metadata version (0.11.0) and its database has no legacy
+/// A new project saves the current metadata version (0.15.0) and its database has no legacy
 /// edit-history or recovery-metadata table. The Mini-Git tables are still created.
 TEST_F(ProjectServiceUUIDTests, NewProjectWritesCurrentVersionAndHasNoEditHistoryTable) {
   {
@@ -213,9 +216,9 @@ TEST_F(ProjectServiceUUIDTests, NewProjectWritesCurrentVersionAndHasNoEditHistor
   nlohmann::json metadata;
   in >> metadata;
   in.close();
-  EXPECT_EQ(metadata.at("project_file_version").get<std::string>(), "0.11.0");
+  EXPECT_EQ(metadata.at("project_file_version").get<std::string>(), "0.15.0");
   EXPECT_EQ(metadata.at("project_file_min_supported_version").get<std::string>(), "0.10.0");
-  EXPECT_EQ(metadata.at("project_file_max_supported_version").get<std::string>(), "0.11.0");
+  EXPECT_EQ(metadata.at("project_file_max_supported_version").get<std::string>(), "0.15.0");
 
   // Split literals keep the archived type names out of the source tree.
   const std::string legacy_tables = std::string("('Edit") + "History', 'EditorRecovery" +
@@ -228,6 +231,128 @@ TEST_F(ProjectServiceUUIDTests, NewProjectWritesCurrentVersionAndHasNoEditHistor
                        "('EditCommit', 'VersionRef', 'ImageEditState', 'PipelineRoot', "
                        "'PipelineParam');"),
             5);
+}
+
+/// Sleeve Node Cache Plan SN4: a project that a 0.12.0 build saved opens with its files, and the
+/// next save writes 0.15.0. The versions 0.13.0 and 0.14.0 were never written.
+TEST_F(ProjectServiceUUIDTests, Version012ProjectOpensAndTheNextSaveWritesVersion015) {
+  // The file below has no image (no import), so it has no image binding.
+  check_storage_invariants_ = false;
+  sl_element_id_t file_id   = 0;
+  {
+    ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
+    const auto [file, sync] = project.GetSleeveService()->CreateFileInLibrary(L"a.dng");
+    ASSERT_TRUE(sync.success_) << sync.message_;
+    file_id = file->element_id_;
+    project.SaveProject(meta_path_);
+  }
+  RewriteProjectFileVersion(meta_path_, "0.12.0");
+
+  {
+    ProjectService project(db_path_, meta_path_, ProjectOpenMode::kLoadExisting);
+    const auto     root_files = project.GetSleeveService()->Read<std::vector<sl_element_id_t>>(
+        [](FileSystem& fs) { return fs.ListFileIds(0); });
+    EXPECT_EQ(root_files, (std::vector<sl_element_id_t>{file_id}));
+    project.SaveProject(meta_path_);
+  }
+
+  std::ifstream in(meta_path_);
+  ASSERT_TRUE(in.is_open());
+  nlohmann::json metadata;
+  in >> metadata;
+  EXPECT_EQ(metadata.at("project_file_version").get<std::string>(), "0.15.0");
+}
+
+/// #983: a project of a newer file version than this build writes (0.16.0) is refused on open,
+/// from the workspace and from a packed `.alcd`, and its files stay unchanged.
+TEST_F(ProjectServiceUUIDTests, ProjectFileVersionAboveTheSupportedRangeIsRefusedOnOpen) {
+  {
+    ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
+    project.SaveProject(meta_path_);
+  }
+  RewriteProjectFileVersion(meta_path_, "0.16.0");
+  std::string meta_before;
+  ASSERT_TRUE(project_pack::ReadFileBytes(meta_path_, &meta_before));
+
+  try {
+    ProjectService project(db_path_, meta_path_);
+    FAIL() << "a 0.16.0 project opened";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what())
+                  .find("'0.16.0' is not supported (supported 0.10.0 to "
+                        "0.15.0)"),
+              std::string::npos)
+        << error.what();
+  }
+  std::string meta_after;
+  ASSERT_TRUE(project_pack::ReadFileBytes(meta_path_, &meta_after));
+  EXPECT_EQ(meta_after, meta_before);
+
+  const auto      packed    = temp_dir_ / "project_version_0160.alcd";
+  const auto      workspace = temp_dir_ / "project_version_0160_workspace";
+  std::error_code ec;
+  std::filesystem::remove(packed, ec);
+  std::filesystem::remove_all(workspace, ec);
+  ASSERT_TRUE(project_pack::WritePackedProject(packed, meta_path_, db_path_, nullptr));
+  std::filesystem::path db_out;
+  std::filesystem::path meta_out;
+  QString               error;
+  EXPECT_FALSE(project_pack::UnpackProjectToWorkspace(packed, workspace, QStringLiteral("Newer"),
+                                                      &db_out, &meta_out, &error));
+  EXPECT_TRUE(error.contains(QStringLiteral("not supported")));
+  EXPECT_TRUE(db_out.empty());
+  std::filesystem::remove(packed, ec);
+  std::filesystem::remove_all(workspace, ec);
+}
+
+/// #1015: the database got rows after the last save of the metadata (a mount scan, then an exit
+/// with no save), so the metadata start ids are below the stored ids. The open starts each
+/// generator above every stored id, so no new element or image takes a stored id.
+TEST_F(ProjectServiceUUIDTests, OpenStartsTheIdGeneratorsAboveTheStoredIds) {
+  // The file below binds an Image row with no import, so it has no history root.
+  check_storage_invariants_        = false;
+  sl_element_id_t stored_file_id   = 0;
+  image_id_t      stored_image_id  = 0;
+  sl_element_id_t stored_folder_id = 0;
+  {
+    ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
+    project.SaveProject(meta_path_);
+
+    auto [folder, folder_sync] = project.GetSleeveService()->CreateFolder(L"/", L"Roll");
+    ASSERT_TRUE(folder_sync.success_);
+    stored_folder_id = folder->element_id_;
+
+    auto image_pool  = project.GetImagePoolService();
+    {
+      auto image               = image_pool->CreateAndReturnPinnedEmpty();
+      stored_image_id          = image.Get()->image_id_;
+      image.Get()->image_name_ = L"a.dng";
+      image.Get()->image_path_ = L"a.dng";
+      image.Get()->image_type_ = ImageType::DNG;
+    }
+    image_pool->SyncWithStorage();
+    auto file = project.GetSleeveService()->Write<std::shared_ptr<SleeveFile>>(
+        [stored_image_id](FileSystem& fs) -> std::shared_ptr<SleeveFile> {
+          auto created       = fs.CreateFileInLibrary(L"a.dng");
+          created->image_id_ = stored_image_id;
+          return created;
+        });
+    ASSERT_TRUE(file.second.success_);
+    stored_file_id = file.first->element_id_;
+    // No SaveProject: the metadata keeps the start ids of the empty project.
+  }
+
+  ProjectService project(db_path_, meta_path_, ProjectOpenMode::kLoadExisting);
+  EXPECT_GE(project.GetSleeveService()->GetCurrentID(), std::max(stored_file_id, stored_folder_id));
+  EXPECT_GE(project.GetImagePoolService()->GetCurrentID(), stored_image_id);
+
+  auto [folder, sync] = project.GetSleeveService()->CreateFolder(L"/", L"Next");
+  ASSERT_TRUE(sync.success_);
+  EXPECT_GT(folder->element_id_, std::max(stored_file_id, stored_folder_id));
+  {
+    auto image = project.GetImagePoolService()->CreateAndReturnPinnedEmpty();
+    EXPECT_GT(image.Get()->image_id_, stored_image_id);
+  }
 }
 
 /// G10.4: a packed `.alcd` whose metadata says 0.8.0 is rejected before its database bytes

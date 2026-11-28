@@ -21,6 +21,13 @@ namespace alcedo {
 #define sleeve_id_t     uint32_t
 #define sl_element_id_t uint32_t
 
+/// The element id of the library root folder. Each photo of the project has a link in it, and
+/// each mount root is one of its children (#1076).
+inline constexpr sl_element_id_t kLibraryRootFolderId = 0;
+
+// Used in mounted folders: MountRoot.id and Element.mount_id
+#define mount_id_t      uint32_t
+
 // Used in filters
 #define filter_id_t     uint32_t
 

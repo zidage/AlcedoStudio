@@ -9,10 +9,11 @@
 #include <mutex>
 #include <string>
 
-#include "app/album_browse_service.hpp"
 #include "app/ai_sidecar_runtime_service.hpp"
-#include "app/sleeve_service.hpp"
+#include "app/album_browse_service.hpp"
+#include "app/mount_service.hpp"
 #include "app/sleeve_filter_service.hpp"
+#include "app/sleeve_service.hpp"
 #include "image_pool_service.hpp"
 #include "sleeve/storage.hpp"
 #include "type/type.hpp"
@@ -52,6 +53,8 @@ class ProjectService {
   auto GetProjectPackageService() const -> std::shared_ptr<ProjectPackageService> {
     return package_service_;
   }
+  /// The mounted folders of this project (Mounted Folder Plan, MF4).
+  auto GetMountService() const -> std::shared_ptr<MountService> { return mount_service_; }
   auto GetAiSidecarRuntimeService() const -> std::shared_ptr<AiSidecarRuntimeService>;
 
   /// QSettings key of "Keep AI model loaded": seconds the AI sidecar keeps running after its
@@ -86,6 +89,7 @@ class ProjectService {
   std::shared_ptr<SleeveFilterService>   filter_service_;
   std::shared_ptr<AlbumBrowseService>    browse_service_;
   std::shared_ptr<ProjectPackageService> package_service_;
+  std::shared_ptr<MountService>                    mount_service_;
   // A rating batch saves from a worker thread while the UI thread can also save.
   std::mutex                             save_project_mutex_;
   mutable std::mutex                     ai_sidecar_runtime_mutex_;

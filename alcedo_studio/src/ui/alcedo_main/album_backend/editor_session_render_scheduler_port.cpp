@@ -229,8 +229,12 @@ void EditorSessionRenderSchedulerPort::ClearSessionContext() {
     return;
   }
   // Every use of the executor runs on the single worker, which gives this work exclusive access
-  // after the in-flight frame: the release never waits and never races a render.
-  EnsurePipelineScheduler()->ScheduleWork([executor] { executor->ReleaseBinding(); });
+  // after the in-flight frame: the release never waits and never races a render. The editor
+  // close also ends the AI Denoise model session (integration plan, 2.3).
+  EnsurePipelineScheduler()->ScheduleWork([executor] {
+    executor->ReleaseBinding();
+    executor->ReleaseAiDenoiseSession();
+  });
 }
 
 auto EditorSessionRenderSchedulerPort::AcquireGpuResourceRelease(
@@ -253,6 +257,8 @@ auto EditorSessionRenderSchedulerPort::AcquireGpuResourceRelease(
           if (executor) {
             release.device_bytes_before = executor->DeviceResourceBytes();
             executor->ReleaseBinding();
+            // DirectML uses the GPU memory of the editor resources too (integration plan, 2.3).
+            executor->ReleaseAiDenoiseSession();
             release.device_bytes_after = executor->DeviceResourceBytes();
           }
           release.success = true;
@@ -281,13 +287,19 @@ auto EditorSessionRenderSchedulerPort::AcquireGpuResourceRelease(
 
 auto EditorSessionRenderSchedulerPort::EndGpuResourceRelease(EditorGpuReleaseHolder holder)
     -> bool {
-  bool last = false;
+  bool                                      last = false;
+  std::shared_ptr<alcedo::PipelineExecutor> executor;
   {
     std::scoped_lock lock(mutex_);
     if (!std::exchange(gpu_release_holders_[static_cast<std::size_t>(holder)], false)) {
       return false;
     }
-    last = GpuReleasedMessageLocked().empty();
+    last     = GpuReleasedMessageLocked().empty();
+    executor = executor_;
+  }
+  // The work of the holder (an export) ran its own model runs; their session ends with it.
+  if (executor) {
+    EnsurePipelineScheduler()->ScheduleWork([executor] { executor->ReleaseAiDenoiseSession(); });
   }
   qCInfo(editorPresentLog).noquote()
       << QStringLiteral("editor GPU resource release for %1 ended; %2")
@@ -702,6 +714,7 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
         return token && token->IsCancelled();
       };
     }
+    task.render_progress_ = job.request.intent.render_progress;
     const auto request_for_trace = job.request;
     task.on_complete_            = [this, job, request_for_trace](bool success,
                                                        std::string message) mutable {

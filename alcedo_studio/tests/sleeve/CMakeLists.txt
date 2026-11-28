@@ -7,6 +7,13 @@ target_link_libraries(SleeveFSTest PRIVATE GTest::gtest_main SleeveFS StrConv)
 gtest_discover_tests(SleeveFSTest TEST_PREFIX "SleeveFSTest.")
 alcedo_register_test_target(SleeveFSTest storage)
 
+# Sleeve Node Cache Plan SN2 (#1155): the page table and the dirty list of NodeCache.
+add_executable(NodeCacheTest ${ALCEDO_TEST_ROOT}/sleeve/node_cache_test.cpp)
+target_include_directories(NodeCacheTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(NodeCacheTest PRIVATE GTest::gtest_main SleeveElement StrConv)
+gtest_discover_tests(NodeCacheTest TEST_PREFIX "NodeCacheTest.")
+alcedo_register_test_target(NodeCacheTest storage)
+
 add_executable(DuckormExprTest ${ALCEDO_TEST_ROOT}/storage/duckorm_expr_test.cpp)
 target_include_directories(DuckormExprTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(DuckormExprTest PRIVATE GTest::gtest_main DuckORM)
@@ -90,6 +97,14 @@ target_link_libraries(StorageSessionTest PRIVATE GTest::gtest_main Storage)
 gtest_discover_tests(StorageSessionTest TEST_PREFIX "StorageSessionTest."
   PROPERTIES LABELS "storage")
 alcedo_register_test_target(StorageSessionTest storage)
+
+# MountStore and Element.mount_id: the mounted folder records survive a project reopen (#983).
+add_executable(MountStoreTest ${ALCEDO_TEST_ROOT}/storage/mount_store_test.cpp)
+target_include_directories(MountStoreTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(MountStoreTest PRIVATE GTest::gtest_main Storage)
+gtest_discover_tests(MountStoreTest TEST_PREFIX "MountStoreTest."
+  PROPERTIES LABELS "storage")
+alcedo_register_test_target(MountStoreTest storage)
 
 # Storage::Maintenance: the diagnostics summary, the package snapshot, and the HNSW index drop.
 add_executable(StorageMaintenanceTest ${ALCEDO_TEST_ROOT}/storage/storage_maintenance_test.cpp)

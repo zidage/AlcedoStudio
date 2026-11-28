@@ -366,9 +366,9 @@ void SendOperationFailure(const QPointer<AutomationCommandWait>& wait,
     if (wait == nullptr) {
       return;
     }
-    wait->SendError(failure.code_, failure.message_,
-                    QJsonObject{{"reason", failure.message_},
-                                {"head_commit", HeadValue(editor->history_snapshot())}});
+    QJsonObject data = AutomationOwnerErrorData(failure.message_);
+    data.insert("head_commit", HeadValue(editor->history_snapshot()));
+    wait->SendError(failure.code_, failure.message_, data);
   });
 }
 
@@ -525,9 +525,9 @@ class BatchApply final : public std::enable_shared_from_this<BatchApply> {
   }
 
   auto FailureData(const QString& reason, const QString& pointer) const -> QJsonObject {
-    QJsonObject data{{"reason", reason},
-                     {"applied", applied_},
-                     {"head_commit", HeadValue(editor_->history_snapshot())}};
+    QJsonObject data = AutomationOwnerErrorData(reason);
+    data.insert("applied", applied_);
+    data.insert("head_commit", HeadValue(editor_->history_snapshot()));
     if (!pointer.isEmpty()) {
       data.insert("pointer", pointer);
     }

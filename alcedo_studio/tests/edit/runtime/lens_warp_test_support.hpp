@@ -394,7 +394,7 @@ inline auto ResolveIssue713Params(int width, int height) -> LensCalibGpuParams {
   settings.apply_crop_       = false;
   settings.auto_scale_       = true;
 
-  const auto resolution      = LensCalibrationResolver::ResolveProfile(meta, settings, false);
+  const auto resolution      = LensCalibrationResolver::ResolveProfile(meta, settings, {});
   if (resolution.status_ != LensProfileStatus::Resolved) {
     throw std::runtime_error("Issue #713 lens profile did not resolve.");
   }
