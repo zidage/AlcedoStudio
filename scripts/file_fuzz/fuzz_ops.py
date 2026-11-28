@@ -156,6 +156,9 @@ KNOWN_ISSUES: list[tuple[int, str, Callable[[dict, RunOptions], bool]]] = [
     (1232, "on Windows the watcher does not notice a rename of a mount root",
      lambda op, options: IS_WINDOWS and options.mode == "watcher-on" and
      op["op"] == "root_away"),
+    (1237, "a name with a character above U+FFFF is saved damaged on macOS and Linux",
+     lambda op, options: not IS_WINDOWS and any(
+         any(ord(c) > 0xFFFF for c in name) for name in _folder_names(op) + _disk_names(op))),
 ]
 
 

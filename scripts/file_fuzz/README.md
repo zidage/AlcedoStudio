@@ -126,6 +126,7 @@ the fix of its issue.
 | #1215 | Mounted file names that are not in NFC on Windows |
 | #1218 | Hard links on Windows (NTFS keeps an old size and time in the entry of the other link) |
 | #1232 | `root_away` in watcher-on mode on Windows (the watcher does not notice a rename of the root) |
+| #1237 | Folder and disk names with a character above U+FFFF on macOS and Linux |
 
 Two answers are accepted until their issue is fixed: a `library.sync` during an import of the
 other connection answers -32002 without `data.error` (#1216), and an import of only mounted files
