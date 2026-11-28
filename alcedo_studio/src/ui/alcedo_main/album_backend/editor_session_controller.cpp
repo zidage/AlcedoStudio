@@ -249,6 +249,8 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
     session_backend_->SetActionAvailabilityObserver({});
   }
   session_backend_ = session_backend;
+  source_reload_pending_.reset();
+  source_reload_operation_id_ = 0;
   if (session_backend_) {
     session_backend_->SetGeometryOverlayActive(active_adjustment_panel_ ==
                                                QLatin1String("geometry"));
@@ -327,6 +329,12 @@ void EditorSessionController::SetAlbumCatalog(IAlbumCatalog* album_catalog) {
 void EditorSessionController::SetMaskThumbnailService(
     std::shared_ptr<alcedo::MaskThumbnailService> service) {
   mask_thumbnail_service_ = std::move(service);
+}
+
+void EditorSessionController::NotifySourceChanged(uint element_id) {
+  if (!session_backend_ || !has_image() || this->element_id() != element_id) return;
+  source_reload_pending_ = std::pair{element_id, image_id()};
+  SyncIdentityFromBackend();
 }
 
 void EditorSessionController::NotifyLutResourcesChanged() {
@@ -594,9 +602,31 @@ void EditorSessionController::SyncIdentityFromBackend() {
   const auto id = session_backend_->identity();
   element_id_   = id.element_id;
   image_id_     = id.image_id;
-  session_generation_ =
+  const auto load_request =
       static_cast<qulonglong>(session_backend_->active_image_load_request().value);
   session_state_ = session_backend_->state();
+  if (load_request != session_generation_ ||
+      session_state_ == alcedo::EditorSessionState::RetainedImageFailure) {
+    source_reload_operation_id_ = 0;
+  }
+  session_generation_ = load_request;
+  if (source_reload_pending_) {
+    if (source_reload_pending_->first != element_id_ ||
+        source_reload_pending_->second != image_id_) {
+      source_reload_pending_.reset();
+    } else if (session_state_ == alcedo::EditorSessionState::Interactive &&
+               source_reload_operation_id_ == 0) {
+      const auto target = *source_reload_pending_;
+      source_reload_pending_.reset();
+      SetPresentationImageIdentity(target.second, session_generation_ + 1);
+      const auto result = session_backend_->ReloadSource(target.first, target.second);
+      if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+        SyncViewportIdentity();
+      } else {
+        source_reload_operation_id_ = result.operation_id;
+      }
+    }
+  }
   // active_ is workspace membership owned by Open/Close/Finalize, not by
   // backend NoImage vs Loading (empty editor remains active).
   RefreshImageExifDisplay();
@@ -695,8 +725,12 @@ void EditorSessionController::SyncViewportIdentity() {
     if (const auto pending = session_backend_->pending_presentation_target()) {
       target_image_id   = static_cast<qulonglong>(pending->image_id);
       target_generation = static_cast<qulonglong>(pending->image_load_request.value);
-    } else if (session_state() == alcedo::EditorSessionState::Saving) {
-      // Preserve the Open() pre-stamp until the backend publishes a pending target.
+    } else if (const auto state = session_state();
+               state == alcedo::EditorSessionState::Saving ||
+               (state == alcedo::EditorSessionState::Interactive &&
+                source_reload_operation_id_ != 0)) {
+      // Keep the presentation identity set by Open or source reload while the save is queued
+      // or running. A notice from the previous frame can arrive before the save starts.
       if (auto* item =
               qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
         if (item->sessionEpoch() > target_generation) {
@@ -753,16 +787,7 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
         const qulonglong presentation_image_id   = static_cast<qulonglong>(imageId);
         const qulonglong presentation_generation = static_cast<qulonglong>(
             session_backend_->active_image_load_request().value + (same_image ? 0 : 1));
-        if (scope_controller_) {
-          scope_controller_->SetImageIdentity(presentation_image_id, presentation_generation);
-          curve_histogram_controller_->SetImageIdentity(presentation_image_id,
-                                                        presentation_generation);
-        }
-        if (auto* item =
-                qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
-          item->setImageIdentity(presentation_image_id);
-          item->setSessionEpoch(presentation_generation);
-        }
+        SetPresentationImageIdentity(presentation_image_id, presentation_generation);
       }
     }
     if (elementId == 0 || imageId == 0) {
@@ -791,6 +816,17 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
 
   SyncViewportIdentity();
   emit StateChanged();
+}
+
+void EditorSessionController::SetPresentationImageIdentity(qulonglong image_id, qulonglong epoch) {
+  if (scope_controller_) {
+    scope_controller_->SetImageIdentity(image_id, epoch);
+    curve_histogram_controller_->SetImageIdentity(image_id, epoch);
+  }
+  if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+    item->setImageIdentity(image_id);
+    item->setSessionEpoch(epoch);
+  }
 }
 
 void EditorSessionController::CheckoutVersion(const QString& versionId) {
@@ -1216,6 +1252,13 @@ void EditorSessionController::PublishHistoryInvokableReturn(
 void EditorSessionController::OnBackendSessionResult(const alcedo::EditorSessionResult& result) {
   const bool failed = result.kind == alcedo::EditorSessionResultKind::Rejected ||
                       result.kind == alcedo::EditorSessionResultKind::Failed;
+  if (source_reload_operation_id_ != 0 && result.operation_id == source_reload_operation_id_ &&
+      alcedo::EditorSessionResultIsTerminal(result.kind)) {
+    source_reload_operation_id_ = 0;
+    if (failed) {
+      SyncViewportIdentity();
+    }
+  }
   if (failed && (close_in_flight_ || persist_in_flight_)) {
     if (!result.message.empty()) {
       if (close_in_flight_) {

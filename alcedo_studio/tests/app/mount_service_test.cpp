@@ -362,7 +362,7 @@ TEST_F(MountServiceTest, MovedFileKeepsElementIdAndEditHistoryRootId) {
   stdfs::rename(disk_ / "Japan" / "Day1" / "b.jpg", disk_ / "Japan" / "Day2" / "b moved.jpg");
   std::vector<sl_element_id_t> invalidated;
   MountScanRequest             request;
-  request.invalidate_thumbnail = [&invalidated](sl_element_id_t id) { invalidated.push_back(id); };
+  request.on_source_changed    = [&invalidated](sl_element_id_t id) { invalidated.push_back(id); };
   const auto result            = ScanAndCheckDirectory(mount_id, request);
 
   ASSERT_EQ(result.status, MountScanStatus::kComplete) << result.error;
@@ -450,7 +450,7 @@ TEST_F(MountServiceTest, FileThatReturnsBecomesPresent) {
   stdfs::rename(aside, disk_ / "Japan" / "Day2" / "d.jpg");
   std::vector<sl_element_id_t> invalidated;
   MountScanRequest             request;
-  request.invalidate_thumbnail = [&invalidated](sl_element_id_t id) { invalidated.push_back(id); };
+  request.on_source_changed    = [&invalidated](sl_element_id_t id) { invalidated.push_back(id); };
   const auto result            = ScanAndCheckDirectory(mount_id, request);
 
   ASSERT_EQ(result.status, MountScanStatus::kComplete) << result.error;

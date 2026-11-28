@@ -167,8 +167,8 @@ struct MountScanRequest {
   /// leaves each batch stored in full or not started.
   const std::atomic<bool>*                      stop_requested = nullptr;
   /// Optional. Called after the first batch for each file that changed in place, moved, or
-  /// returned, so the thumbnail owner reads the file again.
-  std::function<void(sl_element_id_t)>          invalidate_thumbnail;
+  /// returned, so readers can refresh the source.
+  std::function<void(sl_element_id_t)>          on_source_changed;
   /// Optional. Called after the first batch and after each new file batch.
   std::function<void(const MountScanProgress&)> on_progress;
   std::size_t                                   new_file_batch_size = kMountScanNewFileBatchSize;

@@ -104,11 +104,11 @@ auto ProgressDetail(const MountScanProgress& progress) -> QString {
 
 ProjectMountScanPort::ProjectMountScanPort(
     std::shared_ptr<MountService> mounts, MountFileImporter* importer,
-    std::function<void(sl_element_id_t)> invalidate_thumbnail,
+    std::function<void(sl_element_id_t)> on_source_changed,
     std::function<bool(QString*)>        save_project)
     : mounts_(std::move(mounts)),
       importer_(importer),
-      invalidate_thumbnail_(std::move(invalidate_thumbnail)),
+      on_source_changed_(std::move(on_source_changed)),
       save_project_(std::move(save_project)) {
   if (!mounts_ || importer_ == nullptr || !save_project_) {
     throw std::invalid_argument(
@@ -130,12 +130,12 @@ auto ProjectMountScanPort::ScanMount(
     const std::function<void(const MountScanProgress&)>& on_progress, bool find_moved_volume)
     -> MountScanResult {
   MountScanRequest request;
-  request.mount_id             = mount_id;
-  request.find_moved_volume    = find_moved_volume;
-  request.importer             = importer_;
-  request.stop_requested       = &stop_requested;
-  request.invalidate_thumbnail = invalidate_thumbnail_;
-  request.on_progress          = on_progress;
+  request.mount_id          = mount_id;
+  request.find_moved_volume = find_moved_volume;
+  request.importer          = importer_;
+  request.stop_requested    = &stop_requested;
+  request.on_source_changed = on_source_changed_;
+  request.on_progress       = on_progress;
   return mounts_->ScanMount(request);
 }
 

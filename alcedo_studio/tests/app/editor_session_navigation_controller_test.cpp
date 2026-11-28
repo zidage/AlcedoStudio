@@ -30,6 +30,78 @@ TEST_F(EditorSessionNavigationControllerTest, OpenWithNoPriorImageCompletesSynch
   EXPECT_EQ(fixture_.lifecycle().identity().image_id, static_cast<image_id_t>(20));
 }
 
+TEST_F(EditorSessionNavigationControllerTest, SourceReloadSavesAndReacquiresTheSameImage) {
+  fixture_.OpenA();
+  const auto previous_load                      = fixture_.lifecycle().active_image_load_request();
+  const auto previous_acquires                  = fixture_.history().acquire_count;
+  fixture_.checkpoint_store().async_materialize = true;
+  const auto result                             = fixture_.nav().RequestOpenOrSwitch(
+      test::EditorSessionNavigationFixture::kElementA,
+      test::EditorSessionNavigationFixture::kImageA, false, true);
+  ASSERT_TRUE(result.waiting_for_checkpoint);
+  EXPECT_FALSE(result.same_image_noop);
+  EXPECT_EQ(fixture_.history().release_count, 0);
+  fixture_.CompleteCheckpoint();
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(fixture_.history().release_count, 1);
+  EXPECT_EQ(fixture_.history().discarding_release_count, 0);
+  EXPECT_EQ(fixture_.history().acquire_count, previous_acquires + 1);
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementA);
+  EXPECT_EQ(fixture_.lifecycle().identity().image_id,
+            test::EditorSessionNavigationFixture::kImageA);
+  EXPECT_GT(fixture_.lifecycle().active_image_load_request().value, previous_load.value);
+}
+
+TEST_F(EditorSessionNavigationControllerTest,
+       FailedSourceReloadSaveKeepsTheCurrentHistoryAndImage) {
+  fixture_.OpenA();
+  const auto previous_load                      = fixture_.lifecycle().active_image_load_request();
+  fixture_.checkpoint_store().async_materialize = true;
+  ASSERT_TRUE(fixture_.nav()
+                  .RequestOpenOrSwitch(test::EditorSessionNavigationFixture::kElementA,
+                                       test::EditorSessionNavigationFixture::kImageA, false, true)
+                  .waiting_for_checkpoint);
+  fixture_.FailCheckpoint("Source reload save failed");
+  EXPECT_EQ(fixture_.history().release_count, 0);
+  EXPECT_EQ(fixture_.lifecycle().active_image_load_request().value, previous_load.value);
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::RetainedImageFailure);
+  EXPECT_TRUE(fixture_.nav().has_pending_recovery());
+}
+
+TEST_F(EditorSessionNavigationControllerTest, SourceReloadCannotReplaceThePendingImageSelection) {
+  fixture_.OpenA();
+  ASSERT_TRUE(fixture_.RequestSwitchToB().waiting_for_checkpoint);
+  const auto reload = fixture_.nav().RequestOpenOrSwitch(
+      test::EditorSessionNavigationFixture::kElementA,
+      test::EditorSessionNavigationFixture::kImageA, false, true);
+  EXPECT_TRUE(reload.same_image_noop);
+  fixture_.CompleteCheckpoint();
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementB);
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+}
+
+TEST_F(EditorSessionNavigationControllerTest, SourceReloadWaitsForVersionCheckoutAndKeepsItsImage) {
+  fixture_.OpenA();
+  const auto previous_load = fixture_.lifecycle().active_image_load_request();
+  const auto version       = Hash128{0x11111111ULL, 0x22222222ULL};
+  ASSERT_TRUE(fixture_.RequestCheckoutVersion(version).waiting_for_checkpoint);
+  const auto reload = fixture_.nav().RequestOpenOrSwitch(
+      test::EditorSessionNavigationFixture::kElementA,
+      test::EditorSessionNavigationFixture::kImageA, false, true);
+  EXPECT_FALSE(reload.rejected);
+  fixture_.CompleteCheckpoint();
+  ASSERT_TRUE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(fixture_.lifecycle().active_image_load_request().value, previous_load.value);
+  fixture_.CompleteCheckpoint();
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementA);
+  EXPECT_GT(fixture_.lifecycle().active_image_load_request().value, previous_load.value);
+  EXPECT_EQ(fixture_.history().discarding_release_count, 0);
+}
+
 /// Phase 4B: A→B waits for materialize/truncate and thumbnail refresh before
 /// releasing A and acquiring B. G10.4: materialization starts directly after the
 /// capture; no legacy journal commit runs in between.

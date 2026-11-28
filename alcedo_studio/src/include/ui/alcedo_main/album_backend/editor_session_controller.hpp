@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
@@ -195,6 +196,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// effect at the configured strength and a removed one is skipped. No history change.
   /// No-op without an interactive image.
   void               NotifyLutResourcesChanged();
+  /// Reload an affected open source through the editor save boundary. If loading or saving is
+  /// in progress, wait until Interactive. Navigating to another image clears this request.
+  void               NotifySourceChanged(uint element_id);
   [[nodiscard]] auto mask_thumbnail_service() const
       -> std::shared_ptr<alcedo::MaskThumbnailService>;
 
@@ -557,6 +561,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     ApplyOpenLocal(uint elementId, uint imageId);
   void                     ApplyCloseLocal();
   void                     SyncViewportIdentity();
+  void                     SetPresentationImageIdentity(qulonglong image_id, qulonglong epoch);
   /// Publish the AI Denoise error of the backend when it changed (DN7).
   void                     SyncAiDenoiseError();
   /// Publish renderProgress from the backend when it changed (DN14).
@@ -617,6 +622,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Local mirror when no backend is injected (legacy shell tests).
   bool                            active_                    = false;
   uint                            element_id_                = 0;
+  /// A source change to apply when the same image becomes interactive.
+  std::optional<std::pair<uint, uint>> source_reload_pending_;
+  /// Keep the next presentation identity while the session owner processes the reload.
+  std::uint64_t                   source_reload_operation_id_ = 0;
   uint                            image_id_                  = 0;
   uint                            last_element_id_           = 0;
   uint                            last_image_id_             = 0;
