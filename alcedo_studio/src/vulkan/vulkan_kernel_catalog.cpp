@@ -7,8 +7,10 @@
 #include "vulkan/vulkan_ai_mask_coverage_kernels.hpp"
 #include "vulkan/vulkan_color_math_check_kernels.hpp"
 #include "vulkan/vulkan_debayer_rcd_kernels.hpp"
+#include "vulkan/vulkan_diffusion_filter_kernels.hpp"
 #include "vulkan/vulkan_display_to_ap1_kernels.hpp"
 #include "vulkan/vulkan_dng_warp_kernels.hpp"
+#include "vulkan/vulkan_drt_kernels.hpp"
 #include "vulkan/vulkan_geometry_camera_kernels.hpp"
 #include "vulkan/vulkan_geometry_kernels.hpp"
 #include "vulkan/vulkan_highlight_kernels.hpp"
@@ -59,6 +61,12 @@ auto VulkanKernelCatalog() -> std::vector<VulkanKernelDescriptor> {
     catalog.push_back(std::move(kernel));
   }
   for (auto& kernel : ai_mask_coverage_kernels::AllDescriptors()) {
+    catalog.push_back(std::move(kernel));
+  }
+  for (auto& kernel : diffusion_filter_kernels::AllDescriptors()) {
+    catalog.push_back(std::move(kernel));
+  }
+  for (auto& kernel : drt_kernels::AllDescriptors()) {
     catalog.push_back(std::move(kernel));
   }
   for (const auto kernel : debayer_rcd_kernels::kRcdKernels) {

@@ -329,6 +329,26 @@ if(ALCEDO_VULKAN_ENABLED AND (ALCEDO_OPENCL_ENABLED OR ALCEDO_METAL_ENABLED))
     DISCOVERY_TIMEOUT 60
     PROPERTIES LABELS "gpu;edit;runtime;vulkan;mask")
   alcedo_register_test_target(VulkanMaskTest gpu)
+
+  # The DiffusionFilter and the DRT on Vulkan against the reference backend, the CPU reference of
+  # the scatter, and the OpenCL parameter bytes (#1036, phase VK12).
+  add_executable(VulkanDrtTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_diffusion_filter_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_drt_test.cpp)
+  target_include_directories(VulkanDrtTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  target_link_libraries(VulkanDrtTest PRIVATE
+    GTest::gtest_main EditRuntimeVulkanPasses EditInput EditGraph EditRuntimeDrt)
+  if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(VulkanDrtTest PRIVATE EditRuntimeOpenCl OpenClProgramLibrary)
+  else()
+    target_link_libraries(VulkanDrtTest PRIVATE EditRuntimeMetal EditRuntimeLens RawProcessorOp)
+    add_dependencies(VulkanDrtTest GpuDagMetalShaders RawProcessorOpMetalShaders)
+  endif()
+  add_dependencies(VulkanDrtTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanDrtTest TEST_PREFIX "VulkanDrtTest."
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan;drt")
+  alcedo_register_test_target(VulkanDrtTest gpu)
 endif()
 
 # Vulkan against OpenCL on the same GPU (#1036, phase VK3, decision B9): the shared color math
