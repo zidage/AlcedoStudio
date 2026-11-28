@@ -1308,11 +1308,19 @@ class Driver:
         # section after the volume arrival delay.
         time.sleep(3.0)
         self.wait_idle()
+        self.scan_offline_mounts()
         card = self.call("library.volumes.arrived", {}, expect={"ok"}).result["volume"]
         if card is None or card.get("name") != op["name"] or \
                 path_key(card.get("mount_point", "")) != path_key(point):
             raise CheckFailure("volume_card", f"the card of the new volume is {card}")
         return False
+
+    def scan_offline_mounts(self) -> None:
+        """A new mount point (a created or attached volume): after the volume arrival delay the
+        coordinator scans each offline mount, of any volume (HandleVolumeArrived)."""
+        for handle in sorted(self.model.mounts, key=lambda h: self.model.mounts[h].mid):
+            if self.model.mounts[handle].state == "offline":
+                self.predict(handle).apply()
 
     def volume_mounts(self, handle: str) -> list[str]:
         return [m for m, (v, _) in self.mount_volume.items() if v == handle]
@@ -1343,12 +1351,12 @@ class Driver:
         self.volumes.attach(handle, point)
         moved = path_key(point) != path_key(self.volume_points[handle])
         self.volume_points[handle] = point
-        # The volume arrival delay (2 s), then the scan of each mount of the volume.
+        # The volume arrival delay (2 s), then the scan of each offline mount.
         time.sleep(3.0)
         self.wait_idle()
-        for mount in self.volume_mounts(handle):
-            if not moved:
-                self.predict(mount).apply()
+        # The mounts of the volume at their old mount point come back here; a mount of a moved
+        # volume stays offline.
+        self.scan_offline_mounts()
         if moved and self.volume_mounts(handle):
             # The mount follows the volume at the next project open (relocated_root).
             return self.do_reopen({})
