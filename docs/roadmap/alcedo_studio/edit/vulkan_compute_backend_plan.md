@@ -10,7 +10,8 @@ VK0 is complete (2026-11-23, #1063). VK1 is complete (2026-11-23, #1065). VK2 is
 (2026-11-23, #1067). VK3 is complete (2026-11-23, #1080). VK4 is complete (2026-11-27, #1196).
 VK5 is complete (2026-11-27, #1203). VK6 is complete (2026-11-27, #1209), on the Apple M4 with
 MoltenVK and on Windows. VK7 is complete (2026-11-27, #1211). VK8 is complete (2026-11-27,
-#1219). VK9 is complete (2026-11-27, #1225). VK10 is complete (2026-11-27, #1228).
+#1219). VK9 is complete (2026-11-27, #1225). VK10 is complete (2026-11-27, #1228). VK11 is
+complete (2026-11-27, #1230).
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -601,7 +602,7 @@ test of its kernels (B9).
 | VK8 | Primary grade point kernels and LUT resources | `edit/runtime/vulkan/` | VK7 | 1400 to 1800 | complete (#1219) |
 | VK9 | Neighborhood kernels (Sharpen, Clarity, Halation) | `edit/runtime/vulkan/` | VK8 | 800 to 1200 | complete (#1225) |
 | VK10 | Local tone | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | complete (#1228) |
-| VK11 | MaskEvaluate, MaskUnion, AI mask coverage | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | planned |
+| VK11 | MaskEvaluate, MaskUnion, AI mask coverage | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | complete (#1230) |
 | VK12 | DiffusionFilter and Drt | `edit/runtime/vulkan/` | VK8 | 1500 to 1900 | planned |
 | VK13 | Film print | `edit/runtime/vulkan/` | VK12 | 1600 to 1950 | planned |
 | VK14 | Film print scan and film grain | `edit/runtime/vulkan/` | VK13 | 900 to 1300 | planned |
@@ -3058,6 +3059,242 @@ eight tests with their cases.
 
 **Remaining gaps:** none.
 
+### Phase VK11: MaskEvaluate, MaskUnion, AI Mask coverage
+
+**Objective and deliverables.** The Vulkan backend evaluates the Masks of a Color Grade on the
+render grid (MaskEvaluate: Radial, Linear Gradient, AI Mask, with the Luminance Range and the Hue
+Range), folds the enabled Masks of a Grade into its mask output (MaskUnion), makes the Feather and
+Expand of AI Mask coverage (`VulkanBackend::RecordAiMaskEdge` in place of the VK11 error), and
+writes the three coverage displays of the probe path (the value display of a probed Mask, the
+coverage display of a committed AI Mask, the range probe display of a candidate). The pass
+encoders of MaskEvaluate and MaskUnion call the passes. Issue #1230.
+
+**Inputs and prerequisites.** VK8 (`VulkanSceneView`, the dummy storage images, the R8 mask input of
+the Grade). VK3 (`math.slangh`: `AlcedoAtan2`, `AlcedoSin`, `AlcedoCos`, `AlcedoCbrt`; the Slang
+branch of `color_encoding_math.h`; `oklab.slangh` of VK8). VK2 (the graph image cache, the
+workspace coverage cache `MaskCoverageTextureCache<VulkanBackend>`, the R8 upload).
+
+**Source audit of the VK11 entry (2026-11-27).**
+
+| OpenCL entry | Kernels and shared code | Callers | VK11 decision |
+| --- | --- | --- | --- |
+| `ExecuteOpenClMask` (per source) | `mask_analytic_r8`, `mask_analytic_ranged_r8`: the Radial and Linear Gradient coverage at the reference position of the render pixel; `mask_raster_r8`, `mask_raster_ranged_r8`: the mean of `samples x samples` bilinear reads of the coverage texture (`MakeRasterMaskSamplingPlan`); invert, `MaskRangeWeight` (OkLab of the ACEScc Grade input, the hue gate and the lightness window), opacity, R8 quantization | `PassEncoder<MaskEvaluate>` of `PlanExecutor`, the tests | VK11 |
+| `ExecuteOpenClMaskUnion` | `mask_fill_zero_r8`, `mask_union_max_r8`, `CopyTexture2D`, `AliasImageFrom` | `PassEncoder<MaskUnion>` | VK11 |
+| `ExecuteOpenClMask` (Grade and plan overloads) | the two passes above in backbone order | the tests | VK11 |
+| `RecordMaskValueDisplay`, `RecordMaskCoverageDisplay`, `RecordMaskCandidateRangeDisplay` | `mask_value_display_rgba32f`; the raster kernels into an RGBA32F image | `PlanExecutor::RecordProbedMask`, `RecordProbedCandidate`, `MaskCoveragePresentation` (SM8.5) | VK11: the pipeline side of the probe path, so `PlanExecutor<VulkanBackend>` (VK17) compiles. The display of the target in the viewport stays VK18. |
+| `OpenClBackend::RecordAiMaskEdge` | `ai_mask_morphology_r8` (3 x 3 dilate or erode, cross and square in turn), `ai_mask_feather_rows_r32f`, `ai_mask_feather_columns_r8` (the separable Gaussian of `AiMaskFeatherWeights`, round half to even) | `MaskCoverageTextureCache::AcquireStored`, `AcquireCandidate` | VK11 |
+| Mask sources other than Radial, Linear Gradient, and AI Mask | none: `ExecuteOpenClMask` has no kernel for them | | The same error on Vulkan (`compiled mask does not match document`). |
+
+Metal has the same kernels in `mask.metal` and `metal_ai_mask_coverage.mm`; on the Apple M4 the
+reference is the Metal pass, on Windows the OpenCL pass on the same GPU.
+
+**Modules, files, and APIs.**
+
+- `edit/runtime/vulkan/shader/mask.slang` (group `mask`: `mask_analytic_r8`, `mask_raster_r8`,
+  `mask_raster_rgba32f`, `mask_fill_zero_r8`, `mask_union_max_r8`, `mask_value_display_rgba32f`).
+- `edit/runtime/vulkan/shader/ai_mask_coverage.slang` (group `ai_mask_coverage`:
+  `ai_mask_morphology_r8`, `ai_mask_feather_rows_r32f`, `ai_mask_feather_columns_r8`).
+- `include/vulkan/vulkan_mask_kernels.hpp`, `include/vulkan/vulkan_ai_mask_coverage_kernels.hpp`:
+  names, bindings, push constant layouts; the descriptors go into `VulkanKernelCatalog()`.
+- `inc/edit/runtime/vulkan/vulkan_mask_pass.hpp`, `edit/runtime/vulkan/vulkan_mask_pass.cpp` (target
+  `EditRuntimeVulkanPasses`): `ExecuteVulkanMask` (per source, per Grade, per plan),
+  `ExecuteVulkanMaskUnion`, the three display records.
+- `edit/runtime/vulkan/vulkan_ai_mask_coverage.cpp` (target `EditRuntimeVulkan`):
+  `VulkanBackend::RecordAiMaskEdge`; the VK11 error goes.
+- `PassEncoder<VulkanBackend, GpuPassKind::MaskEvaluate>` and `<..., MaskUnion>` in
+  `vulkan_pass_encoder.hpp`.
+- Test: `tests/edit/runtime/vulkan_mask_test.cpp` (`VulkanMaskTest`, `VulkanMaskHarnessTest`).
+
+**Data rules and invariants.**
+
+- The Mask outputs are R8 UNORM storage images of the graph image cache; a kernel writes `k / 255`
+  for the quantized code `k`, so the image holds `k` (the OpenCL `write_imagef` rule).
+- A ranged kernel reads the Grade input only when a `*_restricted` flag of `MaskRangeParams` is
+  set; with both flags zero the range weight is 1 and the value is the one of the kernel without
+  ranges (`value * 1 * opacity` equals `value * opacity`). The OpenCL ranged and unranged kernel
+  pairs are one Vulkan kernel each.
+- The Grade input is a cached RGBA32F storage image or a scene-work member read by device address
+  (VK8 rule); its size equals the render extent, checked before any command.
+- Each push constant block is at most 128 bytes. The Radial and Linear Gradient values share seven
+  floats; the ranges are the nine 4-byte words of `MaskRangeParams` (the kernel header does not
+  include the Mask model, so the catalog library stays free of the edit libraries).
+- The Feather half kernel (up to 201 floats) is a buffer of the `RecordAiMaskEdge` call, read by
+  device address; the reset at the end of the call gives it back, and the retire rule keeps it
+  until its batch completes (VK6 rule of call scratch).
+- The Union copies the first enabled source into the Union output and folds each further source
+  in place (`output = max(output, source)` reads and writes the same texel in one invocation), so
+  it needs no scratch image.
+- Trigonometric, cube root, and arc tangent calls are the `math.slangh` functions (VK3 and VK5
+  rules); push constant arrays are read with constant indices (VK4 Intel rule).
+- Every pass records into the open recording and submits nothing.
+
+**Implementation steps.**
+
+1. The two kernel groups and their headers; the catalog.
+2. `VulkanBackend::RecordAiMaskEdge`.
+3. `ExecuteVulkanMask`, `ExecuteVulkanMaskUnion`, the displays, the pass encoders.
+4. `VulkanMaskTest`; the VK2 test of the VK11 error becomes a test of the edge validation.
+5. Runs: RTX 3080 Laptop GPU and Iris Xe against OpenCL; Apple M4 (MoltenVK) against Metal.
+
+**Tests and evidence.**
+
+Against the reference backend on the same GPU (B9):
+
+- `VulkanMaskTest.AnalyticMasksEqualTheReferenceBackend` (a soft Radial, a rotated inverted Radial
+  at opacity 0.6, a diagonal Linear Gradient; full frame, crop and rotation, a region of interest,
+  render scale 0.5)
+- `VulkanMaskTest.RangedMasksEqualTheReferenceBackend` (Hue, wrapping Hue, Luminance, both with a
+  raised saturation threshold, a Linear Gradient with Luminance; the Grade input as a cached image
+  and as a scene-work member)
+- `VulkanMaskTest.AiMasksEqualTheReferenceBackend` (no edge, Feather, Expand +2 and -3, both, a render
+  scale, crop and rotation, ranges with invert and opacity)
+- `VulkanMaskTest.AiMaskFeatherAndExpandCoverageEqualsTheReferenceBackend` (the coverage textures of
+  eight edge adjustments, Feather 50 included)
+- `VulkanMaskTest.MaskUnionEqualsTheReferenceBackendAndAliasesOneSource`
+- `VulkanMaskTest.CoverageDisplaysEqualTheReferenceBackend`
+- `VulkanMaskTest.MaskedGradesEqualTheReferenceBackend` (Develop to two masked Grades through the pass
+  encoders; the second Grade's Hue Range reads the first Grade's output)
+
+The shared checks of the OpenCL, CUDA, and Metal mask tests against their independent references
+(`VulkanMaskHarnessTest`, the names of the OpenCL test): the twelve AI Mask checks and the seven
+Mask range checks that run without `PlanExecutor`. `CheckCoverageOnlyWorkKeepsPhotoResults` and
+`CheckSecondGradeHueRangeReadsFirstGradeOutput` need `PlanExecutor<VulkanBackend>` (VK17); the
+second one is covered here by `MaskedGradesEqualTheReferenceBackend`.
+
+Recording and failure rules:
+
+- `VulkanMaskHarnessTest.MaskPassesRecordIntoTheOpenRecordingWithoutASubmission`
+- `VulkanMaskHarnessTest.RepeatedEdgeWorkCreatesNoPipeline`
+- `VulkanMaskHarnessTest.CoverageEntriesHaveTheCachePriorityAndRenderImagesTheWorkingOne`
+- `VulkanMaskHarnessTest.InvalidRequestsFailAndRecordNothing`
+- `GpuDagVulkanWorkspaceTest.AiMaskEdgeWithoutWorkFailsAndRecordsNothing` (replaces the VK2 test of
+  the VK11 error)
+
+**Build and run commands.**
+
+```text
+Windows: cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels VulkanMaskTest <every Vulkan test target>
+         set ALCEDO_VULKAN_DEVICE=RTX (or Iris)
+         ctest --test-dir build/debug -R "Vulkan|PipelineAccelerator" -j 1 --output-on-failure
+macOS:   source ~/Projects/vulkan_tools/env.sh
+         cmake --build build/macos-vulkan --target AlcedoVulkanKernels VulkanMaskTest <every Vulkan test target>
+         ctest --test-dir build/macos-vulkan -R "Vulkan|PipelineAccelerator" -j 1 --output-on-failure
+```
+
+**Exit criteria.**
+
+- [x] The listed tests pass on the RTX 3080 Laptop GPU and Iris Xe against OpenCL with no
+      validation error.
+- [x] The listed tests pass on the Apple M4 against Metal with no validation error.
+- [x] The OpenCL, CUDA, and Metal results are unchanged: the phase changes no source of those
+      backends. The shared `mask_coverage_texture_cache.hpp` asks a backend for a cache texture
+      only when the backend has `CreateCacheTexture2D` (Vulkan); the other backends compile the
+      same calls as before (`OpenClMaskFixture.*` passes after the change).
+
+**Expected diff.** 1300 to 1700 lines.
+
+##### Phase VK11 completion record (2026-11-27)
+
+**Status:** complete on the RTX 3080 Laptop GPU, Iris Xe, and the Apple M4 (MoltenVK). Issue
+#1230. Branch `feature/vulkan-vk11-masks` on the VK10 branch `feature/vulkan-vk10-local-tone`
+(pull request #1229).
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Ranged and unranged kernels | The OpenCL pairs `mask_analytic_r8` / `mask_analytic_ranged_r8` and `mask_raster_r8` / `mask_raster_ranged_r8` | One kernel each; both `*_restricted` flags zero skip the read of the Grade input | `value * 1 * opacity` equals `value * opacity`, so the result of the kernel without ranges is unchanged (the shared check `FullySelectingRangeMatchesTheMaskWithoutRangesByteForByte` passes), and the catalog has two kernels fewer. |
+| Coverage display output | OpenCL writes `(value, 0, 0, 1)` with one kernel into an R8 or an RGBA32F image | `mask_raster_r8` and `mask_raster_rgba32f` | A Vulkan storage image binding has one format. |
+| Union | Copy of the first source, then `max(cur, next)` into a scratch image and a copy back for each further source | Copy of the first source, then `output = max(output, source)` in place | One invocation reads and writes its own texel, so no scratch image and no copy back are necessary. |
+| Push constants | Not in the plan | Analytic 128 bytes (Radial and Linear Gradient share seven floats), raster 96, edge 48, the others 8 | Inside the Vulkan minimum of 128 bytes. The ranges are the nine 4-byte words of `MaskRangeParams`, so the kernel header (in the catalog library `VulkanContext`) does not include the Mask model and its JSON dependency. |
+| Feather weights | A by-value OpenCL argument of 808 bytes | A buffer of the `RecordAiMaskEdge` call, read by device address, given back at the end of the call | 201 floats do not fit in the push constants; the retire rule keeps the buffer until its batch completes (VK6 rule). |
+| Memory priority of the coverage cache | Section 4.2 and the VK2 record: the mask coverage cache sets 0.2 for its entries | `VulkanBackend::CreateCacheTexture2D` (`kCachePriority`); the shared `MaskCoverageTextureCache` uses it for the coverage textures of its entries when the backend has it (`if constexpr (requires ...)`); the work textures keep 0.8. `Texture2D::MemoryPriority` gives the value. | The cache is shared by the four backends; OpenCL, CUDA, and Metal have no such call, so their code is the same as before. |
+| Display records | VK18 has "mask coverage display" | The three pipeline-side records (`RecordMaskValueDisplay`, `RecordMaskCoverageDisplay`, `RecordMaskCandidateRangeDisplay`) are in VK11 | They are in `opencl_mask_pass.cpp` (the VK11 model) and `PlanExecutor` calls them, so `PlanExecutor<VulkanBackend>` (VK17) compiles. The viewport display of the target stays VK18. |
+| Tolerance | The tolerance of the matching OpenCL test (one code against the CPU reference) | R8 codes: exact against OpenCL on NVIDIA; one code against OpenCL on Intel and against Metal; one code for a Hue Range or a Luminance Range | Measured below. The ranged weight uses atan2 and cube roots, whose last bits differ from the OpenCL and Metal built-ins; Metal builds its product mask kernels with fast math. |
+| Wrong reference on Iris Xe | B9: compare with OpenCL on the same GPU | On Intel, a Union of three or more Masks is compared with the maximum of the Vulkan sources, and an Expand that writes a morphology work image a second time with the host morphology (exact) or the host AI Mask evaluation (one code); every Union is checked against the maximum of its sources on every device | OpenCL on Iris Xe gives wrong results for exactly these cases: its own check `OpenClMaskFixture.GpuExpandMatchesAlternatingMorphologyExactly` fails there (Expand +-50) and passes on the NVIDIA OpenCL device, and its Union of three Masks changes from run to run (up to 229 codes). The Vulkan results equal the independent references. User 2026-11-27: OpenCL goes to the archive after Vulkan (VK22), so no issue for it (#1231 closed). |
+| Plan-executor checks | The shared checks of the OpenCL mask test | Without `CheckCoverageOnlyWorkKeepsPhotoResults` and `CheckSecondGradeHueRangeReadsFirstGradeOutput` | Both need `PlanExecutor<VulkanBackend>` (VK17). `MaskedGradesEqualTheReferenceBackend` covers the second: the second Grade's Hue Range reads the first Grade's scene-work output. |
+
+**Measured differences** (logs `build/tmp/vulkan_backend/vk11/`; R8 codes of the Mask outputs, the
+largest difference and the count of differing texels; the masked Grades are the relative
+difference of the ACEScc output, tolerance 2e-4):
+
+| Case | RTX 3080: OpenCL | Iris Xe: OpenCL | Apple M4: Metal |
+| --- | --- | --- | --- |
+| Analytic: 3 Masks, full frame, crop and rotation, region, render scale 0.5 | 0 | 1 code at 1 texel of 17 063 (rotated Radial); Union: equal to the maximum of the sources | 0 |
+| Ranged: 5 Masks, cached image and scene-work input | 1 code at 1 texel of 6912 (Hue Range) | 1 code at 1 texel (Hue Range); Union: maximum of the sources | 1 code at 1 texel each (Hue Range, wrapping Hue Range) |
+| AI Masks: 8 edge, scale, geometry, and range cases | 0 | 0; Feather 2.5 with Expand +4: host evaluation within one code | 1 code at 20 of 768 texels (Feather 2 at render scale 0.5), else 0 |
+| Coverage textures of 8 edge adjustments (Feather 50 included) | 0 | 0; Expand +5, -4, and 3 with Feather: host morphology, exact | 0 |
+| Union of 3 enabled Masks, one alias, zero fill | 0 | maximum of the sources; the independent reference within one code | 0 |
+| Value, coverage, and candidate range displays | 0 | 0 | 1 code at 9 of 3072 texels (coverage display) |
+| Two masked Grades (Develop to the second Grade) | 1.2e-5 | 1.6e-5 | 1.1e-5 |
+
+**Primary success call chain:**
+
+```text
+PlanExecutor (VK17) or a test, per Color Grade with a Mask stack
+  -> PassEncoder<VulkanBackend, MaskEvaluate>::Encode -> ExecuteVulkanMask (per source)
+       -> RequireMaskModel; RangeSceneView (only a restricted range: cached image or scene-work
+          member of the render extent) -> AcquireImageForWrite (effective output, R8)
+       -> Radial / Linear Gradient: mask_analytic_r8
+       -> AI Mask: BasicRenderWorkspace::AcquireAiMaskCoverage
+            -> MaskCoverageTextureCache::AcquireStored -> Upload (CreateCacheTexture2D)
+            -> with Feather or Expand: RecordEdge -> VulkanBackend::RecordAiMaskEdge
+                 -> ai_mask_morphology_r8 per step (work textures), Feather weights buffer,
+                    ai_mask_feather_rows_r32f, ai_mask_feather_columns_r8 (entry texture)
+          -> mask_raster_r8 (samples x samples bilinear reads of the coverage texture)
+  -> PassEncoder<VulkanBackend, MaskUnion>::Encode -> ExecuteVulkanMaskUnion
+       -> none enabled: mask_fill_zero_r8; one: AliasImageFrom; more: CopyTexture2D of the first,
+          mask_union_max_r8 in place for each further source
+  -> the Grade reads the R8 mask output (VK8); nothing is submitted; EndRender submits
+```
+
+**Primary failure call chain:**
+
+```text
+outside BeginRender, empty geometry, a Mask source without a kernel, a ranged Mask without an
+RGBA32F Grade input of the render extent, a missing asset, a missing enabled source of the Union,
+an edge dispatch without work or with a missing or wrong texture, a display output of the wrong
+format or size
+  -> std::runtime_error ("ExecuteVulkanMask: ...", "ExecuteVulkanMaskUnion: ...",
+     "VulkanBackend::RecordAiMaskEdge: ...", "AI Mask coverage: ...", "Record...Display: ...")
+     before the dispatch of the failing pass; the output of a failed MaskEvaluate is not acquired
+  -> the caller cancels the render; a failed edge work keeps the published coverage entries
+```
+
+**What was proven (executed tests, validation layer on):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| The seven comparisons of the section (`VulkanMaskTest.*`) | `VulkanMaskTest` | PASS on RTX 3080, Iris Xe, Apple M4 |
+| The twelve AI Mask and seven Mask range checks against the independent references | `VulkanMaskTest` (`VulkanMaskHarnessTest.*`) | PASS on the three devices |
+| Recording rule, pipeline reuse, memory priority, failures (four tests) | `VulkanMaskTest` (`VulkanMaskHarnessTest.*`) | PASS on the three devices |
+| `AiMaskEdgeWithoutWorkFailsAndRecordsNothing` | `GpuDagVulkanWorkspaceTest` | PASS on the three devices |
+| VK0 to VK11 suites, Windows | `ctest -R "Vulkan\|PipelineAccelerator"` | RTX 3080 and Iris Xe: 185 tests each, 184 PASS, 1 skipped (a test for a build without Vulkan) |
+| VK0 to VK11 suites, Apple M4 | `ctest -R "Vulkan\|PipelineAccelerator"` | 149 tests, 147 PASS, 2 skipped (Windows only); the three test RAWs copied for the run |
+| `alcedo-gpu-check --vulkan` | `alcedo_gpu_check` | `gpu.kernels.ok=vulkan kernels=55` on the three devices |
+| `OpenClMaskFixture.*` after the change of the shared coverage cache | `GpuDagOpenClGradeTest`, NVIDIA OpenCL device | 31 PASS |
+| Validation errors | `TearDown` of each GPU test | 0 |
+| Synchronization validation (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC`) of the Union and edge cases | `VulkanMaskTest`, RTX 3080 | no hazard |
+| Windows MSVC build of every Vulkan target | `scripts\msvc_env.cmd --build build\debug` | PASS, no warning |
+
+**Findings outside this phase.** OpenCL on Iris Xe gives a wrong AI Mask Expand when the
+morphology writes a work image a second time, and a nondeterministic wrong MaskUnion of three or
+more Masks; separate submissions of each Vulkan step did not change the Vulkan result, which
+equals the independent references. Not fixed: OpenCL goes to the archive after Vulkan (user
+2026-11-27; #1231 closed as not planned).
+
+**LOC note:** about 2640 added and 50 removed lines without the plan: the kernels 413 (`mask.slang`
+287, `ai_mask_coverage.slang` 126), the kernel headers 253, the passes 627 (`vulkan_mask_pass.cpp`
+371 and its header 124, `vulkan_ai_mask_coverage.cpp` 132), the backend priority and the shared cache
+50, the pass encoders, CMake, and the catalog 60, the tests about 1240 (`vulkan_mask_test.cpp` 682
+with the comparisons, `vulkan_mask_harness_test.cpp` 382 with the shared checks and the Vulkan rules,
+`vulkan_mask_test_support.hpp` 132 with the inputs of both, and the workspace, Grade, and local tone
+tests). Above the phase limit of 2000 lines, as VK4 and VK5: production code is about 1400 lines;
+the rest is the two test files of one test target with two fixtures.
+
+**Remaining gaps:** none.
+
 ### Phases VK3 to VK23: scope of each phase
 
 Each entry gives the objective, the OpenCL model, and the main tests. The detailed section replaces
@@ -3073,7 +3310,7 @@ the entry before the implementation.
 | VK8 | Detailed section above | | |
 | VK9 | Detailed section above | | |
 | VK10 | Detailed section above | | |
-| VK11 | MaskEvaluate, MaskUnion, AI mask coverage | `opencl_mask_pass.cpp`, `mask.cl`, `opencl_ai_mask_coverage.cpp` | Mask values and coverage equal OpenCL. |
+| VK11 | Detailed section above | | |
 | VK12 | DiffusionFilter, `VulkanDrtOps` (its neighborhood operations are `VulkanNeighborOps` of VK9), DRT parameters, the tone curves of `common.cl`, the ACES 2.0 and OpenDRT math of `cst.cl` (moved from VK3) | `opencl_drt_pass.cpp`, `opencl_diffusion_filter_pass.cpp`, `drt.cl`, `drt_params.cl`, `common.cl`, `cst.cl` | Product output equals OpenCL for ACES and OpenDRT. |
 | VK13 | Film print stage kernels | `opencl_film_print_pass.cpp`, `film_print.cl` | Negative to print output equals OpenCL. Reversal output equals OpenCL. |
 | VK14 | Film print scan, film grain negative and post, the `__SLANG__` branch of the grain hash (`film_grain_field.h`) | `film_print_scan.cl`, `film_grain_*.cl`, `opencl_film_grain_pass.cpp` | Negative scan and grain equal OpenCL. |
