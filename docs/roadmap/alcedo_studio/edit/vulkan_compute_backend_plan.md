@@ -11,7 +11,7 @@ VK0 is complete (2026-11-23, #1063). VK1 is complete (2026-11-23, #1065). VK2 is
 VK5 is complete (2026-11-27, #1203). VK6 is complete (2026-11-27, #1209), on the Apple M4 with
 MoltenVK and on Windows. VK7 is complete (2026-11-27, #1211). VK8 is complete (2026-11-27,
 #1219). VK9 is complete (2026-11-27, #1225). VK10 is complete (2026-11-27, #1228). VK11 is
-complete (2026-11-27, #1230).
+complete (2026-11-27, #1230). VK12 is complete (2026-11-27, #1234).
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -603,7 +603,7 @@ test of its kernels (B9).
 | VK9 | Neighborhood kernels (Sharpen, Clarity, Halation) | `edit/runtime/vulkan/` | VK8 | 800 to 1200 | complete (#1225) |
 | VK10 | Local tone | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | complete (#1228) |
 | VK11 | MaskEvaluate, MaskUnion, AI mask coverage | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | complete (#1230) |
-| VK12 | DiffusionFilter and Drt | `edit/runtime/vulkan/` | VK8 | 1500 to 1900 | planned |
+| VK12 | DiffusionFilter and Drt | `edit/runtime/vulkan/` | VK8 | 1500 to 1900 | complete (#1234) |
 | VK13 | Film print | `edit/runtime/vulkan/` | VK12 | 1600 to 1950 | planned |
 | VK14 | Film print scan and film grain | `edit/runtime/vulkan/` | VK13 | 900 to 1300 | planned |
 | VK15 | Neural network layers | `src/vulkan/nn/` | VK2, VX4 | 1500 to 1900 | deferred (A5) |
@@ -3295,6 +3295,235 @@ the rest is the two test files of one test target with two fixtures.
 
 **Remaining gaps:** none.
 
+### Phase VK12: DiffusionFilter and DRT
+
+**Objective and deliverables.** The Vulkan backend decodes the ACEScc scene of the last Color Grade
+to linear AP1 and applies the diffusion filter (DiffusionFilter: the scatter pyramid, the published
+full-frame scatter image, the mix), then transforms linear AP1 to the encoded display values with
+ACES 2.0 or OpenDRT and runs the display-referred DRT finish (Clarity, Sharpen, Halation) through
+the shared `DrtPostExecutor`. The pass encoders of DiffusionFilter and Drt call the passes. The film
+print (VK13) and the Film Grain of the finish (VK14) fail with an error that names their phase.
+Issue #1234.
+
+**Inputs and prerequisites.** VK8 (`VulkanSceneView`, the parameter arena by device address of
+VK7, the dummy storage images). VK9 (`VulkanNeighborOps`: the neighborhood kernels of the finish).
+VK3 (`math.slangh`, the Slang branch of `color_encoding_math.h` with the display encodings and the
+ACEScc decode). VK7 (the Slang branch of `aces_reference_gamut_compression.h`).
+
+**Source audit of the VK12 entry (2026-11-27).**
+
+| OpenCL entry | Kernels and shared code | Callers | VK12 decision |
+| --- | --- | --- | --- |
+| `ExecuteOpenClDiffusionFilter` | `diffusion_filter_decode_scene_rgba32f` (strength 0), `diffusion_filter_reduce_boost`, `diffusion_filter_downsample`, `diffusion_filter_upsample_accumulate`, `diffusion_filter_mix_scene_rgba32f` of `drt.cl`; host `DiffusionFilterLayout`, `DiffusionScatterMapping`, `DecideDiffusionScatter` (shared) | `PassEncoder<DiffusionFilter>`, the tests | VK12 |
+| `ExecuteOpenClDrt` | `drt_display_scene_rgba32f` (`DrtDisplayPixel`: the entry reference gamut compression, `opencl_aces_output_transform_fwd` or `opencl_open_drt_transform_fwd` of `cst.cl`, `opencl_display_encoding`); `PackOpenClDrtParams` (`OpenClToOutputParams`, 11 096 bytes); `DrtPostExecutor<OpenClDrtOps>` (shared) | `PassEncoder<Drt>` | VK12 |
+| `drt_display_rgba32f` (`DispatchDrt`) | image to image form of the display kernel | none: `DispatchDrt` has no caller | Not ported. |
+| `common.cl` (tone curves, contrast, RGC helpers, `opencl_luma`) and `opencl_lmt_op`, `opencl_output_op`, `opencl_sample_lut3d_linear` of `cst.cl`; the `OpenClDrtParams` struct of `drt_params.cl` | | none: no kernel calls them | Not ported (the scope entry of VK3 named them; the audit found no caller). |
+| `RecordOpenClFilmPrint`, `RecordOpenClFilmGrainPost` | `film_print.cl`, `film_grain_*.cl` | `OpenClDrtOps::DispatchFilmPrint`, `DispatchFilmGrain` | VK13 and VK14; Vulkan refuses both before a command. |
+| `DrtDisplayPixel` in `film_print_scan.cl` | the display of the Negative Scan | the film print | VK14 uses `drt_display.slangh` of this phase. |
+
+Metal has the same passes in `metal_drt_pass.mm` and `metal_diffusion_filter_pass.mm`; on the Apple
+M4 the reference is the Metal pass, on Windows the OpenCL pass on the same GPU.
+
+**Modules, files, and APIs.**
+
+- `edit/runtime/vulkan/shader/diffusion_filter.slang` (group `diffusion_filter`: the five kernels).
+- `edit/runtime/vulkan/shader/drt_display.slangh` (the forward ACES 2.0 and OpenDRT math, the
+  display encoding, `DrtDisplayPixel`) and `drt.slang` (group `drt`: `drt_display_scene_rgba32f`).
+- `include/edit/runtime/vulkan/vulkan_drt_layout.h`: the word positions of the parameter block, read
+  by the host and by Slang.
+- `include/vulkan/vulkan_diffusion_filter_kernels.hpp`, `include/vulkan/vulkan_drt_kernels.hpp`:
+  names, bindings, push constant layouts; the descriptors go into `VulkanKernelCatalog()`.
+- `inc/edit/runtime/vulkan/vulkan_drt_params.hpp`, `edit/runtime/vulkan/vulkan_drt_params.cpp`:
+  `PackVulkanDrtParams`, the bytes of `PackOpenClDrtParams`.
+- `inc/edit/runtime/vulkan/vulkan_diffusion_filter_pass.hpp`, `vulkan_drt_pass.hpp` and their `.cpp`
+  (target `EditRuntimeVulkanPasses`): `ExecuteVulkanDiffusionFilter`, `ExecuteVulkanDrt`
+  (`VulkanDrtOps : VulkanNeighborOps`).
+- `PassEncoder<VulkanBackend, GpuPassKind::DiffusionFilter>` and `<..., Drt>` in
+  `vulkan_pass_encoder.hpp`.
+- Test target `VulkanDrtTest`: `tests/edit/runtime/vulkan_diffusion_filter_test.cpp`
+  (`VulkanDiffusionFilterTest`, `VulkanDiffusionFilterComparisonTest`) and `vulkan_drt_test.cpp`
+  (`VulkanDrtTest`, `VulkanDrtComparisonTest`).
+
+**Data rules and invariants.**
+
+- The DRT parameters are the arena slot `drt.output` of the DRT node (11 096 bytes); a kernel reads
+  them by the device address of the arena buffer plus the binding offset (VK7 rule). The slot is
+  packed again only when the DRT revision changes or the frame overrides the output color; an
+  override is recorded without a revision, so the next plain frame packs again (the OpenCL rule).
+- The kernels read each parameter by its word position (`vulkan_drt_layout.h`), not by a buffer
+  record with struct members (the Intel pipeline rule of VK4).
+- The forward transforms keep the arithmetic and its order of `cst.cl`; pow, exp, log, log10, sin,
+  cos, and atan2 are the `math.slangh` functions, and a power keeps the OpenCL results for a base
+  of 0 and a negative base (`DrtPow`).
+- The DiffusionFilter output is the scene-work member that `DestinationWorkMember` selects; the
+  pyramid levels and a scatter image that is not published are RGBA32F images of the texture pool,
+  given back at the end of the pass (each command of the recording waits for the previous one).
+  The published scatter image is the graph image `DiffusionScatterId`; a region of interest samples
+  it (the shared `DecideDiffusionScatter`).
+- The display output is an RGBA32F graph image; the free scene-work member is the intermediate of
+  an odd count of finish writes (the shared `DrtWriteSequence`).
+- Each push constant block is at most 64 bytes. Every pass records into the open recording and
+  submits nothing.
+
+**Implementation steps.**
+
+1. The layout header, `PackVulkanDrtParams`, the two kernel groups and their headers; the catalog.
+2. `ExecuteVulkanDiffusionFilter`.
+3. `ExecuteVulkanDrt` with `VulkanDrtOps`; the pass encoders.
+4. `VulkanDrtTest`.
+5. Runs: RTX 3080 Laptop GPU and Iris Xe against OpenCL; Apple M4 (MoltenVK) against Metal.
+
+**Tests and evidence.**
+
+Shared checks of `opencl_diffusion_filter_test.cpp` on Vulkan (against the CPU reference of
+`diffusion_filter_reference.hpp`): `ZeroStrengthDecodesAcesccToLinearAp1`,
+`ActiveFilterMatchesCpuReferenceWithinTolerance`, `CappedCanvasMatchesCpuReferenceWithinTolerance`,
+`ActiveFilterSpreadsPointLightIntoItsSurroundings`, `ActiveFilterKeepsEnergyOfBoostedLight`,
+`RoiRenderSamplesThePublishedFullFrameScatter`, `RoiRenderWithoutPublishedScatterDoesNotPublishOne`,
+`PreviewAndFullResolutionReadTheSameGlow` (`VulkanDiffusionFilterTest.*`).
+
+Against the reference backend on the same GPU (B9):
+
+- `VulkanDiffusionFilterComparisonTest.FilterEqualsTheReferenceBackend` (strength 0, 0.6, 1, and a
+  capped canvas of 2200 x 240; the input as a cached image and as a scene-work member)
+- `VulkanDiffusionFilterComparisonTest.RegionAfterAFullFrameEqualsTheReferenceBackend`
+- `VulkanDrtComparisonTest.DisplayTransformsEqualTheReferenceBackend` (Develop, Color Grade,
+  DiffusionFilter, DRT; ACES 2.0 and OpenDRT in Rec.709 gamma 2.2, Rec.2020 ST 2084 and HLG 1000
+  nits, P3-D65 sRGB, with diffusion)
+- `VulkanDrtComparisonTest.DisplayTransformOfOneInputEqualsTheReferenceBackend` (the DRT alone on
+  one linear AP1 input: the hue circle, 18 stops, chroma beyond the AP1 gamut; it also measures how
+  far the reference moves when its input moves by one ulp)
+- `VulkanDrtComparisonTest.ExportColorOverrideAndRegionEqualTheReferenceBackend`
+- `VulkanDrtComparisonTest.DrtFinishEqualsTheReferenceBackend` (Sharpen; Clarity and Halation;
+  all three: an odd and an even count of finish writes)
+
+Parameter, recording, and failure rules:
+
+- `VulkanDrtTest.ParameterBlockHoldsTheResolvedTransform` (the words of both methods; on Windows the
+  bytes equal `PackOpenClDrtParams`)
+- `VulkanDrtTest.ParameterBlockOfAnUnresolvedAcesTransformFails`
+- `VulkanDrtTest.Aces20HueSweepStaysFiniteWithoutIsolatedBlackPixels` (the OpenCL check)
+- `VulkanDrtTest.StableRenderPacksOnceAndCreatesNothing`
+- `VulkanDrtTest.DrtRecordsIntoTheOpenRecordingWithoutASubmission`
+- `VulkanDiffusionFilterTest.PassRecordsIntoTheOpenRecordingWithoutASubmission`
+- `VulkanDrtTest.UnsupportedAndInvalidRequestsFailBeforeACommand`,
+  `VulkanDiffusionFilterTest.InvalidRequestsFailAndRecordNothing`
+
+**Build and run commands.**
+
+```text
+Windows: cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels VulkanDrtTest <every Vulkan test target>
+         set ALCEDO_VULKAN_DEVICE=RTX (or Iris)
+         ctest --test-dir build/debug -R "Vulkan|PipelineAccelerator" -j 1 --output-on-failure
+macOS:   source ~/Projects/vulkan_tools/env.sh
+         cmake --build build/macos-vulkan --target AlcedoVulkanKernels VulkanDrtTest <every Vulkan test target>
+         ctest --test-dir build/macos-vulkan -R "Vulkan|PipelineAccelerator" -j 1 --output-on-failure
+```
+
+**Exit criteria.**
+
+- [x] The listed tests pass on the RTX 3080 Laptop GPU and Iris Xe against OpenCL with no
+      validation error.
+- [x] The listed tests pass on the Apple M4 against Metal with no validation error.
+- [x] The OpenCL, CUDA, and Metal results are unchanged: the phase changes no source of those
+      backends and no shared source.
+
+**Expected diff.** 1500 to 1900 lines.
+
+##### Phase VK12 completion record (2026-11-27)
+
+**Status:** complete on the RTX 3080 Laptop GPU, Iris Xe, and the Apple M4 (MoltenVK). Issue
+#1234. Branch `feature/vulkan-vk12-drt` on the VK11 branch `feature/vulkan-vk11-masks` (pull
+request #1233).
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Scope of `common.cl` and `cst.cl` | VK3 moved "the tone curves of `common.cl`, the ACES 2.0 and OpenDRT math of `cst.cl`" to VK12 | Only the forward ACES 2.0 and OpenDRT transforms, the display encoding, and `DrtDisplayPixel` | The source audit above: `common.cl` and the LMT, output operator, and LUT helpers of `cst.cl` have no caller in any OpenCL kernel, and `drt_display_rgba32f` has no host caller. |
+| Parameter block | DRT parameters as `OpenClToOutputParams` | `VulkanDrtParamBlock`, 2774 words; the positions are macros of `vulkan_drt_layout.h` that the host packing and the Slang kernels read | One definition of the layout for both sides; the kernels read words by position (Intel rule of VK4). `ParameterBlockHoldsTheResolvedTransform` compares the bytes with `PackOpenClDrtParams` on Windows. |
+| Kernel groups | One OpenCL program `opencl_dag_drt` | Groups `diffusion_filter` (5 kernels) and `drt` (1), catalog 61; `drt_display.slangh` holds the transform | The film print scan of VK14 includes the transform header without the DiffusionFilter kernels. |
+| Image reads | OpenCL sampler, clamp to edge, nearest | Storage image loads at clamped coordinates; the bilinear and B-spline taps are the arithmetic of `drt.cl` | A storage image has no sampler; the clamped load is the nearest read of the sampler. |
+| Film print and Film Grain | Not in the plan | `ExecuteVulkanDrt` refuses the film print (VK13) and an enabled Film Grain of the finish (VK14) before the shared executor records a command; `kImplementsFilmPrint` is false | The shared executor would refuse the film print with a text that names no phase, and it starts Film Grain after the display transform is recorded. |
+| Tolerance | The tolerance of the matching OpenCL test (5e-3 against CUDA) | DiffusionFilter: 1e-5 relative. ACES 2.0: largest 5e-4 (half a 10-bit code), rms 2e-6. OpenDRT: 1e-5 | Measured below. The ACES 2.0 output of a dark color beyond the AP1 gamut moves by 1.2e-4 (OpenCL, Iris Xe), 1.3e-4 (OpenCL, RTX 3080), and 2.4e-4 (Metal) in the reference itself when its input moves by one ulp, so a last-bit difference of a math function gives a difference of that size. OpenDRT moves by at most 1.1e-6. |
+| Metal reference of a neutral input | B9: compare with Metal on the M4 | On the M4 the OpenDRT rows of chroma 0 of the one-input test are not compared with Metal; the Vulkan pixels there must not be black | Metal OpenDRT gives 0 for an exactly neutral input (#1235). The Vulkan values equal OpenCL on Windows. |
+
+**Measured differences** (logs `build/tmp/vulkan_backend/vk12/`; the largest difference
+`|Vulkan - reference| / max(1, |reference|)` and the rms):
+
+| Case | RTX 3080: OpenCL | Iris Xe: OpenCL | Apple M4: Metal |
+| --- | --- | --- | --- |
+| DiffusionFilter: strength 0, 0.6, 1, capped canvas; cached image and scene-work input | 2.5e-7 | 1.7e-7 | 2.5e-7 |
+| DiffusionFilter: region after a full frame | 1.1e-7 | 1.2e-7 | 1.2e-7 |
+| ACES 2.0, full chain, 3 encodings, override, region | 8.4e-5 (rms 9.1e-7) | 9.2e-5 (rms 9.4e-7) | 1.2e-4 (rms 1.1e-6) |
+| ACES 2.0 with Sharpen, Clarity, Halation | 7.9e-5 (rms 9.2e-7) | 1.2e-4 (rms 9.9e-7) | 1.6e-4 (rms 1.3e-6) |
+| ACES 2.0, one input; the reference with the input one ulp up | 1.2e-4 (rms 7.1e-7); 1.3e-4 | 2.1e-4 (rms 9.8e-7); 1.2e-4 | 1.5e-4 (rms 9.0e-7); 2.4e-4 |
+| OpenDRT, full chain, 4 encodings, override, region, finish | 6.0e-6 | 2.6e-6 | 3.6e-6 |
+| OpenDRT, one input; the reference with the input one ulp up | 1.9e-6; 9.4e-7 | 1.9e-6; 1.1e-6 | 3.6e-6 (rows of chroma 0 left out, #1235) |
+
+**Primary success call chain:**
+
+```text
+PlanExecutor (VK17) or a test, after the last Color Grade
+  -> PassEncoder<VulkanBackend, DiffusionFilter>::Encode -> ExecuteVulkanDiffusionFilter
+       -> VulkanBindScene (source, DestinationWorkMember output; extents checked)
+       -> strength 0: diffusion_filter_decode_scene_rgba32f
+       -> else MakeDiffusionFilterLayout, MakeDiffusionScatterMapping, DecideDiffusionScatter
+            -> SampleCanonical: the published DiffusionScatterId image
+            -> Rebuild: BuildScatter (reduce_boost, downsample per level, upsample_accumulate per
+               level) into the published image (full edit, RecordUnpublished) or a pool image
+       -> diffusion_filter_mix_scene_rgba32f -> linear AP1 in the scene-work member
+  -> PassEncoder<VulkanBackend, Drt>::Encode -> ExecuteVulkanDrt
+       -> RequireImplementedDrt (film print: VK13; enabled Film Grain: VK14)
+       -> DrtPostExecutor<VulkanDrtOps>::Execute
+            -> BindDisplayParams: PackVulkanDrtParams into the slot drt.output (only on a change)
+            -> UploadDirty; AcquireDisplayOutput (RGBA32F)
+            -> DispatchDisplayTransform: drt_display_scene_rgba32f (ParameterSlotAddress)
+            -> each finish write: NeighborExecutor<VulkanDrtOps> (VulkanNeighborOps of VK9)
+  -> the display output of the plan; nothing is submitted; EndRender submits
+```
+
+**Primary failure call chain:**
+
+```text
+outside BeginRender, a missing DRT endpoint, a scene-work member of another extent, a missing scene
+image, an output encoding that does not resolve, the film print, an enabled Film Grain of the
+finish, an unresolved ACES 2.0 table
+  -> std::runtime_error ("ExecuteVulkanDiffusionFilter: ...", "ExecuteVulkanDrt: ...",
+     "PackVulkanDrtParams: ...", "DrtOutputResolver: ...") before the first command of the pass
+  -> the caller cancels the render
+```
+
+**What was proven (executed tests, validation layer on):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| The eight shared DiffusionFilter checks (tests of `VulkanDiffusionFilterTest`) | `VulkanDrtTest` | PASS on RTX 3080, Iris Xe, Apple M4 |
+| The six comparisons with the reference backend | `VulkanDrtTest` | PASS on the three devices |
+| Parameter block, hue sweep, steady state, recording, failures (eight tests) | `VulkanDrtTest` | PASS on the three devices |
+| VK0 to VK12 suites, Windows | `ctest -R "Vulkan\|PipelineAccelerator"` | RTX 3080 and Iris Xe: 207 tests each, 206 PASS, 1 skipped (a test for a build without Vulkan) |
+| VK0 to VK12 suites, Apple M4 | `ctest -R "Vulkan\|PipelineAccelerator"` | 171 tests, 169 PASS, 2 skipped (Windows only); the three test RAWs copied for the run |
+| `alcedo-gpu-check --vulkan` | `alcedo_gpu_check` | `gpu.kernels.ok=vulkan kernels=61` on the three devices |
+| Validation errors | `TearDown` of each GPU test | 0 |
+| Windows MSVC build of every Vulkan target | `scripts\msvc_env.cmd --build build\debug` | PASS, no warning |
+
+**Findings outside this phase.** Metal OpenDRT gives 0 (black) for an exactly neutral linear AP1
+input, at 2^-12 and at 2^6 alike, in Rec.709 and in P3-D65 ST 2084; OpenCL and Vulkan give the
+expected values. The Metal DRT shaders are built with fast math; a fast-math power of the zero
+opponent chroma is the probable cause (not confirmed). Issue #1235.
+
+**LOC note:** about 2370 added production lines and 1270 test lines without the plan: the kernels
+1179 (`drt_display.slangh` 815, the port of the 846 lines of `cst.cl` that the transforms use with
+the display encoding; `diffusion_filter.slang` 317; `drt.slang` 47), the layout header 167, the
+kernel headers 205, the parameter packing 194, the passes 577 (`vulkan_diffusion_filter_pass.cpp`
+289, `vulkan_drt_pass.cpp` 196, their headers 92), the pass encoders, CMake, and the catalog 50;
+the tests 1266 (`vulkan_drt_test.cpp` 680, `vulkan_diffusion_filter_test.cpp` 536, the reference
+support 32, CMake 20). Above the phase limit of 2000 lines, as VK4, VK5, and VK11: the transform
+port is one unit (one kernel includes all of it), and the rest is in the estimate.
+
+**Remaining gaps:** none.
+
 ### Phases VK3 to VK23: scope of each phase
 
 Each entry gives the objective, the OpenCL model, and the main tests. The detailed section replaces
@@ -3311,7 +3540,7 @@ the entry before the implementation.
 | VK9 | Detailed section above | | |
 | VK10 | Detailed section above | | |
 | VK11 | Detailed section above | | |
-| VK12 | DiffusionFilter, `VulkanDrtOps` (its neighborhood operations are `VulkanNeighborOps` of VK9), DRT parameters, the tone curves of `common.cl`, the ACES 2.0 and OpenDRT math of `cst.cl` (moved from VK3) | `opencl_drt_pass.cpp`, `opencl_diffusion_filter_pass.cpp`, `drt.cl`, `drt_params.cl`, `common.cl`, `cst.cl` | Product output equals OpenCL for ACES and OpenDRT. |
+| VK12 | Detailed section above | | |
 | VK13 | Film print stage kernels | `opencl_film_print_pass.cpp`, `film_print.cl` | Negative to print output equals OpenCL. Reversal output equals OpenCL. |
 | VK14 | Film print scan, film grain negative and post, the `__SLANG__` branch of the grain hash (`film_grain_field.h`) | `film_print_scan.cl`, `film_grain_*.cl`, `opencl_film_grain_pass.cpp` | Negative scan and grain equal OpenCL. |
 | VK15 | Convolution layers, activation storage, workspace, stage profiler | `opencl/nn/*.cpp`, `demosaicnet_conv.cl` | Each layer equals the expected output of the weights file in the tolerance of the OpenCL layer tests. |

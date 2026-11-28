@@ -33,10 +33,14 @@
 #include "../../vulkan/vulkan_opencl_comparison.hpp"
 #include "edit/runtime/opencl/opencl_backend.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
+#include "edit/runtime/opencl/opencl_diffusion_filter_pass.hpp"
+#include "edit/runtime/opencl/opencl_drt_pass.hpp"
 #include "edit/runtime/opencl/opencl_primary_grade_pass.hpp"
 #elif defined(HAVE_METAL)
 #include "edit/runtime/metal/metal_backend.hpp"
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_diffusion_filter_pass.hpp"
+#include "edit/runtime/metal/metal_drt_pass.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
 #else
 #error "The Vulkan pass tests need OpenCL or Metal as their reference backend."
@@ -79,6 +83,20 @@ inline auto ExecuteReferencePrimaryGrade(ReferenceRenderDevice& device, const Ex
   return ExecuteOpenClPrimaryGrade(device, plan, input, document, histogram).output_binding;
 }
 
+inline auto ExecuteReferenceDiffusionFilter(ReferenceRenderDevice&   device,
+                                            const ExecutionPlan&     plan,
+                                            const PipelineDocument&  document,
+                                            const FrameSceneBinding& scene) -> FrameSceneBinding {
+  return ExecuteOpenClDiffusionFilter(device, plan, document, scene);
+}
+
+/// The display transform and the DRT finish; the display output of @p plan.
+inline auto ExecuteReferenceDrt(ReferenceRenderDevice& device, const ExecutionPlan& plan,
+                                const PipelineDocument& document, const FrameSceneBinding& scene)
+    -> GraphValueId {
+  return ExecuteOpenClDrt(device, plan, document, scene).output;
+}
+
 /// OpenCL on the GPU of the Vulkan context; an empty text when it is available.
 inline auto PrepareReferenceBackend() -> std::string {
   return vulkan_opencl_comparison::PrepareOpenClOnTheVulkanDevice();
@@ -116,6 +134,20 @@ inline auto ExecuteReferencePrimaryGrade(ReferenceRenderDevice& device, const Ex
                                          CurveInputHistogramRecord* histogram = nullptr)
     -> FrameSceneBinding {
   return ExecuteMetalPrimaryGrade(device, plan, input, document, histogram).output_binding;
+}
+
+inline auto ExecuteReferenceDiffusionFilter(ReferenceRenderDevice&   device,
+                                            const ExecutionPlan&     plan,
+                                            const PipelineDocument&  document,
+                                            const FrameSceneBinding& scene) -> FrameSceneBinding {
+  return ExecuteMetalDiffusionFilter(device, plan, document, scene);
+}
+
+/// The display transform and the DRT finish; the display output of @p plan.
+inline auto ExecuteReferenceDrt(ReferenceRenderDevice& device, const ExecutionPlan& plan,
+                                const PipelineDocument& document, const FrameSceneBinding& scene)
+    -> GraphValueId {
+  return ExecuteMetalDrt(device, plan, document, scene).output;
 }
 
 /// The system default Metal device: the GPU of MoltenVK on a computer with one GPU.

@@ -8,7 +8,9 @@
 
 #include "edit/runtime/pass_encoder.hpp"
 #include "edit/runtime/vulkan/vulkan_develop_pass.hpp"
+#include "edit/runtime/vulkan/vulkan_diffusion_filter_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_display_to_ap1_pass.hpp"
+#include "edit/runtime/vulkan/vulkan_drt_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_geometry_camera_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_mask_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_primary_grade_pass.hpp"
@@ -84,6 +86,23 @@ struct PassEncoder<VulkanBackend, GpuPassKind::PrimaryColorGrade> {
     return ExecuteVulkanPrimaryGrade(device, plan, prepared, document, compiled_grade, scene,
                                      histogram)
         .output_binding;
+  }
+};
+
+template <>
+struct PassEncoder<VulkanBackend, GpuPassKind::DiffusionFilter> {
+  static auto Encode(VulkanRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument& document, const FrameSceneBinding& scene)
+      -> FrameSceneBinding {
+    return ExecuteVulkanDiffusionFilter(device, plan, document, scene);
+  }
+};
+
+template <>
+struct PassEncoder<VulkanBackend, GpuPassKind::Drt> {
+  static void Encode(VulkanRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument& document, const FrameSceneBinding& scene) {
+    (void)ExecuteVulkanDrt(device, plan, document, scene);
   }
 };
 

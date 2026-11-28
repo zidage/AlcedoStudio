@@ -417,10 +417,14 @@ if(ALCEDO_VULKAN_ENABLED)
     # geometry resample, the camera color, and the raster input passes from phase VK7; the point
     # stages of the Color Grade from phase VK8; the neighborhood kernels (Clarity, Sharpen,
     # Halation) from phase VK9; the Local Laplacian stage (Shadows, Highlights) from phase VK10;
-    # MaskEvaluate, MaskUnion, and the coverage displays from phase VK11.
+    # MaskEvaluate, MaskUnion, and the coverage displays from phase VK11; the DiffusionFilter and
+    # the DRT from phase VK12.
     def_library(EditRuntimeVulkanPasses
         SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_develop_pass.cpp
+                ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_diffusion_filter_pass.cpp
                 ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_display_to_ap1_pass.cpp
+                ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_drt_params.cpp
+                ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_drt_pass.cpp
                 ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_geometry_camera_pass.cpp
                 ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_local_tone_pass.cpp
                 ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_mask_pass.cpp
@@ -428,6 +432,7 @@ if(ALCEDO_VULKAN_ENABLED)
                 ${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/vulkan_primary_grade_pass.cpp
         PUBLIC_DEPS EditRuntimeVulkan EditInput
         PRIVATE_DEPS RawProcessorOpVulkan EditRuntimeLensVulkan EditRuntimeLens PreviewPerformance
+                     EditRuntimeDrt EditRuntimeFilm
     )
 endif()
 

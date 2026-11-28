@@ -1,0 +1,167 @@
+// Copyright 2026 Yurun Zi
+// SPDX-License-Identifier: GPL-3.0-only
+// Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+#ifndef ALCEDO_VULKAN_DRT_LAYOUT_H
+#define ALCEDO_VULKAN_DRT_LAYOUT_H
+
+// The 32-bit word positions of the DRT parameter block of the Vulkan display transform (plan
+// #1036, phase VK12). The block has the bytes of `OpenClToOutputParams` (11 096 bytes,
+// opencl_drt_gpu_params.hpp): `PackVulkanDrtParams` writes it, the Slang kernels of the group
+// `drt` read it by device address. The kernels read each value by its word position (no buffer
+// record with struct members: the Intel pipeline rule of phase VK4).
+//
+// The host (C++) and Slang include this file. It has only macros.
+
+// Size of each ACES 2.0 table (TOTAL_TABLE_SIZE of color_utils.hpp).
+#define ALCEDO_VK_DRT_TABLE_SIZE 362
+
+// --- The words of one JMh parameter set, from its start ---
+#define ALCEDO_VK_DRT_JMH_RGB_TO_CAM16    0
+#define ALCEDO_VK_DRT_JMH_CAM16_TO_RGB    9
+#define ALCEDO_VK_DRT_JMH_CONE_TO_AAB     18
+#define ALCEDO_VK_DRT_JMH_AAB_TO_CONE     27
+#define ALCEDO_VK_DRT_JMH_F_L_N           36
+#define ALCEDO_VK_DRT_JMH_CZ              37
+#define ALCEDO_VK_DRT_JMH_INV_CZ          38
+#define ALCEDO_VK_DRT_JMH_A_W_J           39
+#define ALCEDO_VK_DRT_JMH_INV_A_W_J       40
+#define ALCEDO_VK_DRT_JMH_WORDS           41
+
+// --- The words of the tone scale, from its start ---
+#define ALCEDO_VK_DRT_TS_N                0
+#define ALCEDO_VK_DRT_TS_N_R              1
+#define ALCEDO_VK_DRT_TS_G                2
+#define ALCEDO_VK_DRT_TS_T_1              3
+#define ALCEDO_VK_DRT_TS_C_T              4
+#define ALCEDO_VK_DRT_TS_S_2              5
+#define ALCEDO_VK_DRT_TS_U_2              6
+#define ALCEDO_VK_DRT_TS_M_2              7
+#define ALCEDO_VK_DRT_TS_FORWARD_LIMIT    8
+#define ALCEDO_VK_DRT_TS_INVERSE_LIMIT    9
+#define ALCEDO_VK_DRT_TS_LOG_PEAK         10
+#define ALCEDO_VK_DRT_TS_WORDS            11
+
+// --- The block ---
+#define ALCEDO_VK_DRT_METHOD              0  // int: 0 ACES 2.0, else OpenDRT
+#define ALCEDO_VK_DRT_EOTF                1  // int: CE_TF_* of the display encoding
+#define ALCEDO_VK_DRT_ACES                2  // the ACES 2.0 parameters
+
+// The ACES 2.0 parameters, from the block start.
+#define ALCEDO_VK_DRT_ACES_PEAK_LUMINANCE (ALCEDO_VK_DRT_ACES + 0)
+#define ALCEDO_VK_DRT_ACES_INPUT          (ALCEDO_VK_DRT_ACES + 1)
+#define ALCEDO_VK_DRT_ACES_REACH          (ALCEDO_VK_DRT_ACES_INPUT + ALCEDO_VK_DRT_JMH_WORDS)
+#define ALCEDO_VK_DRT_ACES_LIMIT          (ALCEDO_VK_DRT_ACES_REACH + ALCEDO_VK_DRT_JMH_WORDS)
+#define ALCEDO_VK_DRT_ACES_TS             (ALCEDO_VK_DRT_ACES_LIMIT + ALCEDO_VK_DRT_JMH_WORDS)
+#define ALCEDO_VK_DRT_ACES_LIMIT_J_MAX    (ALCEDO_VK_DRT_ACES_TS + ALCEDO_VK_DRT_TS_WORDS)
+#define ALCEDO_VK_DRT_ACES_MODEL_GAMMA_INV (ALCEDO_VK_DRT_ACES_LIMIT_J_MAX + 1)
+#define ALCEDO_VK_DRT_ACES_MID_J          (ALCEDO_VK_DRT_ACES_LIMIT_J_MAX + 2)
+#define ALCEDO_VK_DRT_ACES_FOCUS_DIST     (ALCEDO_VK_DRT_ACES_LIMIT_J_MAX + 3)
+#define ALCEDO_VK_DRT_ACES_LOWER_HULL_GAMMA_INV (ALCEDO_VK_DRT_ACES_LIMIT_J_MAX + 4)
+#define ALCEDO_VK_DRT_ACES_HUE_SEARCH_LO  (ALCEDO_VK_DRT_ACES_LIMIT_J_MAX + 5)  // int
+#define ALCEDO_VK_DRT_ACES_HUE_SEARCH_HI  (ALCEDO_VK_DRT_ACES_LIMIT_J_MAX + 6)  // int
+#define ALCEDO_VK_DRT_ACES_SAT            (ALCEDO_VK_DRT_ACES_LIMIT_J_MAX + 7)
+#define ALCEDO_VK_DRT_ACES_SAT_THR        (ALCEDO_VK_DRT_ACES_LIMIT_J_MAX + 8)
+#define ALCEDO_VK_DRT_ACES_COMPR          (ALCEDO_VK_DRT_ACES_LIMIT_J_MAX + 9)
+#define ALCEDO_VK_DRT_ACES_CHROMA_COMPRESS_SCALE (ALCEDO_VK_DRT_ACES_LIMIT_J_MAX + 10)
+#define ALCEDO_VK_DRT_ACES_TABLE_REACH_M  (ALCEDO_VK_DRT_ACES_LIMIT_J_MAX + 11)
+#define ALCEDO_VK_DRT_ACES_TABLE_HUES     (ALCEDO_VK_DRT_ACES_TABLE_REACH_M + ALCEDO_VK_DRT_TABLE_SIZE)
+#define ALCEDO_VK_DRT_ACES_TABLE_UPPER_HULL_GAMMA \
+  (ALCEDO_VK_DRT_ACES_TABLE_HUES + ALCEDO_VK_DRT_TABLE_SIZE)
+// Four words per hue: J, M, h, 0.
+#define ALCEDO_VK_DRT_ACES_TABLE_GAMUT_CUSPS \
+  (ALCEDO_VK_DRT_ACES_TABLE_UPPER_HULL_GAMMA + ALCEDO_VK_DRT_TABLE_SIZE)
+#define ALCEDO_VK_DRT_ACES_END \
+  (ALCEDO_VK_DRT_ACES_TABLE_GAMUT_CUSPS + 4 * ALCEDO_VK_DRT_TABLE_SIZE)
+
+// The OpenDRT parameters, from the block start: 15 ints, then 67 floats.
+#define ALCEDO_VK_DRT_ODRT                ALCEDO_VK_DRT_ACES_END
+#define ALCEDO_VK_DRT_ODRT_TN_HCON_ENABLE (ALCEDO_VK_DRT_ODRT + 0)
+#define ALCEDO_VK_DRT_ODRT_TN_LCON_ENABLE (ALCEDO_VK_DRT_ODRT + 1)
+#define ALCEDO_VK_DRT_ODRT_PT_ENABLE      (ALCEDO_VK_DRT_ODRT + 2)
+#define ALCEDO_VK_DRT_ODRT_PTL_ENABLE     (ALCEDO_VK_DRT_ODRT + 3)
+#define ALCEDO_VK_DRT_ODRT_PTM_ENABLE     (ALCEDO_VK_DRT_ODRT + 4)
+#define ALCEDO_VK_DRT_ODRT_BRL_ENABLE     (ALCEDO_VK_DRT_ODRT + 5)
+#define ALCEDO_VK_DRT_ODRT_BRLP_ENABLE    (ALCEDO_VK_DRT_ODRT + 6)
+#define ALCEDO_VK_DRT_ODRT_HC_ENABLE      (ALCEDO_VK_DRT_ODRT + 7)
+#define ALCEDO_VK_DRT_ODRT_HS_RGB_ENABLE  (ALCEDO_VK_DRT_ODRT + 8)
+#define ALCEDO_VK_DRT_ODRT_HS_CMY_ENABLE  (ALCEDO_VK_DRT_ODRT + 9)
+#define ALCEDO_VK_DRT_ODRT_CREATIVE_WHITE (ALCEDO_VK_DRT_ODRT + 10)
+#define ALCEDO_VK_DRT_ODRT_SURROUND       (ALCEDO_VK_DRT_ODRT + 11)
+#define ALCEDO_VK_DRT_ODRT_CLAMP          (ALCEDO_VK_DRT_ODRT + 12)
+#define ALCEDO_VK_DRT_ODRT_DISPLAY_GAMUT  (ALCEDO_VK_DRT_ODRT + 13)
+#define ALCEDO_VK_DRT_ODRT_DISPLAY_EOTF   (ALCEDO_VK_DRT_ODRT + 14)
+#define ALCEDO_VK_DRT_ODRT_TN_CON         (ALCEDO_VK_DRT_ODRT + 15)
+#define ALCEDO_VK_DRT_ODRT_TN_SH          (ALCEDO_VK_DRT_ODRT + 16)
+#define ALCEDO_VK_DRT_ODRT_TN_TOE         (ALCEDO_VK_DRT_ODRT + 17)
+#define ALCEDO_VK_DRT_ODRT_TN_OFF         (ALCEDO_VK_DRT_ODRT + 18)
+#define ALCEDO_VK_DRT_ODRT_TN_HCON        (ALCEDO_VK_DRT_ODRT + 19)
+#define ALCEDO_VK_DRT_ODRT_TN_HCON_PV     (ALCEDO_VK_DRT_ODRT + 20)
+#define ALCEDO_VK_DRT_ODRT_TN_HCON_ST     (ALCEDO_VK_DRT_ODRT + 21)
+#define ALCEDO_VK_DRT_ODRT_TN_LCON        (ALCEDO_VK_DRT_ODRT + 22)
+#define ALCEDO_VK_DRT_ODRT_TN_LCON_W      (ALCEDO_VK_DRT_ODRT + 23)
+#define ALCEDO_VK_DRT_ODRT_CWP_LM         (ALCEDO_VK_DRT_ODRT + 24)
+#define ALCEDO_VK_DRT_ODRT_RS_SA          (ALCEDO_VK_DRT_ODRT + 25)
+#define ALCEDO_VK_DRT_ODRT_RS_RW          (ALCEDO_VK_DRT_ODRT + 26)
+#define ALCEDO_VK_DRT_ODRT_RS_BW          (ALCEDO_VK_DRT_ODRT + 27)
+#define ALCEDO_VK_DRT_ODRT_PT_LML         (ALCEDO_VK_DRT_ODRT + 28)
+#define ALCEDO_VK_DRT_ODRT_PT_LML_R       (ALCEDO_VK_DRT_ODRT + 29)
+#define ALCEDO_VK_DRT_ODRT_PT_LML_G       (ALCEDO_VK_DRT_ODRT + 30)
+#define ALCEDO_VK_DRT_ODRT_PT_LML_B       (ALCEDO_VK_DRT_ODRT + 31)
+#define ALCEDO_VK_DRT_ODRT_PT_LMH         (ALCEDO_VK_DRT_ODRT + 32)
+#define ALCEDO_VK_DRT_ODRT_PT_LMH_R       (ALCEDO_VK_DRT_ODRT + 33)
+#define ALCEDO_VK_DRT_ODRT_PT_LMH_B       (ALCEDO_VK_DRT_ODRT + 34)
+#define ALCEDO_VK_DRT_ODRT_PTL_C          (ALCEDO_VK_DRT_ODRT + 35)
+#define ALCEDO_VK_DRT_ODRT_PTL_M          (ALCEDO_VK_DRT_ODRT + 36)
+#define ALCEDO_VK_DRT_ODRT_PTL_Y          (ALCEDO_VK_DRT_ODRT + 37)
+#define ALCEDO_VK_DRT_ODRT_PTM_LOW        (ALCEDO_VK_DRT_ODRT + 38)
+#define ALCEDO_VK_DRT_ODRT_PTM_LOW_RNG    (ALCEDO_VK_DRT_ODRT + 39)
+#define ALCEDO_VK_DRT_ODRT_PTM_LOW_ST     (ALCEDO_VK_DRT_ODRT + 40)
+#define ALCEDO_VK_DRT_ODRT_PTM_HIGH       (ALCEDO_VK_DRT_ODRT + 41)
+#define ALCEDO_VK_DRT_ODRT_PTM_HIGH_RNG   (ALCEDO_VK_DRT_ODRT + 42)
+#define ALCEDO_VK_DRT_ODRT_PTM_HIGH_ST    (ALCEDO_VK_DRT_ODRT + 43)
+#define ALCEDO_VK_DRT_ODRT_BRL            (ALCEDO_VK_DRT_ODRT + 44)
+#define ALCEDO_VK_DRT_ODRT_BRL_R          (ALCEDO_VK_DRT_ODRT + 45)
+#define ALCEDO_VK_DRT_ODRT_BRL_G          (ALCEDO_VK_DRT_ODRT + 46)
+#define ALCEDO_VK_DRT_ODRT_BRL_B          (ALCEDO_VK_DRT_ODRT + 47)
+#define ALCEDO_VK_DRT_ODRT_BRL_RNG        (ALCEDO_VK_DRT_ODRT + 48)
+#define ALCEDO_VK_DRT_ODRT_BRL_ST         (ALCEDO_VK_DRT_ODRT + 49)
+#define ALCEDO_VK_DRT_ODRT_BRLP           (ALCEDO_VK_DRT_ODRT + 50)
+#define ALCEDO_VK_DRT_ODRT_BRLP_R         (ALCEDO_VK_DRT_ODRT + 51)
+#define ALCEDO_VK_DRT_ODRT_BRLP_G         (ALCEDO_VK_DRT_ODRT + 52)
+#define ALCEDO_VK_DRT_ODRT_BRLP_B         (ALCEDO_VK_DRT_ODRT + 53)
+#define ALCEDO_VK_DRT_ODRT_HC_R           (ALCEDO_VK_DRT_ODRT + 54)
+#define ALCEDO_VK_DRT_ODRT_HC_R_RNG       (ALCEDO_VK_DRT_ODRT + 55)
+#define ALCEDO_VK_DRT_ODRT_HS_R           (ALCEDO_VK_DRT_ODRT + 56)
+#define ALCEDO_VK_DRT_ODRT_HS_R_RNG       (ALCEDO_VK_DRT_ODRT + 57)
+#define ALCEDO_VK_DRT_ODRT_HS_G           (ALCEDO_VK_DRT_ODRT + 58)
+#define ALCEDO_VK_DRT_ODRT_HS_G_RNG       (ALCEDO_VK_DRT_ODRT + 59)
+#define ALCEDO_VK_DRT_ODRT_HS_B           (ALCEDO_VK_DRT_ODRT + 60)
+#define ALCEDO_VK_DRT_ODRT_HS_B_RNG       (ALCEDO_VK_DRT_ODRT + 61)
+#define ALCEDO_VK_DRT_ODRT_HS_C           (ALCEDO_VK_DRT_ODRT + 62)
+#define ALCEDO_VK_DRT_ODRT_HS_C_RNG       (ALCEDO_VK_DRT_ODRT + 63)
+#define ALCEDO_VK_DRT_ODRT_HS_M           (ALCEDO_VK_DRT_ODRT + 64)
+#define ALCEDO_VK_DRT_ODRT_HS_M_RNG       (ALCEDO_VK_DRT_ODRT + 65)
+#define ALCEDO_VK_DRT_ODRT_HS_Y           (ALCEDO_VK_DRT_ODRT + 66)
+#define ALCEDO_VK_DRT_ODRT_HS_Y_RNG       (ALCEDO_VK_DRT_ODRT + 67)
+#define ALCEDO_VK_DRT_ODRT_TS_X1          (ALCEDO_VK_DRT_ODRT + 68)
+#define ALCEDO_VK_DRT_ODRT_TS_Y1          (ALCEDO_VK_DRT_ODRT + 69)
+#define ALCEDO_VK_DRT_ODRT_TS_X0          (ALCEDO_VK_DRT_ODRT + 70)
+#define ALCEDO_VK_DRT_ODRT_TS_Y0          (ALCEDO_VK_DRT_ODRT + 71)
+#define ALCEDO_VK_DRT_ODRT_TS_S0          (ALCEDO_VK_DRT_ODRT + 72)
+#define ALCEDO_VK_DRT_ODRT_TS_P           (ALCEDO_VK_DRT_ODRT + 73)
+#define ALCEDO_VK_DRT_ODRT_TS_S10         (ALCEDO_VK_DRT_ODRT + 74)
+#define ALCEDO_VK_DRT_ODRT_TS_M1          (ALCEDO_VK_DRT_ODRT + 75)
+#define ALCEDO_VK_DRT_ODRT_TS_M2          (ALCEDO_VK_DRT_ODRT + 76)
+#define ALCEDO_VK_DRT_ODRT_TS_S           (ALCEDO_VK_DRT_ODRT + 77)
+#define ALCEDO_VK_DRT_ODRT_TS_DSC         (ALCEDO_VK_DRT_ODRT + 78)
+#define ALCEDO_VK_DRT_ODRT_PT_CMP_LF      (ALCEDO_VK_DRT_ODRT + 79)
+#define ALCEDO_VK_DRT_ODRT_S_LP100        (ALCEDO_VK_DRT_ODRT + 80)
+#define ALCEDO_VK_DRT_ODRT_TS_S1          (ALCEDO_VK_DRT_ODRT + 81)
+#define ALCEDO_VK_DRT_ODRT_END            (ALCEDO_VK_DRT_ODRT + 82)
+
+// The display encoding, from the block start.
+#define ALCEDO_VK_DRT_LIMIT_TO_DISPLAY    ALCEDO_VK_DRT_ODRT_END  // 9 floats, row major
+#define ALCEDO_VK_DRT_DISPLAY_LINEAR_SCALE (ALCEDO_VK_DRT_LIMIT_TO_DISPLAY + 9)
+#define ALCEDO_VK_DRT_WORDS               (ALCEDO_VK_DRT_DISPLAY_LINEAR_SCALE + 1)
+
+#endif

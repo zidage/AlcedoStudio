@@ -141,6 +141,23 @@ alcedo_add_slang_kernels(AlcedoVulkanKernels
     KERNELS ai_mask_morphology_r8 ai_mask_feather_rows_r32f ai_mask_feather_columns_r8
 )
 
+# Phase VK12: the DiffusionFilter and the display transform of the DRT (OpenCL program
+# opencl_dag_drt: drt.cl with the ACES 2.0 and OpenDRT math of cst.cl).
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP diffusion_filter
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/shader/diffusion_filter.slang"
+    KERNELS diffusion_filter_decode_scene_rgba32f diffusion_filter_reduce_boost
+            diffusion_filter_downsample diffusion_filter_upsample_accumulate
+            diffusion_filter_mix_scene_rgba32f
+    INCLUDE_DIRS "${ALCEDO_INCLUDE_ROOT}" "${ALCEDO_SRC_ROOT}"
+)
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP drt
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/shader/drt.slang"
+    KERNELS drt_display_scene_rgba32f
+    INCLUDE_DIRS "${ALCEDO_INCLUDE_ROOT}" "${ALCEDO_SRC_ROOT}"
+)
+
 set(_alcedo_vulkan_context_sources
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_api_counters.cpp"
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_compute_pipeline_cache.cpp"
