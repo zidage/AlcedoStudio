@@ -22,6 +22,7 @@
 #include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "edit/runtime/vulkan/vulkan_kernel_dispatch.hpp"
+#include "edit/runtime/vulkan/vulkan_local_tone_pass.hpp"
 #include "edit/runtime/vulkan/vulkan_neighbor_dispatch.hpp"
 #include "edit/runtime/vulkan/vulkan_scene_view.hpp"
 #include "vulkan/vulkan_primary_grade_kernels.hpp"
@@ -32,14 +33,6 @@ namespace {
 namespace kernels                  = vulkan::primary_grade_kernels;
 
 constexpr const char* kErrorPrefix = "ExecuteVulkanPrimaryGrade";
-
-/// The result of the Local Laplacian stage that `GradeExecutor` reads (phase VK10 fills it).
-struct VulkanLocalToneResult {
-  std::uint64_t reference_resource_id       = 0;
-  bool          rebuilt_reference           = false;
-  bool          sampled_canonical_reference = false;
-  std::uint32_t transient_bytes             = 0;
-};
 
 auto EnsureBuffer(VulkanRenderWorkspace& workspace, const GraphValueId& id, std::size_t bytes)
     -> VulkanBackend::Buffer& {
@@ -119,13 +112,9 @@ void EncodePointwise(VulkanRenderDevice& device, const FrameSceneBinding& src,
                        WorkgroupsCovering(width, height, kernels::kGroupSize, kernels::kGroupSize));
 }
 
-[[noreturn]] void ThrowStageOfALaterPhase(const char* stage, const char* phase) {
-  throw std::runtime_error(std::string(kErrorPrefix) + ": the Vulkan kernels of the " + stage +
-                           " are not in this build (plan phase " + phase + ", #1036)");
-}
-
 /// The Vulkan operations of `GradeExecutor`; the neighborhood operations of `NeighborExecutor`
-/// come from `VulkanNeighborOps` (phase VK9).
+/// come from `VulkanNeighborOps` (phase VK9), the Local Laplacian stage from
+/// `ExecuteVulkanLocalTone` (phase VK10).
 struct VulkanGradeOps : VulkanNeighborOps {
   using Texture                             = VulkanBackend::Texture2D;
 
@@ -262,11 +251,14 @@ struct VulkanGradeOps : VulkanNeighborOps {
                          images, PushConstantBytes(push), VulkanWorkgroupCount{groups, 1, 1});
   }
 
-  static auto ExecuteLocalTone(VulkanRenderDevice&, const FrameSceneBinding&,
-                               const FrameSceneBinding&, const FrameSceneBinding&, const NodeId&,
-                               float, float, const ResolvedRenderGeometry&, float,
-                               const GraphValueId*) -> VulkanLocalToneResult {
-    ThrowStageOfALaterPhase("Local Laplacian stage (Shadows, Highlights)", "VK10");
+  /// The Local Laplacian stage (Shadows, Highlights): `ExecuteVulkanLocalTone` (phase VK10).
+  static auto ExecuteLocalTone(VulkanRenderDevice& device, const FrameSceneBinding& src,
+                               const FrameSceneBinding& dest, const FrameSceneBinding& original,
+                               const NodeId& grade_id, float shadows_slider,
+                               float highlights_slider, const ResolvedRenderGeometry& geometry,
+                               float mix, const GraphValueId* mask_id) -> VulkanLocalToneResult {
+    return ExecuteVulkanLocalTone(device, src, dest, original, grade_id, shadows_slider,
+                                  highlights_slider, geometry, mix, mask_id);
   }
 
   static void CheckAfterEncode(VulkanRenderDevice&) {}

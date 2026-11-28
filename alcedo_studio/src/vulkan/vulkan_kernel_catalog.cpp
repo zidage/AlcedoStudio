@@ -12,6 +12,7 @@
 #include "vulkan/vulkan_geometry_kernels.hpp"
 #include "vulkan/vulkan_highlight_kernels.hpp"
 #include "vulkan/vulkan_lens_calib_kernels.hpp"
+#include "vulkan/vulkan_local_tone_kernels.hpp"
 #include "vulkan/vulkan_primary_grade_kernels.hpp"
 #include "vulkan/vulkan_primary_grade_neighbor_kernels.hpp"
 #include "vulkan/vulkan_raw_core_kernels.hpp"
@@ -49,6 +50,9 @@ auto VulkanKernelCatalog() -> std::vector<VulkanKernelDescriptor> {
       primary_grade_neighbor_kernels::BlurDescriptor(),
       primary_grade_neighbor_kernels::ApplyDescriptor(),
   };
+  for (auto& kernel : local_tone_kernels::AllDescriptors()) {
+    catalog.push_back(std::move(kernel));
+  }
   for (const auto kernel : debayer_rcd_kernels::kRcdKernels) {
     catalog.push_back(debayer_rcd_kernels::Descriptor(kernel));
   }

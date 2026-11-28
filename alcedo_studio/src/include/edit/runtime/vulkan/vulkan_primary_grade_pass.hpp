@@ -47,11 +47,13 @@ struct VulkanPrimaryGradeResult {
  * Records into the open recording; does not submit or wait.
  *
  * @param histogram When not null, the Grade also records the histogram of its curve input.
+ * The Local Laplacian stage (Shadows, Highlights) runs `ExecuteVulkanLocalTone` (phase VK10).
+ * A neighborhood stage runs `VulkanNeighborOps` (phase VK9); a Color Grade holds no neighborhood
+ * adjustment (#1226).
+ *
  * @throws std::runtime_error "ExecuteVulkanPrimaryGrade: ..." outside `BeginRender` or for a
  *         missing Grade, before a command is recorded; for a compiled mask output that is not in
- *         the workspace; and for the Local Laplacian stage (Shadows, Highlights: phase VK10),
- *         which this phase does not have. A neighborhood stage runs `VulkanNeighborOps` (phase
- *         VK9); a Color Grade holds no neighborhood adjustment (#1226).
+ *         the workspace; "ExecuteVulkanLocalTone: ..." for a failure of the Local Laplacian stage.
  *         The caller cancels the render after a failure.
  */
 [[nodiscard]] auto ExecuteVulkanPrimaryGrade(VulkanRenderDevice& device, const ExecutionPlan& plan,
