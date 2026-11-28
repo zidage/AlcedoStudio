@@ -14,6 +14,7 @@ ColumnLayout {
 
     // RawImportLookSettingsModel (appModules.rawImportLook).
     property var model: null
+    property var dropdownPopupZ: undefined
     property color textColor: appTheme.textColor
     property color mutedTextColor: appTheme.textMutedColor
     property color dividerColor: appTheme.dividerColor
@@ -198,6 +199,7 @@ ColumnLayout {
 
             AdjustmentCombo {
                 controlObjectName: "rawImportToneCurveCombo"
+                popupZ: section.dropdownPopupZ
                 Layout.fillWidth: true
                 controlHeight: 36
                 showResetButton: false
@@ -257,6 +259,7 @@ ColumnLayout {
 
             AdjustmentCombo {
                 controlObjectName: "rawImportDrtMethodCombo"
+                popupZ: section.dropdownPopupZ
                 Layout.fillWidth: true
                 controlHeight: 36
                 showResetButton: false
@@ -275,6 +278,7 @@ ColumnLayout {
 
             AdjustmentCombo {
                 controlObjectName: "rawImportOpenDrtLookCombo"
+                popupZ: section.dropdownPopupZ
                 Layout.fillWidth: true
                 controlHeight: 36
                 showResetButton: false

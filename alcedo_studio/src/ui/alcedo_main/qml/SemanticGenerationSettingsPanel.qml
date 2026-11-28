@@ -19,6 +19,7 @@ ColumnLayout {
     objectName: "semanticSettingsPanel"
 
     property var semanticController: null
+    property var dropdownPopupZ: undefined
     // The interaction-policy controller; the generate buttons bind to its cached properties.
     property var interactionPolicy: null
     property bool projectOpen: false
@@ -372,6 +373,7 @@ ColumnLayout {
                 AdjustmentCombo {
                     objectName: "sidecarIdleStopControl"
                     controlObjectName: "sidecarIdleStopCombo"
+                    popupZ: page.dropdownPopupZ
                     Layout.fillWidth: false
                     Layout.preferredWidth: 220
                     controlHeight: 34
@@ -388,6 +390,7 @@ ColumnLayout {
                 AdjustmentCombo {
                     objectName: "semanticImportControl"
                     controlObjectName: "semanticImportCombo"
+                    popupZ: page.dropdownPopupZ
                     Layout.fillWidth: false
                     Layout.preferredWidth: 220
                     controlHeight: 34
