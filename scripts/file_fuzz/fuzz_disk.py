@@ -448,31 +448,37 @@ class Volumes:
     def available() -> bool:
         return IS_MACOS and shutil.which("hdiutil") is not None
 
+    @staticmethod
+    def _run(command: list[str]) -> None:
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"{' '.join(command)} exited with {result.returncode}: "
+                               f"{result.stdout.strip()} {result.stderr.strip()}")
+
     def create(self, handle: str, name: str) -> Path:
+        self.work.mkdir(parents=True, exist_ok=True)
         image = self.work / f"{handle}.dmg"
-        subprocess.run(["hdiutil", "create", "-size", "64m", "-fs", "APFS", "-volname", name,
-                        "-ov", str(image)], check=True, capture_output=True)
+        self._run(["hdiutil", "create", "-size", "64m", "-fs", "APFS", "-volname", name, "-ov",
+                   str(image)])
         self.images[handle] = image
         return image
 
     def attach(self, handle: str, mount_point: Path) -> None:
         mount_point.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["hdiutil", "attach", str(self.images[handle]), "-mountpoint",
-                        str(mount_point), "-nobrowse"], check=True, capture_output=True)
+        self._run(["hdiutil", "attach", str(self.images[handle]), "-mountpoint",
+                   str(mount_point), "-nobrowse"])
         self.attached[handle] = mount_point
 
     def detach(self, handle: str) -> None:
         mount_point = self.attached.pop(handle)
-        subprocess.run(["hdiutil", "detach", str(mount_point), "-force"], check=True,
-                       capture_output=True)
+        self._run(["hdiutil", "detach", str(mount_point), "-force"])
 
     def rename(self, handle: str, name: str) -> None:
-        subprocess.run(["diskutil", "rename", str(self.attached[handle]), name], check=True,
-                       capture_output=True)
+        self._run(["diskutil", "rename", str(self.attached[handle]), name])
 
     def detach_all(self) -> None:
         for handle in list(self.attached):
             try:
                 self.detach(handle)
-            except subprocess.CalledProcessError:
+            except RuntimeError:
                 pass
