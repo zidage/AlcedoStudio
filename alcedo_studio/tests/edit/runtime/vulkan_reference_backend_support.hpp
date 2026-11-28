@@ -235,9 +235,11 @@ inline auto    Compare(std::span<const float> reference, std::span<const float> 
 }
 
 /// Prints the difference of @p vulkan from @p reference and expects it in @p tolerance.
+/// @p reference_name names the reference in the report (the reference backend by default).
 inline void ExpectEqualToReference(const std::string& label, std::span<const float> reference,
                                    std::span<const float> vulkan, std::uint32_t width,
-                                   const Tolerance& tolerance) {
+                                   const Tolerance& tolerance,
+                                   const char*      reference_name = kReferenceBackend) {
   ASSERT_FALSE(reference.empty()) << label;
   ASSERT_EQ(reference.size(), vulkan.size()) << label;
   const auto        result = Compare(reference, vulkan, tolerance, width);
@@ -247,8 +249,8 @@ inline void ExpectEqualToReference(const std::string& label, std::span<const flo
       "%s: %s against Vulkan, %zu values, %zu differ, largest %.3g at (%zu, %zu) channel %zu "
       "(%s %.9g, Vulkan %.9g), rms %.3g, %zu above %.3g (border %.3g below %u) (edge distance "
       "<4: %zu, <16: %zu, <64: %zu, >=64: %zu)\n",
-      label.c_str(), kReferenceBackend, reference.size(), result.differing, result.largest,
-      texel % width, texel / width, result.largest_at % 4, kReferenceBackend,
+      label.c_str(), reference_name, reference.size(), result.differing, result.largest,
+      texel % width, texel / width, result.largest_at % 4, reference_name,
       static_cast<double>(reference[result.largest_at]),
       static_cast<double>(vulkan[result.largest_at]), rms, result.above, tolerance.interior,
       tolerance.border, tolerance.border_band, result.above_by_band[0], result.above_by_band[1],

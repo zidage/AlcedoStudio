@@ -269,6 +269,26 @@ if(ALCEDO_VULKAN_ENABLED AND (ALCEDO_OPENCL_ENABLED OR ALCEDO_METAL_ENABLED))
     DISCOVERY_TIMEOUT 60
     PROPERTIES LABELS "gpu;edit;runtime;vulkan;grade")
   alcedo_register_test_target(VulkanPrimaryGradeTest gpu)
+
+  # The neighborhood kernels (Sharpen, Clarity, Halation) on Vulkan against the OpenCL kernels and
+  # a host evaluation (#1036, phase VK9).
+  add_executable(VulkanNeighborhoodTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_neighborhood_test.cpp)
+  target_include_directories(VulkanNeighborhoodTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  target_link_libraries(VulkanNeighborhoodTest PRIVATE
+    GTest::gtest_main EditRuntimeVulkanPasses EditInput EditGraph)
+  if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(VulkanNeighborhoodTest PRIVATE EditRuntimeOpenCl OpenClProgramLibrary)
+  else()
+    target_link_libraries(VulkanNeighborhoodTest PRIVATE
+      EditRuntimeMetal EditRuntimeLens RawProcessorOp)
+    add_dependencies(VulkanNeighborhoodTest GpuDagMetalShaders RawProcessorOpMetalShaders)
+  endif()
+  add_dependencies(VulkanNeighborhoodTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanNeighborhoodTest TEST_PREFIX "VulkanNeighborhoodTest."
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan;grade")
+  alcedo_register_test_target(VulkanNeighborhoodTest gpu)
 endif()
 
 # Vulkan against OpenCL on the same GPU (#1036, phase VK3, decision B9): the shared color math

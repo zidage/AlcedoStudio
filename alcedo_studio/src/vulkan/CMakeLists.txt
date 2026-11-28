@@ -105,6 +105,15 @@ alcedo_add_slang_kernels(AlcedoVulkanKernels
     INCLUDE_DIRS "${ALCEDO_INCLUDE_ROOT}" "${ALCEDO_SRC_ROOT}"
 )
 
+# Phase VK9: the neighborhood kernels of the same OpenCL program (primary_grade_neighbor.cl) for
+# Clarity, Sharpen, and Halation.
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP primary_grade_neighbor
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/shader/primary_grade_neighbor.slang"
+    KERNELS primary_grade_neighbor_blur_h_scene_rgba32f primary_grade_neighbor_apply_v_scene_rgba32f
+    INCLUDE_DIRS "${ALCEDO_SRC_ROOT}"
+)
+
 set(_alcedo_vulkan_context_sources
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_api_counters.cpp"
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_compute_pipeline_cache.cpp"

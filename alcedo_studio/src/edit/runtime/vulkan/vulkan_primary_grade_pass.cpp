@@ -22,6 +22,7 @@
 #include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "edit/runtime/vulkan/vulkan_kernel_dispatch.hpp"
+#include "edit/runtime/vulkan/vulkan_neighbor_dispatch.hpp"
 #include "edit/runtime/vulkan/vulkan_scene_view.hpp"
 #include "vulkan/vulkan_primary_grade_kernels.hpp"
 
@@ -52,30 +53,6 @@ auto EnsureBuffer(VulkanRenderWorkspace& workspace, const GraphValueId& id, std:
     throw std::runtime_error("ExecuteVulkanPrimaryGrade: command buffer store failed");
   }
   return *stored;
-}
-
-/// The image of a scene view for its binding: the cached image, or the dummy RGBA32F image when
-/// the kernel reads the buffer.
-auto SceneImage(VulkanBackend& backend, const VulkanSceneView& view)
-    -> const VulkanBackend::Texture2D* {
-  return view.image != nullptr ? view.image : &backend.DummyStorageImage(TextureFormat::Rgba32f);
-}
-
-/// The R8 mask of the Grade, after a check of its format and size.
-auto RequireMask(VulkanRenderDevice& device, const GraphValueId& mask_id, std::uint32_t width,
-                 std::uint32_t height) -> const VulkanBackend::Texture2D& {
-  auto* mask = device.Workspace().Images().Find(mask_id);
-  if (mask == nullptr || mask->Empty()) {
-    throw std::runtime_error("ExecuteVulkanPrimaryGrade: compiled mask output is missing");
-  }
-  const auto& texture = mask->Texture();
-  if (texture.Format() != TextureFormat::R8 || texture.Width() < width ||
-      texture.Height() < height) {
-    throw std::runtime_error(
-        "ExecuteVulkanPrimaryGrade: compiled mask output is not an R8 image "
-        "of the Grade size");
-  }
-  return texture;
 }
 
 /**
@@ -126,15 +103,15 @@ void EncodePointwise(VulkanRenderDevice& device, const FrameSceneBinding& src,
     }
     push.apply_mix  = 1;
     push.mix_source = original.buffer;
-    mix_image       = SceneImage(backend, original);
+    mix_image       = VulkanSceneImageBinding(backend, original);
     if (mask_id != nullptr) {
-      mask_image    = &RequireMask(device, *mask_id, width, height);
+      mask_image    = &VulkanRequireSceneMask(device, *mask_id, width, height, kErrorPrefix);
       push.has_mask = 1;
     }
   }
 
   const std::array<VulkanImageBinding, 3> images = {
-      VulkanImageBinding{kernels::kSourceBinding, SceneImage(backend, source)},
+      VulkanImageBinding{kernels::kSourceBinding, VulkanSceneImageBinding(backend, source)},
       VulkanImageBinding{kernels::kMixSourceBinding, mix_image},
       VulkanImageBinding{kernels::kMaskBinding, mask_image}};
   RecordKernelDispatch(backend, device.CommandContext(), kernels::PointwiseSceneDescriptor(),
@@ -147,13 +124,10 @@ void EncodePointwise(VulkanRenderDevice& device, const FrameSceneBinding& src,
                            " are not in this build (plan phase " + phase + ", #1036)");
 }
 
-/// The Vulkan operations of `GradeExecutor` and `NeighborExecutor`.
-struct VulkanGradeOps {
-  using Device                              = VulkanRenderDevice;
-  using Backend                             = VulkanBackend;
+/// The Vulkan operations of `GradeExecutor`; the neighborhood operations of `NeighborExecutor`
+/// come from `VulkanNeighborOps` (phase VK9).
+struct VulkanGradeOps : VulkanNeighborOps {
   using Texture                             = VulkanBackend::Texture2D;
-  using HorizontalScratch                   = ResourceLease<VulkanBackend>;
-  using LutBinding                          = VulkanLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteVulkanPrimaryGrade";
 
@@ -283,27 +257,9 @@ struct VulkanGradeOps {
     push.invocation_count = groups * kernels::kHistogramGroupSize;
 
     const std::array<VulkanImageBinding, 1> images = {
-        VulkanImageBinding{kernels::kSourceBinding, SceneImage(backend, source)}};
+        VulkanImageBinding{kernels::kSourceBinding, VulkanSceneImageBinding(backend, source)}};
     RecordKernelDispatch(backend, device.CommandContext(), kernels::CurveInputHistogramDescriptor(),
                          images, PushConstantBytes(push), VulkanWorkgroupCount{groups, 1, 1});
-  }
-
-  static auto AcquireHorizontalScratch(VulkanRenderDevice&, std::uint32_t, std::uint32_t)
-      -> HorizontalScratch {
-    ThrowStageOfALaterPhase("Grade neighborhood stage", "VK9");
-  }
-
-  static void DispatchHorizontal(VulkanRenderDevice&, const FrameSceneBinding&, HorizontalScratch&,
-                                 const NeighborWork&, std::uint32_t, std::uint32_t) {
-    ThrowStageOfALaterPhase("Grade neighborhood stage", "VK9");
-  }
-
-  static void DispatchVerticalApply(VulkanRenderDevice&, const FrameSceneBinding&,
-                                    HorizontalScratch&, const FrameSceneBinding&,
-                                    const FrameSceneBinding&, const LutBinding&,
-                                    const NeighborWork&, float, const GraphValueId*, std::uint32_t,
-                                    std::uint32_t) {
-    ThrowStageOfALaterPhase("Grade neighborhood stage", "VK9");
   }
 
   static auto ExecuteLocalTone(VulkanRenderDevice&, const FrameSceneBinding&,

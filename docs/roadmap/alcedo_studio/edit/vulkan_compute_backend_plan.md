@@ -598,7 +598,7 @@ test of its kernels (B9).
 | VK6 | Develop pass (UploadRaw) | `edit/runtime/vulkan/` | VK5 | 1400 to 1800 | complete (#1209) |
 | VK7 | GeometryResample, CameraToAp1, raster input (UploadRgb), DisplayToAp1 | `edit/runtime/vulkan/`, shared color headers | VK6 | 1100 to 1500 | complete (#1211) |
 | VK8 | Primary grade point kernels and LUT resources | `edit/runtime/vulkan/` | VK7 | 1400 to 1800 | complete (#1219) |
-| VK9 | Primary grade neighbor kernels | `edit/runtime/vulkan/` | VK8 | 800 to 1200 | planned |
+| VK9 | Neighborhood kernels (Sharpen, Clarity, Halation) | `edit/runtime/vulkan/` | VK8 | 800 to 1200 | complete (#1225) |
 | VK10 | Local tone | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | planned |
 | VK11 | MaskEvaluate, MaskUnion, AI mask coverage | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | planned |
 | VK12 | DiffusionFilter and Drt | `edit/runtime/vulkan/` | VK8 | 1500 to 1900 | planned |
@@ -2682,6 +2682,195 @@ tests.
 
 **Remaining gaps:** none.
 
+### Phase VK9: neighborhood kernels (Sharpen, Clarity, Halation)
+
+**Objective and deliverables.** The Vulkan backend has the two neighborhood kernels of
+`primary_grade_neighbor.cl` that the product dispatches and the operations of the shared
+`NeighborExecutor` (`VulkanNeighborOps`): the horizontal blur into a scratch image, then the
+vertical blur in workgroup memory with Sharpen, Clarity, or Halation and the optional masked mix.
+`VulkanGradeOps` takes these operations for a Grade neighborhood stage, and the DRT finish of VK12
+takes them for Clarity, Sharpen, and Halation. Issue #1225.
+
+**Inputs and prerequisites.** VK8 (`VulkanSceneView`, the dummy storage images, the scene-work
+members as RGBA32F buffers). VK3 (`math.slangh`). VK2 (the texture pool and the node value cache of
+the workspace).
+
+**Source audit of the VK9 entry (2026-11-27).**
+
+| OpenCL entry | Kernels and shared code | Callers | VK9 decision |
+| --- | --- | --- | --- |
+| `EnqueueOpenClNeighborHorizontalScene` (`opencl_neighbor_dispatch.hpp`) | `primary_grade_neighbor_blur_h_scene_rgba32f`: the Gaussian weights of `GradeNeighborParams`, or the exponential window of the Halation on `sigma_x`; the source clamped at the image edge | `OpenClGradeOps::DispatchHorizontal`, `OpenClDrtOps::DispatchHorizontal` | VK9 |
+| `EnqueueOpenClNeighborVerticalScene` | `primary_grade_neighbor_apply_v_scene_rgba32f`: an 8 x (8 + 2 radius) RGBA tile of the horizontal result in local memory, Sharpen (threshold on the high-pass luma), Clarity (edge protection and midtone weight), Halation (spill times the redshift), the mix with the mix source times the R8 mask | the same two | VK9 |
+| `EnqueueOpenClNeighborHorizontal`, `EnqueueOpenClNeighborVertical` | `primary_grade_neighbor_blur_h_rgba32f`, `primary_grade_neighbor_apply_v_rgba32f` | none; `OpenClBackend::WarmUpPlan` only | Out of the port: no product caller (comment on #1220) |
+| `GradeExecutor`, the `Neighborhood` branch | `NeighborExecutor<Ops>` | none in a product render: a Color Grade holds no neighborhood adjustment (`ColorGradeAdjustmentTypes`, `RequireAdjustmentOwner`) | `VulkanGradeOps` takes `VulkanNeighborOps`, so the Grade follows the decision of #1226 without a change |
+| `DrtPostExecutor` | `NeighborExecutor<Ops>` for Clarity, Sharpen, Halation; Film Grain has its own pass | the DRT pass | VK12 (the DRT pass), with `VulkanNeighborOps` of this phase |
+
+Metal has no Grade neighborhood kernel: `MetalGradeOps::DispatchVerticalApply` runs one point
+command, and the Metal DRT finish has its own display-referred kernels (`drt_neighbor.metal`). On
+the Apple M4 the reference of this phase is therefore a host evaluation of
+`primary_grade_neighbor.cl` in double precision; on Windows the test compares with the OpenCL
+kernels and with the host evaluation.
+
+**Modules, files, and APIs.**
+
+- `edit/runtime/vulkan/shader/primary_grade_neighbor.slang` (group `primary_grade_neighbor`:
+  kernels `primary_grade_neighbor_blur_h_scene_rgba32f`, `primary_grade_neighbor_apply_v_scene_rgba32f`).
+- `include/vulkan/vulkan_primary_grade_neighbor_kernels.hpp`: names, bindings, push constant
+  layouts, `kMaxRadius`; the descriptors go into `VulkanKernelCatalog()`.
+- `inc/edit/runtime/vulkan/vulkan_neighbor_dispatch.hpp`, `edit/runtime/vulkan/vulkan_neighbor_dispatch.cpp`
+  (target `EditRuntimeVulkanPasses`): `VulkanNeighborOps`, `RequireVulkanNeighborhoodKernelBehavior`,
+  `VulkanNeighborParamsValueId`.
+- `vulkan_scene_view.hpp`: `VulkanSceneImageBinding` and `VulkanRequireSceneMask`, moved from the
+  Grade pass for both passes.
+- `VulkanGradeOps` derives from `VulkanNeighborOps`.
+- Test: `tests/edit/runtime/vulkan_neighborhood_test.cpp` (`VulkanNeighborhoodTest`).
+
+**Data rules and invariants.**
+
+- `GradeNeighborParams` (300 bytes) is above the push constant limit of 256 bytes of NVIDIA and
+  Intel. The horizontal dispatch uploads it into the node value `runtime.neighbor.<command index>`
+  of the work owner; the vertical dispatch reads the same buffer. The buffer is created once for each
+  owner and command index, so a stable render creates no buffer. The kernels read it by address
+  arithmetic (VK4 rule for Intel).
+- The scratch image is an RGBA32F image of the texture pool, as in OpenCL.
+- A source is a cached image or a scene-work member; a destination is a scene-work member or an
+  RGBA32F image (the display output of the DRT finish); the destination may be the source (each
+  invocation reads its source texel before it writes the same texel).
+- The mix runs when the mix is below 1 or a mask is set (the OpenCL rule).
+- The workgroup tile holds the red, green, and blue of 8 x (8 + 2 x 63) texels in three float
+  planes (12 864 bytes), inside the Vulkan minimum of 16 KiB of workgroup memory; the adjustments
+  read only the color of the vertical blur. The vertical radius is at most 63
+  (`kGradeNeighborMaxTapCount` - 1); the host refuses a larger radius and more Gaussian taps than
+  the radius gives before a command.
+- The Halation window uses `AlcedoExp` for the OpenCL `exp` (VK3 rule).
+- Every dispatch records into the open recording and submits nothing.
+
+**Implementation steps.**
+
+1. The kernel group and its header; the catalog.
+2. `VulkanNeighborOps` and the two scene helpers; `VulkanGradeOps` from `VulkanNeighborOps`.
+3. `VulkanNeighborhoodTest` with the host evaluation.
+4. Runs: RTX 3080 Laptop GPU and Iris Xe against OpenCL and the host; Apple M4 (MoltenVK) against
+   the host.
+
+**Tests and evidence.**
+
+- `VulkanNeighborhoodTest.SharpenEqualsTheReferences` (radius 1, radius 3 with the threshold 0.02,
+  radius 8 with 15 taps)
+- `VulkanNeighborhoodTest.ClarityEqualsTheReferences` (+80 and -60 at radius 45, +100 on a 37 x 29
+  image)
+- `VulkanNeighborhoodTest.HalationEqualsTheReferences` (sigma 7, sigma 9 x 2.5, sigma 25 at radius
+  63)
+- `VulkanNeighborhoodTest.MixAndMaskEqualTheReferences`
+- `VulkanNeighborhoodTest.EachSourceAndDestinationKindGivesTheSameResult`
+- `VulkanNeighborhoodTest.StableNeighborhoodCreatesNoResourceAndRecordsWithoutASubmission`
+- `VulkanNeighborhoodTest.InvalidRequestsFailBeforeACommand`
+
+**Build and run commands.**
+
+```text
+Windows: cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels VulkanNeighborhoodTest
+         set ALCEDO_VULKAN_DEVICE=RTX (or Iris)
+         ctest --test-dir build/debug -R "Vulkan|PipelineAccelerator" -j 1 --output-on-failure
+macOS:   source ~/Projects/vulkan_tools/env.sh
+         cmake --build build/macos-vulkan --target AlcedoVulkanKernels VulkanNeighborhoodTest
+         ctest --test-dir build/macos-vulkan -R "Vulkan|PipelineAccelerator" -j 1 --output-on-failure
+```
+
+**Exit criteria.**
+
+- [x] The listed tests pass on the RTX 3080 Laptop GPU and Iris Xe against OpenCL and the host
+      evaluation with no validation error.
+- [x] The listed tests pass on the Apple M4 against the host evaluation with no validation error.
+- [x] The OpenCL, CUDA, and Metal results are unchanged: the phase changes no shared header and no
+      source of those backends.
+
+**Expected diff.** 800 to 1200 lines.
+
+##### Phase VK9 completion record (2026-11-27)
+
+**Status:** complete on the RTX 3080 Laptop GPU, Iris Xe, and the Apple M4 (MoltenVK). Issue
+#1225. Branch `feature/vulkan-vk9-neighborhood` on the VK8 branch `feature/vulkan-vk8-primary-grade`
+(pull request #1221).
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Phase scope | Neighbor kernels of the primary grade | The kernels and `VulkanNeighborOps`, tested through `NeighborExecutor<VulkanNeighborOps>` | A Color Grade holds no neighborhood adjustment (#1226); the product caller is the DRT finish, whose pass is VK12. The test drives the shared executor directly. |
+| Parameters | Not in the plan | A node value buffer for each owner and command index, uploaded by the horizontal dispatch | 300 bytes are above the push constant limit; one buffer for each work keeps a stable render free of resource creation. |
+| Destination | A scene-work member (VK8) | A scene-work member or an RGBA32F image | The DRT finish writes its last neighborhood step into the display output. |
+| Reference on the Apple M4 | Metal (VK6 to VK8) | Host evaluation of `primary_grade_neighbor.cl` | Metal has no Grade neighborhood kernel. On Windows both the host evaluation and OpenCL equal Vulkan within 1.2e-6, so the host evaluation stands for OpenCL. |
+| Sharpen threshold | Not in the plan | A texel whose high-pass luma is within 1e-5 of the threshold is left out of the comparison (fewer than 1 % of the texels) | The threshold test is a step: either branch is correct within float32. |
+| Kernel scope | `primary_grade_neighbor.cl` | The two scene kernels; the two image kernels stay in OpenCL | The image kernels have no product caller (comment on #1220). |
+| Workgroup tile | The OpenCL tile: RGBA, 16 bytes a texel | Three float planes of the color, 12 bytes a texel | The OpenCL tile at radius 63 is 17 152 bytes, above the Vulkan minimum of 16 KiB; the adjustments read only the color, so the result is the same. |
+
+**Measured differences** (logs `build/tmp/vulkan_backend/vk9/`; relative difference
+`|vulkan - reference| / max(1, |reference|)`; 203 x 157 input from 0.01 to 0.99 with hard edges and
+texel noise; OpenCL on the same GPU; tolerance 1e-5):
+
+| Case | RTX 3080: OpenCL; host | Iris Xe: OpenCL; host | Apple M4: host |
+| --- | --- | --- | --- |
+| Sharpen radius 1; radius 3, threshold 0.02; radius 8 | 0; 2.4e-7 | 0; 2.4e-7 | 2.4e-7 |
+| Clarity +80; -60; +100 on 37 x 29 | 0; 3.0e-7 | 1.2e-7; 3.0e-7 | 3.0e-7 |
+| Halation sigma 7; 9 x 2.5; 25 | 1.1e-6; 8.3e-7 | 1.2e-6; 8.9e-7 | 1.3e-6 |
+| Mix 0.6; mix 0.8 with a mask; mix 1 with a mask | 8.9e-7; 6.0e-7 | 6.0e-7; 6.0e-7 | 5.4e-7 |
+
+Each cell gives the largest difference of its cases. The Gaussian kernels equal OpenCL bit for bit
+on the RTX 3080 and differ by one or two ulp on Iris Xe; the Halation differences come from the
+`exp` of the window weights.
+
+**Primary success call chain:**
+
+```text
+DrtPostExecutor<VulkanDrtOps> (VK12), GradeExecutor<VulkanGradeOps>, or VulkanNeighborhoodTest
+  -> NeighborExecutor<Ops>::Execute
+       -> VulkanNeighborOps::AcquireHorizontalScratch -> TexturePool::Acquire (RGBA32F)
+       -> VulkanNeighborOps::DispatchHorizontal
+            -> RequireKernelParams -> VulkanBindScene (source)
+            -> node value runtime.neighbor.<index> -> VulkanBackend::UploadBufferRange
+            -> RecordKernelDispatch(primary_grade_neighbor_blur_h_scene_rgba32f) into the scratch image
+       -> VulkanNeighborOps::DispatchVerticalApply
+            -> VulkanBindScene (source, destination, mix source), VulkanRequireSceneMask
+            -> RecordKernelDispatch(primary_grade_neighbor_apply_v_scene_rgba32f) into the destination
+       -> the scratch lease returns to the pool
+  -> nothing is submitted; EndRender submits the recording
+```
+
+**Primary failure call chain:**
+
+```text
+Film Grain or a point behavior, a vertical radius above 63, more Gaussian taps than the radius gives
+  -> std::invalid_argument "VulkanNeighborOps::Dispatch...: ..." before a command
+a scratch image of another size, scene images of another size, a missing mask, a vertical dispatch
+without its horizontal dispatch
+  -> std::runtime_error "Vulkan neighborhood: ..." before the dispatch; the caller cancels the render
+```
+
+**What was proven (executed tests, validation layer on):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| The seven tests of the section | `VulkanNeighborhoodTest` | PASS on RTX 3080, Iris Xe, Apple M4 |
+| VK0 to VK9 suites, Windows | `ctest -R "Vulkan\|PipelineAccelerator"` | Iris Xe: 147 tests, 146 PASS, 1 skipped (a test for a build without Vulkan). RTX 3080: the same before the three-plane tile; after it, 145 PASS, 1 skipped, and `VulkanDevelopTest.DngWarpOfARealDngEqualsTheReferenceBackend` refused by the memory limit (a game of the user held 3.9 GB, the budget was 3.1 GB; the test uses no kernel of this phase), with `VulkanNeighborhoodTest`, `VulkanPrimaryGradeTest`, and the kernel check passing |
+| VK0 to VK9 suites, Apple M4 | `ctest -R "Vulkan\|PipelineAccelerator"` | 111 tests, 109 PASS, 2 skipped (Windows only); the three test RAWs copied for the run |
+| `alcedo-gpu-check --vulkan` | `alcedo_gpu_check` | `gpu.kernels.ok=vulkan kernels=36` on the three devices |
+| Validation errors | `TearDown` of each GPU test | 0 |
+| Windows MSVC build of every Vulkan target | `scripts\msvc_env.cmd --build build\debug` | PASS, no warning |
+
+**Findings outside this phase.** A Color Grade holds no neighborhood adjustment, so the Grade
+neighborhood stage of every backend has no product input, and the Metal point formulas for
+behaviors 13 to 15 are unreachable (#1226). The two image kernels of `primary_grade_neighbor.cl`
+have no caller and `WarmUpPlan` warms them in place of the two scene kernels (comment on #1220).
+
+**LOC note:** about 1340 added and 58 removed lines without the plan: the kernels 256, the kernel
+header 86, `VulkanNeighborOps` 270, the scene helpers and the Grade pass 46, CMake and the catalog 15,
+the tests 691 (the new test 666 with the host evaluation, the reference support 5, CMake 20). Above
+the estimate of 800 to 1200: the host evaluation (about 150 lines) is the reference on the Apple M4.
+
+**Remaining gaps:** none.
+
 ### Phases VK3 to VK23: scope of each phase
 
 Each entry gives the objective, the OpenCL model, and the main tests. The detailed section replaces
@@ -2695,10 +2884,10 @@ the entry before the implementation.
 | VK6 | Detailed section above | | |
 | VK7 | Detailed section above | | |
 | VK8 | Detailed section above | | |
-| VK9 | Neighbor kernels of the primary grade | `primary_grade_neighbor.cl` | Detail adjustments equal OpenCL. |
+| VK9 | Detailed section above | | |
 | VK10 | `VulkanLocalToneOps` | `opencl_local_tone_pass.cpp`, `local_tone.cl` | Local tone equals OpenCL at full size and for a region of interest. |
 | VK11 | MaskEvaluate, MaskUnion, AI mask coverage | `opencl_mask_pass.cpp`, `mask.cl`, `opencl_ai_mask_coverage.cpp` | Mask values and coverage equal OpenCL. |
-| VK12 | DiffusionFilter, `VulkanDrtOps`, DRT parameters, the tone curves of `common.cl`, the ACES 2.0 and OpenDRT math of `cst.cl` (moved from VK3) | `opencl_drt_pass.cpp`, `opencl_diffusion_filter_pass.cpp`, `drt.cl`, `drt_params.cl`, `common.cl`, `cst.cl` | Product output equals OpenCL for ACES and OpenDRT. |
+| VK12 | DiffusionFilter, `VulkanDrtOps` (its neighborhood operations are `VulkanNeighborOps` of VK9), DRT parameters, the tone curves of `common.cl`, the ACES 2.0 and OpenDRT math of `cst.cl` (moved from VK3) | `opencl_drt_pass.cpp`, `opencl_diffusion_filter_pass.cpp`, `drt.cl`, `drt_params.cl`, `common.cl`, `cst.cl` | Product output equals OpenCL for ACES and OpenDRT. |
 | VK13 | Film print stage kernels | `opencl_film_print_pass.cpp`, `film_print.cl` | Negative to print output equals OpenCL. Reversal output equals OpenCL. |
 | VK14 | Film print scan, film grain negative and post, the `__SLANG__` branch of the grain hash (`film_grain_field.h`) | `film_print_scan.cl`, `film_grain_*.cl`, `opencl_film_grain_pass.cpp` | Negative scan and grain equal OpenCL. |
 | VK15 | Convolution layers, activation storage, workspace, stage profiler | `opencl/nn/*.cpp`, `demosaicnet_conv.cl` | Each layer equals the expected output of the weights file in the tolerance of the OpenCL layer tests. |
@@ -3336,6 +3525,9 @@ Remaining defects or unavailable platforms:
 | LUT cache budget | Byte budget of the LUT cache of `VulkanBackend` | 64 MiB | the OpenCL value; phase VK8 |
 | LUT cache priority | `VK_EXT_memory_priority` of a LUT cache entry | 0.2 | section 4.2 (VX5); phase VK8 |
 | Histogram dispatch | Workgroup size and largest workgroup count of the curve input histogram | 256; 128 | the OpenCL dispatch; phase VK8 |
+| Neighborhood tolerance | Largest relative difference of the Vulkan Sharpen, Clarity, and Halation from OpenCL and from the host evaluation | 1e-5 | phase VK9 record (measured 1.3e-6) |
+| Neighborhood workgroup | Workgroup of both neighborhood kernels; largest vertical radius; workgroup tile | 8 x 8; 63; 12 864 bytes | the OpenCL dispatch, `kGradeNeighborMaxTapCount` - 1; phase VK9 |
+| Sharpen threshold margin | High-pass luma distance from the threshold below which a texel is left out of the comparison | 1e-5 | phase VK9 record |
 | Film tolerance | Largest difference of the film print output, 8-bit codes | 0.5 | `kRampLimitCodes`, `opencl_film_print_test.cpp` |
 | Transfer function tolerance | Largest difference of a Vulkan transfer function from OpenCL, `\|a - b\| / max(0.01, \|b\|)` | 1e-5 | `CurvesMatchOcioBuiltinsOn4096CodeValues`; phase VK3 record |
 | OkLab tolerance | Largest `ScaledDifference` of the Vulkan ACEScc and OkLab functions from OpenCL; `OkLabToLinearAp1` | 1e-6; 4e-6 | `ColorEncodingOpenCl`; phase VK3 record (float32 limit 3.2e-6) |
