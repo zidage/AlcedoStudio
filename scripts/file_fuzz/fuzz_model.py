@@ -496,6 +496,11 @@ class LibraryModel:
             if key is not None:
                 unread_readable.append((file, key))
         imports = sorted(new_files, key=lambda item: wstring_key(item[0].rel)) + unread_readable
+        # The listing takes a file by its extension; the import reads its content. A file whose
+        # bytes are not an image (a text file named .jpg) is counted in not_imported, gets no
+        # record, and fails again at each scan.
+        failed = [item for item in imports if not fuzz_disk.has_image_content(item[0].path)]
+        imports = [item for item in imports if fuzz_disk.has_image_content(item[0].path)]
 
         def apply() -> None:
             mount.state = "online"
@@ -534,4 +539,4 @@ class LibraryModel:
 
         return ScanPrediction("complete", new=len(imports) + len(adopted), moved=len(moved),
                               changed=len(changed), missing=len(missing),
-                              returned=len(returned), apply=apply)
+                              returned=len(returned), not_imported=len(failed), apply=apply)
