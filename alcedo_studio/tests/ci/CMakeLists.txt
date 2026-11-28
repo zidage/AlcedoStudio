@@ -262,6 +262,8 @@ file(WRITE "${_g10_9_fixture_src}/app/import.cpp"
   "auto doc = LegacyPipelineImporter::Import(json);\n")
 file(WRITE "${_g10_9_fixture_tests}/raw/gpu_params_test.cpp"
   "GPUOperatorParams gpu{};\nauto k = OperatorType::ODT;\n")
+file(WRITE "${_g10_9_fixture_tests}/vulkan/barrier.hpp"
+  "void Barrier(VkPipelineStageFlags2 stage);\n")
 
 add_test(NAME PipelineStageCheckRejectsStageType
   COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_g10_9_fixture_src}
@@ -270,7 +272,7 @@ add_test(NAME PipelineStageCheckRejectsStageType
           -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
 set_tests_properties(PipelineStageCheckRejectsStageType
   PROPERTIES PASS_REGULAR_EXPRESSION "app/stage_user\.cpp: void Configure"
-             FAIL_REGULAR_EXPRESSION "params_user|panel_model|gpu_params_test"
+             FAIL_REGULAR_EXPRESSION "params_user|panel_model|gpu_params_test|barrier"
              LABELS "ci_core_flow;legacy_removal")
 
 add_test(NAME OperatorParamsCheckRejectsAggregateInSourceAndTests
