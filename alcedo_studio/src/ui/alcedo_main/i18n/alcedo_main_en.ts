@@ -7183,8 +7183,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>Entries processed</translation>
     </message>
     <message>
-        <source>Mark changed sources in the Library</source>
-        <translation>Mark changed sources in the Library</translation>
+        <source>Save source-change icons on Library thumbnails</source>
+        <translation>Save source-change icons on Library thumbnails</translation>
+    </message>
+    <message>
+        <source>The review lists detected changes either way. This option saves or clears thumbnail icons when you scan.</source>
+        <translation>The review lists detected changes either way. This option saves or clears thumbnail icons when you scan.</translation>
     </message>
     <message>
         <source>Changed sources</source>

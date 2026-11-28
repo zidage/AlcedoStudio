@@ -27,8 +27,8 @@ Users review existing project entries before any removal.
   source history for manual review.
 - Check the current fingerprint once for each path that has multiple ordinary entries or at
   least one saved source-change mark.
-- The review panel has a default-on **Mark changed sources in the Library** checkbox. A completed
-  scan with marking enabled saves confirmed changes. A verified match clears its mark.
+- The review panel has a default-on **Save source-change icons on Library thumbnails** checkbox.
+  A completed scan with marking enabled saves confirmed changes. A verified match clears its mark.
 - Use the crossed-photo icon on the Library thumbnail and the tooltip **Source changed since
   import**. Show the thumbnail and the icon together. Show saved icons when the project reopens.
 - A scan with marking disabled shows the findings. It leaves the saved icons visible.
@@ -68,7 +68,7 @@ Project Maintenance                                      X
 Current project name
 
 Scan project
-[x] Mark changed sources in the Library
+[x] Save source-change icons on Library thumbnails
 Scan progress and current phase, when running
 
 Findings: All / Duplicates / Missing sources / Source problems / Project problems

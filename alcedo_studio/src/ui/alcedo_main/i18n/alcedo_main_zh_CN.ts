@@ -10567,8 +10567,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>已处理条目</translation>
     </message>
     <message>
-        <source>Mark changed sources in the Library</source>
-        <translation>在资料库中标记已更改的源文件</translation>
+        <source>Save source-change icons on Library thumbnails</source>
+        <translation>在资料库缩略图上保存源文件更改图标</translation>
+    </message>
+    <message>
+        <source>The review lists detected changes either way. This option saves or clears thumbnail icons when you scan.</source>
+        <translation>检查结果始终列出检测到的源文件更改。此选项会在扫描时保存或清除缩略图图标。</translation>
     </message>
     <message>
         <source>Changed sources</source>

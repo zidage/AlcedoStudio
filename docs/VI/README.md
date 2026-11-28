@@ -8,8 +8,9 @@ surface must use those values.
 
 ## Project Maintenance
 
-- Put the default-on **Mark changed sources in the Library** checkbox below the scan action.
-  Use `ThemeCheckBox`. A review-only scan keeps the saved marks visible.
+- Put the default-on **Save source-change icons on Library thumbnails** checkbox below the
+  scan action. Use `ThemeCheckBox`. Explain that the review lists source changes in both
+  modes. A review-only scan keeps the saved icons visible.
 - In the classic, justified, and grouped Library layouts, show the crossed-photo icon at the
   top-left of the photo with the tooltip **Source changed since import**. Keep the thumbnail
   visible. Use `SourceChangedThumbnailIcon.qml` and the existing thumbnail scrim and icon tokens.

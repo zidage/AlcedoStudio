@@ -119,10 +119,15 @@ Dialog {
                 id: markChangedSources
                 objectName: "maintenanceMarkChangedSources"
                 Layout.fillWidth: true
-                text: qsTr("Mark changed sources in the Library")
+                text: qsTr("Save source-change icons on Library thumbnails")
                 checked: true
                 enabled: root.controller && root.controller.available && !root.controller.busy
                          && !root.confirming
+                Accessible.description: qsTr("The review lists detected changes either way. This option saves or clears thumbnail icons when you scan.")
+                ToolTip.text: markChangedSources.Accessible.description
+                ToolTip.visible: enabled && markHover.hovered
+                onToggled: function(checked) { markChangedSources.checked = checked }
+                HoverHandler { id: markHover }
             }
             Caption {
                 Layout.fillWidth: true
