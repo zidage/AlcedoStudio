@@ -1193,38 +1193,31 @@ class Driver:
             self.skip("the photo is gone")
             return True
         path = self.abs(op["path"])
-        expect = set()
-        if photo.mount is None or photo.state != "missing":
-            expect.add(NOT_MISSING)
+        # MountService::LocateMissingPhoto checks in this order: a missing mounted photo, the
+        # canonical path of the file, below the root, listed by a scan, no present photo of the
+        # mount at the path, a readable fingerprint.
         mount = self.model.mounts.get(photo.mount) if photo.mount else None
         rel = None
-        if mount is not None:
-            rel = fuzz_disk.relative_below(mount.root, path)
+        if mount is None or photo.state != "missing":
+            expect = {NOT_MISSING}
+        elif not path.exists():
+            expect = {FILE_UNREADABLE}
+        else:
+            canonical = Path(os.path.realpath(path))
+            rel = fuzz_disk.relative_below(mount.root, canonical)
             if rel is None:
-                expect.add(OUTSIDE_MOUNT)
+                expect = {OUTSIDE_MOUNT}
+            elif not (canonical.is_file() and fuzz_disk.is_supported_name(canonical.name) and
+                      not any(part.startswith(".") for part in rel.split("/"))):
+                expect = {NOT_LISTED}
+            elif any(p.rel == rel and p.state == "present"
+                     for p in self.model.mounted_photos(mount.handle)
+                     if p.handle != photo.handle):
+                expect = {HAS_PHOTO}
+            elif self.tools.is_locked(canonical) or fuzz_disk.read_fingerprint(canonical) is None:
+                expect = {FILE_UNREADABLE}
             else:
-                parts = rel.split("/")
-                listed = path.is_file() and not path.is_symlink() and \
-                    fuzz_disk.is_supported_name(path.name) and \
-                    not any(part.startswith(".") for part in parts) and \
-                    not any(Path(mount.root).joinpath(*parts[:i]).is_symlink() or
-                            (IS_WINDOWS and os.path.isjunction(Path(mount.root).joinpath(
-                                *parts[:i]))) for i in range(1, len(parts) + 1))
-                if not listed:
-                    expect.add(NOT_LISTED)
-                else:
-                    if any(p.rel == rel for p in self.model.mounted_photos(mount.handle)
-                           if p.handle != photo.handle):
-                        expect.add(HAS_PHOTO)
-                    if self.tools.is_locked(path) or fuzz_disk.read_fingerprint(path) is None:
-                        expect.add(FILE_UNREADABLE)
-        elif photo.mount is None:
-            expect.add(OUTSIDE_MOUNT)
-        if expect and NOT_MISSING not in expect and not (expect - {NOT_LISTED}) and \
-                not path.exists():
-            expect |= {FILE_UNREADABLE, NOT_LISTED}
-        if not expect:
-            expect = {"ok"}
+                expect = {"ok"}
         answer = self.call("library.mount.locate_photo",
                            {"element_id": photo.eid, "path": str(path)}, expect=expect)
         if answer.ok:
