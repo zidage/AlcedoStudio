@@ -33,10 +33,10 @@ void MainQmlTestFixture::ForceReducedMotionForWorkflowTests() {
   alcedo::ui::AppTheme::Instance().setReduceMotion(true);
 }
 
-auto MainQmlTestFixture::FinishLoad(std::unique_ptr<LoadedMainWindow> loaded)
+auto MainQmlTestFixture::FinishLoad(std::unique_ptr<LoadedMainWindow> loaded, bool from_module)
     -> std::unique_ptr<LoadedMainWindow> {
   alcedo::ui::AppTheme::SetEffectiveLanguageCode(loaded->language_manager.EffectiveLanguageCode());
-  QQuickStyle::setStyle(QStringLiteral("Material"));
+  QQuickStyle::setStyle(from_module ? QStringLiteral("Basic") : QStringLiteral("Material"));
 
   loaded->engine.addImportPath(QStringLiteral("qrc:/"));
   QuickQanava::initialize(&loaded->engine);
@@ -54,7 +54,11 @@ auto MainQmlTestFixture::FinishLoad(std::unique_ptr<LoadedMainWindow> loaded)
                                               warnings.end());
                    });
 
-  loaded->engine.load(MainQmlUrl());
+  if (from_module) {
+    loaded->engine.loadFromModule("Alcedo.Main", "Main");
+  } else {
+    loaded->engine.load(MainQmlUrl());
+  }
   if (loaded->engine.rootObjects().empty()) {
     std::ostringstream errors;
     for (const auto& warning : loaded->qml_warnings) {
@@ -80,6 +84,14 @@ auto MainQmlTestFixture::LoadMainWindow(bool create_project)
     EXPECT_TRUE(CreateTestProject(loaded->host));
   }
   return FinishLoad(std::move(loaded));
+}
+
+auto MainQmlTestFixture::LoadMainWindowFromModule() -> std::unique_ptr<LoadedMainWindow> {
+  auto loaded = std::make_unique<LoadedMainWindow>();
+  alcedo::ui::AppTheme::RegisterFonts();
+  ForceReducedMotionForWorkflowTests();
+  EXPECT_TRUE(CreateTestProject(loaded->host));
+  return FinishLoad(std::move(loaded), true);
 }
 
 auto MainQmlTestFixture::LoadMainWindowWithPackedProject(const std::filesystem::path& packed_path)
