@@ -289,6 +289,26 @@ if(ALCEDO_VULKAN_ENABLED AND (ALCEDO_OPENCL_ENABLED OR ALCEDO_METAL_ENABLED))
     DISCOVERY_TIMEOUT 60
     PROPERTIES LABELS "gpu;edit;runtime;vulkan;grade")
   alcedo_register_test_target(VulkanNeighborhoodTest gpu)
+
+  # The Local Laplacian stage of the Color Grade (Shadows, Highlights) on Vulkan against the
+  # reference backend (#1036, phase VK10).
+  add_executable(VulkanLocalToneTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/vulkan_local_tone_test.cpp)
+  target_include_directories(VulkanLocalToneTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  target_link_libraries(VulkanLocalToneTest PRIVATE
+    GTest::gtest_main EditRuntimeVulkanPasses EditInput EditGraph)
+  if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(VulkanLocalToneTest PRIVATE EditRuntimeOpenCl OpenClProgramLibrary)
+  else()
+    target_link_libraries(VulkanLocalToneTest PRIVATE
+      EditRuntimeMetal EditRuntimeLens RawProcessorOp)
+    add_dependencies(VulkanLocalToneTest GpuDagMetalShaders RawProcessorOpMetalShaders)
+  endif()
+  add_dependencies(VulkanLocalToneTest AlcedoVulkanKernels)
+  gtest_discover_tests(VulkanLocalToneTest TEST_PREFIX "VulkanLocalToneTest."
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES LABELS "gpu;edit;runtime;vulkan;grade")
+  alcedo_register_test_target(VulkanLocalToneTest gpu)
 endif()
 
 # Vulkan against OpenCL on the same GPU (#1036, phase VK3, decision B9): the shared color math

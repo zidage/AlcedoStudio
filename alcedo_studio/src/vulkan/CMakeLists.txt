@@ -114,6 +114,17 @@ alcedo_add_slang_kernels(AlcedoVulkanKernels
     INCLUDE_DIRS "${ALCEDO_SRC_ROOT}"
 )
 
+# Phase VK10: the Local Laplacian stage of the Color Grade (OpenCL program opencl_dag_local_tone,
+# local_tone.cl) and three plane kernels on device addresses.
+alcedo_add_slang_kernels(AlcedoVulkanKernels
+    GROUP local_tone
+    SOURCE "${ALCEDO_SRC_ROOT}/edit/runtime/vulkan/shader/local_tone.slang"
+    KERNELS local_tone_extract_scene local_tone_extract_reference_scene local_tone_pyr_down
+            local_tone_remap local_tone_select local_tone_collapse local_tone_apply_scene
+            local_tone_fill_zero local_tone_copy_image_to_plane local_tone_copy_plane_to_image
+    INCLUDE_DIRS "${ALCEDO_INCLUDE_ROOT}" "${ALCEDO_SRC_ROOT}"
+)
+
 set(_alcedo_vulkan_context_sources
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_api_counters.cpp"
     "${ALCEDO_SRC_ROOT}/vulkan/vulkan_compute_pipeline_cache.cpp"

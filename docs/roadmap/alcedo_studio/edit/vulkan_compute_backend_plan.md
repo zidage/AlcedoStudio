@@ -8,8 +8,9 @@ Status: planned. Experiments VX1 to VX5 come first. VX1, VX2, VX3, and VX5 are c
 changed B5 to two devices and stopped VK18 until the plan has a new resize design (section 9.2).
 VK0 is complete (2026-11-23, #1063). VK1 is complete (2026-11-23, #1065). VK2 is complete
 (2026-11-23, #1067). VK3 is complete (2026-11-23, #1080). VK4 is complete (2026-11-27, #1196).
-VK5 is complete (2026-11-27, #1203). VK6 is complete on the Apple M4 with MoltenVK
-(2026-11-27, #1209); its Windows runs against OpenCL are open.
+VK5 is complete (2026-11-27, #1203). VK6 is complete (2026-11-27, #1209), on the Apple M4 with
+MoltenVK and on Windows. VK7 is complete (2026-11-27, #1211). VK8 is complete (2026-11-27,
+#1219). VK9 is complete (2026-11-27, #1225). VK10 is complete (2026-11-27, #1228).
 
 Tracking issue: [#1036](https://github.com/zidage/AlcedoStudio/issues/1036)
 
@@ -599,7 +600,7 @@ test of its kernels (B9).
 | VK7 | GeometryResample, CameraToAp1, raster input (UploadRgb), DisplayToAp1 | `edit/runtime/vulkan/`, shared color headers | VK6 | 1100 to 1500 | complete (#1211) |
 | VK8 | Primary grade point kernels and LUT resources | `edit/runtime/vulkan/` | VK7 | 1400 to 1800 | complete (#1219) |
 | VK9 | Neighborhood kernels (Sharpen, Clarity, Halation) | `edit/runtime/vulkan/` | VK8 | 800 to 1200 | complete (#1225) |
-| VK10 | Local tone | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | planned |
+| VK10 | Local tone | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | complete (#1228) |
 | VK11 | MaskEvaluate, MaskUnion, AI mask coverage | `edit/runtime/vulkan/` | VK8 | 1300 to 1700 | planned |
 | VK12 | DiffusionFilter and Drt | `edit/runtime/vulkan/` | VK8 | 1500 to 1900 | planned |
 | VK13 | Film print | `edit/runtime/vulkan/` | VK12 | 1600 to 1950 | planned |
@@ -2871,6 +2872,192 @@ the estimate of 800 to 1200: the host evaluation (about 150 lines) is the refere
 
 **Remaining gaps:** none.
 
+### Phase VK10: local tone (Shadows, Highlights)
+
+**Objective and deliverables.** The Vulkan backend runs the Local Laplacian stage of a Color Grade
+(Shadows and Highlights) through the shared `LocalToneExecutor`: the extract of the log intensity
+into the canonical mask plane, the Gaussian pyramids of the source and of each remapped sample,
+the select of the Laplacian levels between two samples, the collapse, and the apply with the
+optional masked mix. `VulkanGradeOps::ExecuteLocalTone` runs it in place of the VK10 error, with
+the canonical source and result planes in the graph image cache, as in OpenCL. Issue #1228.
+
+**Inputs and prerequisites.** VK8 (`GradeExecutor<VulkanGradeOps>`, `VulkanSceneView`, the dummy
+storage images). VK3 (`math.slangh`, the Slang branch of `color_encoding_math.h`). VK2 (the
+transient arena of the workspace, the graph image cache).
+
+**Source audit of the VK10 entry (2026-11-27).**
+
+| OpenCL entry | Kernels and shared code | Callers | VK10 decision |
+| --- | --- | --- | --- |
+| `OpenClLocalToneOps::Extract`, `ExtractReference` | `local_tone_extract_scene`, `local_tone_extract_reference_scene`: the bilinear read of a scene image (cached image or scene-work buffer), `LogIntensity` (AP1 intensity in ACEScc), and for the canonical plane the reference-to-render transform | `LocalToneExecutor::Prepare` | VK10 |
+| `PyramidDown`, `Remap`, `Select`, `Collapse` | `local_tone_pyr_down` (5 x 5 binomial), `local_tone_remap` (`RemapDelta` with `pow`), `local_tone_select` (the Laplacian of two samples by the expand of the coarser level), `local_tone_collapse` | the same | VK10 |
+| `ApplyAdjustedAndMix` | `local_tone_apply_scene`: the bilinear read of the two planes at the apply transform, the intensity ratio (at most 32), the gamut scale toward the target intensity, the mix with the Grade input times the R8 mask | `LocalToneExecutor::ApplyMix` | VK10 |
+| `FillZero`, the canonical copies (`CopyImageToDeviceMemory`, `CopyDeviceMemoryToImage`) | buffer transfers of the OpenCL backend | `Prepare`, `PersistCanonical`, `ApplyCanonicalSampleAndMix` | VK10, as three kernels on device addresses (see the data rules) |
+| `local_tone_extract`, `local_tone_extract_reference`, `local_tone_apply` (image kernels), `EnqueueLlfApply` | | none; `OpenClBackend::WarmUpPlan` only, which warms them in place of the two scene kernels | Out of the port: no product caller (comment on #1220) |
+
+Metal has its own local tone kernels (`local_tone.metal`, image based) with the same formulas; on
+the Apple M4 the reference is the Metal pass, on Windows the OpenCL pass on the same GPU.
+
+**Modules, files, and APIs.**
+
+- `edit/runtime/vulkan/shader/local_tone.slang` (group `local_tone`: kernels
+  `local_tone_extract_scene`, `local_tone_extract_reference_scene`, `local_tone_pyr_down`,
+  `local_tone_remap`, `local_tone_select`, `local_tone_collapse`, `local_tone_apply_scene`,
+  `local_tone_fill_zero`, `local_tone_copy_image_to_plane`, `local_tone_copy_plane_to_image`).
+- `include/vulkan/vulkan_local_tone_kernels.hpp`: names, bindings, push constant layouts; the
+  descriptors go into `VulkanKernelCatalog()`.
+- `inc/edit/runtime/vulkan/vulkan_local_tone_pass.hpp`, `edit/runtime/vulkan/vulkan_local_tone_pass.cpp`
+  (target `EditRuntimeVulkanPasses`): `ExecuteVulkanLocalTone` with `VulkanLocalToneOps`, the form
+  of `ExecuteOpenClLocalTone`.
+- `VulkanGradeOps::ExecuteLocalTone` calls it; the VK10 error and `ThrowStageOfALaterPhase` go.
+- Test: `tests/edit/runtime/vulkan_local_tone_test.cpp` (`VulkanLocalToneTest`).
+
+**Data rules and invariants.**
+
+- The pyramid planes are R32F row-major ranges of the transient arena of the workspace (the OpenCL
+  rule); a kernel reads and writes them by device address (`TransientBufferArena::Allocate` gives
+  the slab address plus the offset). A stable render reuses the slabs and creates no buffer.
+- The canonical source and result planes are R32F images of the graph image cache
+  (`local_tone.source.0`, `local_tone.result.0`), recorded unpublished and published by
+  `PublishResults`, as in OpenCL. The copies between an image and a plane, and the zero fill of a
+  plane, are kernels on the device address: the arena gives an address, not the `VkBuffer`, and a
+  kernel copy is exact.
+- Each push constant block is at most 128 bytes (the Vulkan minimum of `maxPushConstantsSize`).
+  The transforms carry the six used values of the 3 x 3 matrix.
+- `pow` of the remap is `AlcedoPow`, the ACEScc functions are the Slang branch of
+  `color_encoding_math.h` (VK3 rule). The expand halves an even coordinate with an arithmetic shift,
+  not a signed division (VK4 rule for negative coordinates on NVIDIA).
+- The apply reads the working texel before it writes it; the working image is a scene-work member
+  and equals the adjusted binding (the OpenCL precondition).
+- Every dispatch records into the open recording and submits nothing.
+
+**Implementation steps.**
+
+1. The kernel group and its header; the catalog.
+2. `VulkanLocalToneOps` and `ExecuteVulkanLocalTone`; `VulkanGradeOps::ExecuteLocalTone`.
+3. `VulkanLocalToneTest`; the VK10 failure case leaves `VulkanPrimaryGradeTest`.
+4. Runs: RTX 3080 Laptop GPU and Iris Xe against OpenCL; Apple M4 (MoltenVK) against Metal.
+
+**Tests and evidence.**
+
+- `VulkanLocalToneTest.ShadowsAndHighlightsEqualTheReferenceBackend` (full frame: Shadows +80 and
+  -60, Highlights -100 and +50, both, the slider ends; an odd image size)
+- `VulkanLocalToneTest.RegionOfInterestEqualsTheReferenceBackend` (the canonical sample after a full
+  frame, and a region of interest on a device without a canonical plane)
+- `VulkanLocalToneTest.SliderEditReusesTheCanonicalSourceAndEqualsTheReferenceBackend`
+- `VulkanLocalToneTest.MixMaskAndHistogramEqualTheReferenceBackend`
+- `VulkanLocalToneTest.CanonicalPlanesArePublishedOnlyAfterTheRender`
+- `VulkanLocalToneTest.StableRenderSamplesTheCanonicalPlanesAndCreatesNoResource`
+- `VulkanLocalToneTest.LocalToneRecordsIntoTheOpenRecordingWithoutASubmission`
+- `VulkanLocalToneTest.InvalidRequestsFailAndPublishNothing`
+
+**Build and run commands.**
+
+```text
+Windows: cmd /c scripts\msvc_env.cmd --build build\debug --target AlcedoVulkanKernels VulkanLocalToneTest VulkanPrimaryGradeTest
+         set ALCEDO_VULKAN_DEVICE=RTX (or Iris)
+         ctest --test-dir build/debug -R "Vulkan|PipelineAccelerator" -j 1 --output-on-failure
+macOS:   source ~/Projects/vulkan_tools/env.sh
+         cmake --build build/macos-vulkan --target AlcedoVulkanKernels VulkanLocalToneTest VulkanPrimaryGradeTest
+         ctest --test-dir build/macos-vulkan -R "Vulkan|PipelineAccelerator" -j 1 --output-on-failure
+```
+
+**Exit criteria.**
+
+- [x] The listed tests pass on the RTX 3080 Laptop GPU and Iris Xe against OpenCL with no
+      validation error.
+- [x] The listed tests pass on the Apple M4 against Metal with no validation error.
+- [x] The OpenCL, CUDA, and Metal results are unchanged: the phase changes no shared header and no
+      source of those backends.
+
+**Expected diff.** 1300 to 1700 lines.
+
+##### Phase VK10 completion record (2026-11-27)
+
+**Status:** complete on the RTX 3080 Laptop GPU, Iris Xe, and the Apple M4 (MoltenVK). Issue
+#1228. Branch `feature/vulkan-vk10-local-tone` on the VK9 branch `feature/vulkan-vk9-neighborhood`
+(pull request #1227).
+
+**Implementation decisions.** The plan did not specify these details, or the work found a better
+form. Each one agrees with A1 to A7 and B1 to B11.
+
+| Item | Plan text | Implementation | Reason |
+| --- | --- | --- | --- |
+| Plane transfers | `FillDeviceMemory`, `CopyImageToDeviceMemory`, `CopyDeviceMemoryToImage` of OpenCL | Three kernels on the device address: `local_tone_fill_zero`, `local_tone_copy_image_to_plane`, `local_tone_copy_plane_to_image` | The transient arena gives a device address, not the `VkBuffer` of its slab; a kernel copy is exact, and the backend needs no table of live buffers. |
+| Zero fill extent | Not in the plan | Rows of 1024 texels | A plane of 2048 x 2048 texels in one row would need 262 144 workgroups on the x axis, above the guaranteed limit of 65 535. |
+| Push constants | Not in the plan | At most 88 bytes for each kernel; the transforms carry the six used values of the 3 x 3 matrix | Inside the Vulkan minimum of 128 bytes, so no node value buffer is necessary (VK9 needed one for 300 bytes). |
+| Mix flag | The OpenCL `mix_is_buffer >= 0` | `apply_mix` 0 or 1 | A scene image is a buffer by its address being set (VK8 rule), so the flag only says whether the mix runs. |
+| Result struct | `OpenClLocalToneResult` | `VulkanLocalToneResult` with the decision trace of the executor | The test and a later caller read the decision without a second lookup. |
+| Tolerance | The tolerance of the matching OpenCL test (2e-3 against the CPU reference) | 1e-5 against OpenCL and Metal, the neighborhood tolerance of VK9 | The measured largest difference is 5.4e-7 on the three devices; the OpenCL bound against a CPU model would hide a real fault. |
+
+**Measured differences** (logs `build/tmp/vulkan_backend/vk10/`; relative difference
+`|vulkan - reference| / max(1, |reference|)` of the ACEScc Grade output; 256 x 192 input from
+2^-8 to 2^2 with a bright window, a dark block, and a 12 % texture; tolerance 1e-5):
+
+| Case | RTX 3080: OpenCL | Iris Xe: OpenCL | Apple M4: Metal |
+| --- | --- | --- | --- |
+| Shadows +80, -60; Highlights -100, +50; both at the slider ends; 203 x 157 | 5.4e-7 | 5.1e-7 | 4.8e-7 |
+| Region after a full frame (canonical sample); region without a canonical plane | 5.4e-7 | 4.8e-7 | 4.2e-7 |
+| Slider edit 25 -> 70 (canonical source reused) | 4.8e-7 | 4.8e-7 | 4.2e-7 |
+| Mix 0.6; mix 0.8 with a mask; mix 0.5 with a histogram | 3.0e-7 | 3.3e-7 | 3.0e-7 |
+
+Each cell gives the largest difference of its cases (rms 4e-8 to 8e-8). The canonical sample
+equals the render that built the planes bit for bit; the histogram render equals the render
+without it bit for bit.
+
+**Primary success call chain:**
+
+```text
+GradeExecutor<VulkanGradeOps>, the LocalLaplacian stage of the schedule
+  -> VulkanGradeOps::ExecuteLocalTone -> ExecuteVulkanLocalTone
+  -> LocalToneExecutor<VulkanLocalToneOps>::Prepare
+       -> LookupCanonical (graph image cache, published revision and long edge) -> DecideLocalTone
+       -> SampleCanonical: return (the apply copies the two canonical images into planes)
+       -> else AllocateScratchPlane x 4 per level (transient arena, device addresses)
+       -> ExtractReference (full frame) or Extract, or BindCanonicalSourcePlane (slider edit)
+       -> PyramidDown per level; FillZero of the result levels
+       -> per sample pair: Remap + PyramidDown (two samples), Select per level
+       -> Collapse from the coarsest level
+       -> PersistCanonicalSource / PersistCanonicalResult
+            -> AcquireImageForWrite (R32F) -> local_tone_copy_plane_to_image -> RecordUnpublished
+  -> LocalToneExecutor::ApplyMix -> local_tone_apply_scene into the working scene-work member
+  -> nothing is submitted; EndRender submits; PublishResults publishes the canonical planes
+```
+
+**Primary failure call chain:**
+
+```text
+outside BeginRender, empty geometry, a working binding that is not the adjusted scene-work member,
+a missing or wrong mask, scene images of different sizes, lost canonical planes
+  -> std::runtime_error "ExecuteVulkanLocalTone: ..." (or the shared executor message) before the
+     dispatch -> the caller cancels the render -> CancelRender drops the unpublished canonical planes;
+     the published planes of an earlier render stay
+```
+
+**What was proven (executed tests, validation layer on):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| The eight tests of the section | `VulkanLocalToneTest` | PASS on RTX 3080, Iris Xe, Apple M4 |
+| The Grade tests without the VK10 failure case (`InvalidRequestsFail`) | `VulkanPrimaryGradeTest` | PASS on RTX 3080, Iris Xe, Apple M4 |
+| VK0 to VK10 suites, Windows | `ctest -R "Vulkan\|PipelineAccelerator"` | RTX 3080 and Iris Xe: 155 tests each, 154 PASS, 1 skipped (a test for a build without Vulkan) |
+| VK0 to VK10 suites, Apple M4 | `ctest -R "Vulkan\|PipelineAccelerator"` | 119 tests, 117 PASS, 2 skipped (Windows only); the three test RAWs copied for the run |
+| `alcedo-gpu-check --vulkan` | `alcedo_gpu_check` | `gpu.kernels.ok=vulkan kernels=46` on the three devices |
+| Validation errors | `TearDown` of each GPU test | 0 |
+| Windows MSVC build of every Vulkan target | `scripts\msvc_env.cmd --build build\debug` | PASS, no warning |
+
+**Findings outside this phase.** The three image kernels of `local_tone.cl` (`local_tone_extract`,
+`local_tone_extract_reference`, `local_tone_apply` with `EnqueueLlfApply`) have no OpenCL caller,
+and `WarmUpPlan` warms them in place of the three scene kernels (comment on #1220).
+
+**LOC note:** about 1854 added and 32 removed lines without the plan: the kernels 442, the kernel
+header 236, the pass 547 (`vulkan_local_tone_pass.cpp` 486, its header 61), the Grade pass 38,
+CMake and the catalog 18, the tests 605 (the new test 572, the Grade test 13, CMake 20). Above the
+estimate of 1300 to 1700 and below the phase limit of 2000: the three plane kernels and the
+eight tests with their cases.
+
+**Remaining gaps:** none.
+
 ### Phases VK3 to VK23: scope of each phase
 
 Each entry gives the objective, the OpenCL model, and the main tests. The detailed section replaces
@@ -2885,7 +3072,7 @@ the entry before the implementation.
 | VK7 | Detailed section above | | |
 | VK8 | Detailed section above | | |
 | VK9 | Detailed section above | | |
-| VK10 | `VulkanLocalToneOps` | `opencl_local_tone_pass.cpp`, `local_tone.cl` | Local tone equals OpenCL at full size and for a region of interest. |
+| VK10 | Detailed section above | | |
 | VK11 | MaskEvaluate, MaskUnion, AI mask coverage | `opencl_mask_pass.cpp`, `mask.cl`, `opencl_ai_mask_coverage.cpp` | Mask values and coverage equal OpenCL. |
 | VK12 | DiffusionFilter, `VulkanDrtOps` (its neighborhood operations are `VulkanNeighborOps` of VK9), DRT parameters, the tone curves of `common.cl`, the ACES 2.0 and OpenDRT math of `cst.cl` (moved from VK3) | `opencl_drt_pass.cpp`, `opencl_diffusion_filter_pass.cpp`, `drt.cl`, `drt_params.cl`, `common.cl`, `cst.cl` | Product output equals OpenCL for ACES and OpenDRT. |
 | VK13 | Film print stage kernels | `opencl_film_print_pass.cpp`, `film_print.cl` | Negative to print output equals OpenCL. Reversal output equals OpenCL. |
@@ -3527,6 +3714,8 @@ Remaining defects or unavailable platforms:
 | Histogram dispatch | Workgroup size and largest workgroup count of the curve input histogram | 256; 128 | the OpenCL dispatch; phase VK8 |
 | Neighborhood tolerance | Largest relative difference of the Vulkan Sharpen, Clarity, and Halation from OpenCL and from the host evaluation | 1e-5 | phase VK9 record (measured 1.3e-6) |
 | Neighborhood workgroup | Workgroup of both neighborhood kernels; largest vertical radius; workgroup tile | 8 x 8; 63; 12 864 bytes | the OpenCL dispatch, `kGradeNeighborMaxTapCount` - 1; phase VK9 |
+| Local tone tolerance | Largest relative difference of the Vulkan Local Laplacian stage (Shadows, Highlights) from OpenCL and Metal, ACEScc | 1e-5 | phase VK10 record (measured 5.4e-7) |
+| Local tone workgroup | Workgroup of every local tone kernel; texels of one row of the zero fill; largest push constant block | 16 x 16; 1024; 88 bytes | the OpenCL dispatch; phase VK10 |
 | Sharpen threshold margin | High-pass luma distance from the threshold below which a texel is left out of the comparison | 1e-5 | phase VK9 record |
 | Film tolerance | Largest difference of the film print output, 8-bit codes | 0.5 | `kRampLimitCodes`, `opencl_film_print_test.cpp` |
 | Transfer function tolerance | Largest difference of a Vulkan transfer function from OpenCL, `\|a - b\| / max(0.01, \|b\|)` | 1e-5 | `CurvesMatchOcioBuiltinsOn4096CodeValues`; phase VK3 record |

@@ -578,7 +578,7 @@ TEST_F(VulkanPrimaryGradeTest, GradeRecordsIntoTheOpenRecordingWithoutASubmissio
   device.PublishResults();
 }
 
-TEST_F(VulkanPrimaryGradeTest, InvalidRequestsAndLaterStagesFail) {
+TEST_F(VulkanPrimaryGradeTest, InvalidRequestsFail) {
   const auto input    = MakeGradeInput();
   auto       document = multi_grade_test::MakeIdentityGradeDocument();
   PrimaryAdjustment<ExposureModel>(document, type_ids::Exposure()).SetValue(0.5F);
@@ -598,21 +598,16 @@ TEST_F(VulkanPrimaryGradeTest, InvalidRequestsAndLaterStagesFail) {
                  std::runtime_error);
     device.CancelRender();
   }
-  const auto expect_failure = [&](const PipelineDocument& failing, const std::string& phase) {
+  const auto expect_failure = [&](const PipelineDocument& failing, const std::string& message) {
     const auto         plan = Compile(failing, input);
     VulkanRenderDevice device;
     try {
       (void)RenderVulkan(device, plan, input, failing);
-      ADD_FAILURE() << "the render did not fail: " << phase;
+      ADD_FAILURE() << "the render did not fail: " << message;
     } catch (const std::runtime_error& error) {
-      EXPECT_NE(std::string(error.what()).find(phase), std::string::npos) << error.what();
+      EXPECT_NE(std::string(error.what()).find(message), std::string::npos) << error.what();
     }
   };
-  {
-    auto failing = multi_grade_test::MakeIdentityGradeDocument();
-    PrimaryAdjustment<ShadowsModel>(failing, type_ids::Shadows()).SetValue(60.0F);
-    expect_failure(failing, "VK10");
-  }
   {
     // A Grade with a mask whose output the render does not have.
     auto      failing = multi_grade_test::MakeIdentityGradeDocument();
