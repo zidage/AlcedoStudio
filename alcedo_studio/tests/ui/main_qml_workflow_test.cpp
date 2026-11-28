@@ -442,6 +442,69 @@ TEST_F(MainQmlWorkflowTests, CaptionButtonsStayUsableWhileSettingsIsOpen) {
   EXPECT_TRUE(settings->property("opened").toBool());
 }
 
+TEST_F(MainQmlWorkflowTests, SettingsDropdownsOpenAboveTheDialogAndBelowTheWindowCaption) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  AppTheme::RegisterFonts();
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(CreateTestProject(host));
+  LanguageManager language_manager(QCoreApplication::instance());
+  AppTheme::SetEffectiveLanguageCode(language_manager.EffectiveLanguageCode());
+  QQuickStyle::setStyle(QStringLiteral("Basic"));
+
+  std::vector<QQmlError> qml_warnings;
+  QQmlApplicationEngine  engine;
+  auto*                  root = LoadMainQml(host, language_manager, engine, qml_warnings);
+  ASSERT_NE(root, nullptr) << (qml_warnings.empty()
+                                   ? std::string{}
+                                   : qml_warnings.front().toString().toStdString());
+  if (root->property("nativeTrafficLightsEnabled").toBool()) {
+    GTEST_SKIP() << "macOS keeps the system traffic lights";
+  }
+
+  auto* caption = root->findChild<QObject*>(QStringLiteral("windowCaptionPopup"));
+  ASSERT_NE(caption, nullptr);
+  ASSERT_TRUE(caption->property("visible").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(root, "openSettingsDialog", Q_ARG(QVariant, QVariant(0))));
+  ProcessEvents(150);
+  auto* settings = root->findChild<QObject*>(QStringLiteral("settingsDialog"));
+  ASSERT_NE(settings, nullptr);
+  ASSERT_TRUE(settings->property("opened").toBool());
+
+  const struct {
+    int         category;
+    const char* object_name;
+  } dropdowns[] = {
+      {0, "settingsLanguageCombo"},
+      {0, "settingsThemeCombo"},
+      {0, "settingsLibraryGridLayoutCombo"},
+      {1, "settingsLockedNodeMaskCombo"},
+      {1, "rawImportToneCurveCombo"},
+      {1, "rawImportDrtMethodCombo"},
+      {1, "rawImportOpenDrtLookCombo"},
+      {3, "sidecarIdleStopCombo"},
+      {3, "semanticImportCombo"},
+      {5, "settingsAcceleratorCombo"},
+  };
+  for (const auto& dropdown : dropdowns) {
+    SCOPED_TRACE(dropdown.object_name);
+    ASSERT_TRUE(settings->setProperty("currentCategory", dropdown.category));
+    ProcessEvents(50);
+    auto* combo = settings->findChild<QObject*>(QString::fromLatin1(dropdown.object_name));
+    ASSERT_NE(combo, nullptr);
+    auto* popup = combo->property("popup").value<QObject*>();
+    ASSERT_NE(popup, nullptr);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(popup, "open"));
+    ProcessEvents(50);
+    ASSERT_TRUE(popup->property("opened").toBool());
+    const auto popup_z = popup->property("z").toReal();
+    EXPECT_GT(popup_z, settings->property("z").toReal());
+    EXPECT_LT(popup_z, caption->property("z").toReal());
+    ASSERT_TRUE(QMetaObject::invokeMethod(popup, "close"));
+  }
+}
+
 TEST_F(MainQmlWorkflowTests, TextInputAndCapturePriorityPreventProductCommandActivation) {
   ASSERT_TRUE(QCoreApplication::instance());
   QSettings::setDefaultFormat(QSettings::IniFormat);

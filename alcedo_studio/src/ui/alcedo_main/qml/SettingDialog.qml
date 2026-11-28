@@ -18,6 +18,9 @@ Dialog {
     x: 0
     y: 0
 
+    // The window caption popup above Settings prevents Qt from inheriting this dialog's z.
+    readonly property real dropdownPopupZ: z + 1
+
     property Item blurSource: null
     // Main window: a drag on the backdrop around the card moves it.
     property var windowHost: null
@@ -681,6 +684,7 @@ Dialog {
                                         AdjustmentCombo {
                                             objectName: "settingsLanguageControl"
                                             controlObjectName: "settingsLanguageCombo"
+                                            popupZ: dialog.dropdownPopupZ
                                             Layout.fillWidth: true
                                             controlHeight: 36
                                             showResetButton: false
@@ -714,6 +718,7 @@ Dialog {
                                         AdjustmentCombo {
                                             objectName: "settingsThemeControl"
                                             controlObjectName: "settingsThemeCombo"
+                                            popupZ: dialog.dropdownPopupZ
                                             Layout.fillWidth: true
                                             controlHeight: 36
                                             showResetButton: false
@@ -753,6 +758,7 @@ Dialog {
                                             AdjustmentCombo {
                                                 objectName: "settingsLibraryGridLayoutControl"
                                                 controlObjectName: "settingsLibraryGridLayoutCombo"
+                                                popupZ: dialog.dropdownPopupZ
                                                 Layout.fillWidth: true
                                                 controlHeight: 36
                                                 showResetButton: false
@@ -914,6 +920,7 @@ Dialog {
                                             AdjustmentCombo {
                                                 objectName: "settingsLockedNodeMaskControl"
                                                 controlObjectName: "settingsLockedNodeMaskCombo"
+                                                popupZ: dialog.dropdownPopupZ
                                                 Layout.fillWidth: true
                                                 controlHeight: 36
                                                 showResetButton: false
@@ -936,6 +943,7 @@ Dialog {
 
                                 RawImportLookSettingsSection {
                                     objectName: "rawImportLookSettingsSection"
+                                    dropdownPopupZ: dialog.dropdownPopupZ
                                     Layout.fillWidth: true
                                     Layout.leftMargin: 34
                                     Layout.rightMargin: 34
@@ -986,6 +994,7 @@ Dialog {
 
                             SemanticGenerationSettingsPanel {
                                 width: semanticScroll.availableWidth
+                                dropdownPopupZ: dialog.dropdownPopupZ
                                 semanticController: appModules.semanticGeneration
                                 interactionPolicy: appModules.interactionPolicy
                                 projectOpen: appModules.project.serviceReady
@@ -1057,6 +1066,7 @@ Dialog {
                                                 id: acceleratorCombo
                                                 objectName: "settingsAcceleratorControl"
                                                 controlObjectName: "settingsAcceleratorCombo"
+                                                popupZ: dialog.dropdownPopupZ
                                                 Layout.fillWidth: true
                                                 controlHeight: 36
                                                 showResetButton: false

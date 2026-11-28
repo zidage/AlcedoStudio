@@ -20,6 +20,8 @@ Item {
     // Panels may expose a stable object name for behavior tests and
     // accessibility tooling without changing the shared wrapper name.
     property string controlObjectName: "adjustmentCombo"
+    // Leave Qt's automatic popup stacking in use unless the caller specifies a level.
+    property var popupZ: undefined
     // Entry key whose text heads each run of entries with the same value (for
     // example Scene / Display). Empty: the popup lists entries without headings.
     property string groupLabelRole: ""
@@ -127,6 +129,7 @@ Item {
             }
 
             popup: Popup {
+                z: root.popupZ
                 y: combo.height + 2
                 width: combo.width
                 implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
