@@ -24,12 +24,14 @@
 #include <vector>
 
 #include "app/ai_mask_analysis_image.hpp"
+#include "app/browser_preview_render.hpp"
 #include "app/editor_action_policy.hpp"
 #include "app/editor_image_render_port.hpp"
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/lut_preview_image.hpp"
+#include "app/preset_preview_image.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
@@ -39,6 +41,7 @@
 #include "edit/operators/models/lmt_model.hpp"
 #include "image/image_buffer.hpp"
 #include "json.hpp"
+#include "support/document_transfer_test_support.hpp"
 #include "support/editor_history_port_test_reads.hpp"
 #include "support/editor_lease_test_support.hpp"
 #include "support/editor_parameter_target_test.hpp"
@@ -879,12 +882,12 @@ TEST_F(EditorComparisonServiceTest, LutPreviewRendersTheImportRootWithTheLutAtFu
   ASSERT_TRUE(CommitPanelField("crop_rotate", R"({"rotation_degrees":7.0})"));
   const auto              commits_before = Graph()->CommitCount();
 
-  auto                    outcome = std::make_shared<std::optional<EditorLutPreviewResult>>();
+  auto                    outcome = std::make_shared<std::optional<EditorBrowserPreviewResult>>();
   EditorLutPreviewRequest request;
   request.image_id    = kImageId;
   request.write       = LibraryLutWrite();
   const auto accepted = service_->RenderLutPreview(
-      request, [outcome](EditorLutPreviewResult result) { *outcome = std::move(result); });
+      request, [outcome](EditorBrowserPreviewResult result) { *outcome = std::move(result); });
   ASSERT_NE(accepted.kind, EditorSessionResultKind::Rejected) << accepted.message;
   Drain();
 
@@ -904,7 +907,7 @@ TEST_F(EditorComparisonServiceTest, LutPreviewRendersTheImportRootWithTheLutAtFu
   EXPECT_FLOAT_EQ(lmt->Strength(), kDefaultLutStrength) << "a preview shows the complete LUT";
   EXPECT_EQ(job.snapshots[0]->Lineage(), Working()->Lineage())
       << "the executor keeps the binding of the image";
-  EXPECT_EQ(job.geometry.resolution.max_edge, kLutPreviewLongEdge);
+  EXPECT_EQ(job.geometry.resolution.max_edge, kBrowserPreviewLongEdge);
   EXPECT_EQ(job.geometry.document_geometry, DocumentGeometryUse::ApplyCropAndRotation);
   EXPECT_FALSE(job.output_color.has_value()) << "an SDR root renders its own encoding";
   EXPECT_EQ(job.element_id, kElementId);
@@ -917,22 +920,24 @@ TEST_F(EditorComparisonServiceTest, LutPreviewRendersTheImportRootWithTheLutAtFu
   rendered.geometry.render_extent = {6, 4};
   images_->CompleteLastWithImages({std::move(rendered)});
   ASSERT_TRUE(outcome->has_value());
-  ASSERT_EQ((*outcome)->status, EditorLutPreviewStatus::Completed) << (*outcome)->message;
+  ASSERT_EQ((*outcome)->status, EditorBrowserPreviewStatus::Completed) << (*outcome)->message;
   ASSERT_NE((*outcome)->image.pixels, nullptr);
   EXPECT_EQ((*outcome)->image.geometry.render_extent, (Extent2D{6, 4}));
   EXPECT_EQ(Graph()->CommitCount(), commits_before) << "a preview commits nothing";
 }
 
 TEST_F(EditorComparisonServiceTest, LutPreviewIsRejectedWithoutTheRequestedOpenImage) {
-  auto       outcome = std::make_shared<std::optional<EditorLutPreviewResult>>();
-  const auto record  = [outcome](EditorLutPreviewResult result) { *outcome = std::move(result); };
+  auto       outcome = std::make_shared<std::optional<EditorBrowserPreviewResult>>();
+  const auto record  = [outcome](EditorBrowserPreviewResult result) {
+    *outcome = std::move(result);
+  };
   EditorLutPreviewRequest request;
   request.image_id = kImageId;
   request.write    = LibraryLutWrite();
   (void)service_->RenderLutPreview(request, record);
   Drain();
   ASSERT_TRUE(outcome->has_value());
-  EXPECT_EQ((*outcome)->status, EditorLutPreviewStatus::Rejected) << "no image is open yet";
+  EXPECT_EQ((*outcome)->status, EditorBrowserPreviewStatus::Rejected) << "no image is open yet";
 
   OpenInteractive();
   outcome->reset();
@@ -940,7 +945,7 @@ TEST_F(EditorComparisonServiceTest, LutPreviewIsRejectedWithoutTheRequestedOpenI
   (void)service_->RenderLutPreview(request, record);
   Drain();
   ASSERT_TRUE(outcome->has_value());
-  EXPECT_EQ((*outcome)->status, EditorLutPreviewStatus::Rejected);
+  EXPECT_EQ((*outcome)->status, EditorBrowserPreviewStatus::Rejected);
   EXPECT_NE((*outcome)->message.find("another image"), std::string::npos) << (*outcome)->message;
   EXPECT_TRUE(images_->jobs.empty()) << "a preview of another image never renders";
 
@@ -951,7 +956,7 @@ TEST_F(EditorComparisonServiceTest, LutPreviewIsRejectedWithoutTheRequestedOpenI
   (void)service_->RenderLutPreview(request, record);
   Drain();
   ASSERT_TRUE(outcome->has_value());
-  EXPECT_EQ((*outcome)->status, EditorLutPreviewStatus::Failed);
+  EXPECT_EQ((*outcome)->status, EditorBrowserPreviewStatus::Failed);
   EXPECT_FALSE((*outcome)->message.empty());
   EXPECT_TRUE(images_->jobs.empty());
 }
@@ -961,12 +966,12 @@ TEST_F(EditorComparisonServiceTest, LutPreviewQueuesBehindTheComparisonJobAndRep
   OpenComparison();
   ASSERT_EQ(images_->jobs.size(), 1u);
 
-  auto                    outcome = std::make_shared<std::optional<EditorLutPreviewResult>>();
+  auto                    outcome = std::make_shared<std::optional<EditorBrowserPreviewResult>>();
   EditorLutPreviewRequest request;
   request.image_id = kImageId;
   request.write    = LibraryLutWrite();
   (void)service_->RenderLutPreview(
-      request, [outcome](EditorLutPreviewResult result) { *outcome = std::move(result); });
+      request, [outcome](EditorBrowserPreviewResult result) { *outcome = std::move(result); });
   Drain();
   ASSERT_EQ(images_->jobs.size(), 2u);
   EXPECT_TRUE(images_->cancelled.empty()) << "the comparison job was not cancelled";
@@ -974,19 +979,104 @@ TEST_F(EditorComparisonServiceTest, LutPreviewQueuesBehindTheComparisonJobAndRep
 
   images_->CompleteLast(EditorImageRenderStatus::Failed, "device lost");
   ASSERT_TRUE(outcome->has_value());
-  EXPECT_EQ((*outcome)->status, EditorLutPreviewStatus::Failed);
+  EXPECT_EQ((*outcome)->status, EditorBrowserPreviewStatus::Failed);
   EXPECT_EQ((*outcome)->message, "device lost");
   EXPECT_EQ((*outcome)->image.pixels, nullptr);
 }
 
-TEST(LutPreviewImageTest, HdrDocumentRendersTheSdrOutputAndSdrDocumentItsOwnEncoding) {
+// Edit presets plan 2.4: a preset preview is the import root with the preset applied, with the
+// sensor settings of the working document, at the browser preview size; the result names the sensor
+// key of the document that the session rendered.
+TEST_F(EditorComparisonServiceTest, PresetPreviewRendersThePresetOnTheRootWithTheWorkingSensorKey) {
+  OpenInteractive();
+  ASSERT_TRUE(CommitPanelField("raw_decode", R"({"raw":{"highlights_reconstruct":false}})"));
+  ASSERT_EQ(service_
+                ->EnqueueAdjustmentInput(test::WithColorGradeTarget(
+                    test::PatchFromJson("exposure", R"({"exposure":1.5})", true)))
+                .kind,
+            EditorSessionResultKind::Accepted);
+  Drain();
+  const auto commits_before = Graph()->CommitCount();
+
+  auto       outcome        = std::make_shared<std::optional<EditorBrowserPreviewResult>>();
+  const auto record         = [outcome](EditorBrowserPreviewResult result) {
+    *outcome = std::move(result);
+  };
+  EditorPresetPreviewRequest request;
+  request.image_id = kImageId;
+  request.package  = std::make_shared<const AdjustmentTransferPackage>(
+      alcedo::test::MakeExposureTransferPackage(0.5));
+  ASSERT_NE(service_->RenderPresetPreview(request, record).kind, EditorSessionResultKind::Rejected);
+  Drain();
+
+  ASSERT_EQ(images_->jobs.size(), 1u) << LastMessage();
+  const auto& job = images_->jobs.front().request;
+  ASSERT_EQ(job.snapshots.size(), 1u);
+  const auto&    document = job.snapshots[0]->Document();
+  // The Paste planner gives the Grade of the preset a new id.
+  nlohmann::json exposure;
+  std::string    read_error;
+  ASSERT_TRUE(ReadEditorParameterJson(
+      document,
+      test::ColorGradeFieldTarget("exposure", std::string{document.PrimaryGrade()->Id().Value()}),
+      &exposure, &read_error))
+      << read_error;
+  EXPECT_FLOAT_EQ(exposure.at("exposure_ev").get<float>(), 0.5f)
+      << "the preset look, not the working grade";
+  EXPECT_FALSE(DevelopPayloadOf(*job.snapshots[0]).highlights_reconstruct)
+      << "the sensor settings of the working document";
+  EXPECT_EQ(job.snapshots[0]->Lineage(), Working()->Lineage());
+  EXPECT_EQ(job.geometry.resolution.max_edge, kBrowserPreviewLongEdge);
+  EXPECT_EQ(job.image_id, kImageId);
+  EXPECT_FALSE(outcome->has_value()) << "nothing is reported before the job ends";
+
+  RenderedPipelineImage rendered;
+  rendered.pixels =
+      std::make_shared<ImageBuffer>(cv::Mat(4, 6, CV_32FC4, cv::Scalar(0.5f, 0.25f, 1.0f, 1.0f)));
+  rendered.geometry.render_extent = {6, 4};
+  images_->CompleteLastWithImages({std::move(rendered)});
+  ASSERT_TRUE(outcome->has_value());
+  ASSERT_EQ((*outcome)->status, EditorBrowserPreviewStatus::Completed) << (*outcome)->message;
+  EXPECT_EQ((*outcome)->sensor_key, PresetPreviewSensorKey(Working()->Document()));
+  EXPECT_FALSE((*outcome)->sensor_key.empty());
+  EXPECT_EQ(Graph()->CommitCount(), commits_before) << "a preview commits nothing";
+}
+
+TEST_F(EditorComparisonServiceTest, PresetPreviewIsRefusedForAnotherImageOrWithoutAPackage) {
+  OpenInteractive();
+  auto       outcome = std::make_shared<std::optional<EditorBrowserPreviewResult>>();
+  const auto record  = [outcome](EditorBrowserPreviewResult result) {
+    *outcome = std::move(result);
+  };
+  EditorPresetPreviewRequest request;
+  request.image_id = kOtherImageId;
+  request.package  = std::make_shared<const AdjustmentTransferPackage>(
+      alcedo::test::MakeExposureTransferPackage(0.5));
+  (void)service_->RenderPresetPreview(request, record);
+  Drain();
+  ASSERT_TRUE(outcome->has_value());
+  EXPECT_EQ((*outcome)->status, EditorBrowserPreviewStatus::Rejected);
+  EXPECT_NE((*outcome)->message.find("another image"), std::string::npos) << (*outcome)->message;
+
+  outcome->reset();
+  request.image_id = kImageId;
+  request.package.reset();
+  (void)service_->RenderPresetPreview(request, record);
+  Drain();
+  ASSERT_TRUE(outcome->has_value());
+  EXPECT_EQ((*outcome)->status, EditorBrowserPreviewStatus::Failed);
+  EXPECT_FALSE((*outcome)->message.empty());
+  EXPECT_TRUE(images_->jobs.empty()) << "a refused preview never renders";
+}
+
+TEST(BrowserPreviewRenderTest, HdrDocumentRendersTheSdrOutputAndSdrDocumentItsOwnEncoding) {
   auto document = CreateDefaultPipelineDocument();
-  EXPECT_FALSE(LutPreviewOutputColor(document).has_value());
+  EXPECT_FALSE(BrowserPreviewOutputColor(document).has_value());
 
   DrtParameterUpdate update;
   update.encoding_eotf = DrtEotf::St2084;
   document.Drt()->Params().ApplyUpdate(update);
-  const auto output = LutPreviewOutputColor(document);
+  const auto output = BrowserPreviewOutputColor(document);
   ASSERT_TRUE(output.has_value()) << "a tile is an 8-bit SDR image";
   EXPECT_EQ(output->encoding_space, ColorUtils::ColorSpace::REC709);
   EXPECT_EQ(output->encoding_eotf, ColorUtils::EOTF::GAMMA_2_2);

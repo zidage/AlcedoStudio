@@ -1295,6 +1295,13 @@ and repairs stack membership in the same storage transaction. If a mount tree up
 save, Sleeve restores each affected element's stored mount ID with its other fields. The entries
 below record the original PS2B implementation and verification.
 
+**Upstream main merge.** Project metadata 0.16.0 combines stack persistence with the 0.15.0
+duplicate file-name support. It reads projects from the original 0.13.0 stacking branch and
+projects from upstream 0.15.0. The sync uses the upstream dirty list and WriteSync transaction.
+A failed write restores existing nodes in place and discards uncommitted additions. Folder
+restoration reads only stored child-folder IDs. File membership remains in FolderContent,
+so restoring a folder does not load its photos.
+
 **Changed modules and selected details.** The writer and maximum metadata version are 0.12.0;
 the minimum remains 0.10.0. Packed project, pipeline, image-edit, commit, chain, root, checkpoint,
 WAL record, and adjustment-transfer format identities are unchanged. The WAL documentation now

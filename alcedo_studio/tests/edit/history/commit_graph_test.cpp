@@ -930,6 +930,116 @@ TEST_F(CommitGraphPersistenceTests, LoadGraphRejectsStoredCommitWithNonBatchPayl
   EXPECT_THROW((void)service.LoadGraph(6003), std::runtime_error);
 }
 
+/// A graph of @p element_id whose default Version head is one exposure commit.
+auto MakeGraphWithOneCommit(sl_element_id_t element_id) -> CommitGraph {
+  auto       graph  = CommitGraph::CreateEmpty(element_id);
+  auto       commit = MakeEditAt(graph.GetRootId(), std::nullopt, CommitClock::NextGlobal(1),
+                                 MakeExposureBatch(0.0f, 0.5f));
+  const auto hash   = commit.GetCommitHash();
+  EXPECT_TRUE(graph.InsertCommit(std::move(commit)));
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), hash);
+  graph.MaterializeActiveHeadInMemory();
+  return graph;
+}
+
+// Issue #1111: one call reads the graphs of several images; an image with an invalid row fails
+// alone, an image without edit state has an empty entry, and the entries keep the asked order.
+TEST_F(CommitGraphPersistenceTests, LoadGraphsReadsSeveralImagesAndFailsOnlyTheInvalidOne) {
+  auto             guard = db_->GetConnectionGuard();
+  auto             lock  = guard.Lock();
+  CommitGraphStore service(guard.conn_);
+
+  const auto       valid   = MakeGraphWithOneCommit(7001);
+  const auto       invalid = MakeGraphWithOneCommit(7002);
+  service.Materialize(valid.CaptureMaterialization());
+  service.Materialize(invalid.CaptureMaterialization());
+  const auto    invalid_head = *invalid.GetActiveVersionRef().head_commit_hash;
+
+  duckdb_result result;
+  ASSERT_EQ(
+      duckdb_query(guard.conn_,
+                   std::format("UPDATE EditCommit SET edit_payload = '{{\"stage\":\"basic\"}}'"
+                               " WHERE commit_hash = '{}';",
+                               invalid_head.ToString())
+                       .c_str(),
+                   &result),
+      DuckDBSuccess);
+  duckdb_destroy_result(&result);
+
+  const std::vector<sl_element_id_t> ids{7002, 7003, 7001};
+  const auto                         reads = service.LoadGraphs(ids);
+  ASSERT_EQ(reads.size(), 3u);
+  EXPECT_EQ(reads[0].element_id, 7002u);
+  EXPECT_FALSE(reads[0].graph.has_value());
+  EXPECT_FALSE(reads[0].error.empty());
+  EXPECT_EQ(reads[1].element_id, 7003u);
+  EXPECT_FALSE(reads[1].graph.has_value());
+  EXPECT_TRUE(reads[1].error.empty());
+  EXPECT_EQ(reads[2].element_id, 7001u);
+  ASSERT_TRUE(reads[2].graph.has_value()) << reads[2].error;
+  EXPECT_EQ(reads[2].graph->GetActiveVersionRef().head_commit_hash,
+            valid.GetActiveVersionRef().head_commit_hash);
+  EXPECT_NE(reads[2].graph->FindCommit(*valid.GetActiveVersionRef().head_commit_hash), nullptr);
+}
+
+// Issue #1111: the captures of several images write in one transaction, so an inconsistent
+// capture leaves the rows of every image of the call unchanged.
+TEST_F(CommitGraphPersistenceTests, MaterializeAllWritesNothingWhenOneCaptureIsInconsistent) {
+  auto             guard = db_->GetConnectionGuard();
+  auto             lock  = guard.Lock();
+  CommitGraphStore service(guard.conn_);
+
+  const auto       first                              = MakeGraphWithOneCommit(7101);
+  const auto       second                             = MakeGraphWithOneCommit(7102);
+  const auto       good                               = first.CaptureMaterialization();
+  auto             bad                                = second.CaptureMaterialization();
+  bad.image_state.materialized_transaction_chain_hash = Hash128{1, 2};
+  std::vector<const CommitGraphMaterialization*> captures{&good, &bad};
+
+  EXPECT_THROW(service.MaterializeAll(captures), std::runtime_error);
+  EXPECT_FALSE(service.LoadGraph(7101).has_value());
+  EXPECT_EQ(service.CountCommitsForRoot(first.GetRootId()), 0u);
+
+  const auto fixed = second.CaptureMaterialization();
+  captures         = {&good, &fixed};
+  ASSERT_NO_THROW(service.MaterializeAll(captures));
+  EXPECT_TRUE(service.LoadGraph(7101).has_value());
+  EXPECT_TRUE(service.LoadGraph(7102).has_value());
+  EXPECT_EQ(service.CountCommitsForRoot(second.GetRootId()), 1u);
+
+  // An image takes one capture of a call.
+  captures = {&good, &good};
+  EXPECT_THROW(service.MaterializeAll(captures), std::invalid_argument);
+}
+
+// Issue #1111: a write keeps the stored commits and Version refs that the capture has unchanged,
+// writes the new and changed Version refs, and deletes the dropped ones.
+TEST_F(CommitGraphPersistenceTests, MaterializeWritesChangedVersionRefsAndDeletesDroppedOnes) {
+  auto             guard = db_->GetConnectionGuard();
+  auto             lock  = guard.Lock();
+  CommitGraphStore service(guard.conn_);
+
+  auto             graph = MakeGraphWithOneCommit(7201);
+  const auto       head  = graph.GetActiveVersionRef().head_commit_hash;
+  const auto       keep  = graph.CreateVersionRefAtHead("Keep", head);
+  const auto       drop  = graph.CreateVersionRefAtRoot("Drop");
+  service.Materialize(graph.CaptureMaterialization());
+  ASSERT_EQ(service.ListVersionRefsForElement(7201).size(), 3u);
+
+  graph.GetVersionRef(keep).display_name = "Kept";
+  ASSERT_TRUE(graph.RemoveVersionRef(drop));
+  const auto added = graph.CreateVersionRefAtRoot("Added");
+  service.Materialize(graph.CaptureMaterialization());
+
+  const auto reloaded = service.LoadGraph(7201);
+  ASSERT_TRUE(reloaded.has_value());
+  EXPECT_EQ(reloaded->GetAllVersionRefs().size(), 3u);
+  EXPECT_EQ(reloaded->GetVersionRef(keep).display_name, "Kept");
+  EXPECT_EQ(reloaded->GetVersionRef(added).display_name, "Added");
+  EXPECT_FALSE(reloaded->GetAllVersionRefs().contains(drop));
+  EXPECT_EQ(service.CountCommitsForRoot(graph.GetRootId()), 1u);
+}
+
 class ProjectSchemaBoundaryTests : public ::testing::Test {
  protected:
   std::filesystem::path db_path_;
@@ -952,12 +1062,13 @@ class ProjectSchemaBoundaryTests : public ::testing::Test {
 
 TEST_F(ProjectSchemaBoundaryTests, CurrentProjectFileVersionIsSupported) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
-  EXPECT_EQ(project_pack::kProjectFileVersion, "0.13.0");
+  EXPECT_EQ(project_pack::kProjectFileVersion, "0.16.0");
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.12.0"));
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.10.0"));
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.11.0"));
-  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.12.0"));
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.13.0"));
-  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.14.0"));
+  EXPECT_TRUE(project_pack::ProjectVersionIsSupported("0.15.0"));
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.17.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.9.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.8.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.7.0"));

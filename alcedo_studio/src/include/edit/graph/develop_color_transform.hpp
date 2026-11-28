@@ -142,6 +142,28 @@ void BindRgbWorkingSpaceCameraProfile(DevelopPayload& payload);
 [[nodiscard]] auto ResolveDevelopColorTransform(const DevelopPayload& develop)
     -> ColorTransformResult;
 
+/// Result of @ref ResolveDevelopXyzToCameraD65. @c ok is true only for a finite, invertible matrix.
+struct XyzToCameraResult {
+  bool                  ok    = false;
+  ColorTransformError   error = ColorTransformError::MissingCameraMatrices;
+  /// XYZ to camera RGB (DNG ColorMatrix sense), row-major, column vectors.
+  std::array<double, 9> xyz_to_camera{};
+};
+
+/**
+ * @brief The XYZ→camera matrix of the render of @p develop at D65 (6504 K).
+ *
+ * Takes the steps of @ref ResolveDevelopColorTransform up to the colour matrix: the effective
+ * camera profile (@ref EffectiveCameraProfile), the ColorMatrix endpoints, AnalogBalance and
+ * CameraCalibration of a DNG profile, and the interpolation, at 6504 K instead of the white
+ * balance. The result does not change with the white balance. AI Denoise uses it for the gain
+ * match (issue 1055); it reads no LibRaw matrix.
+ * @return Success, or the error that @ref ResolveDevelopColorTransform reports for the same
+ *         profile.
+ * Thread: CPU, no shared mutable state.
+ */
+[[nodiscard]] auto ResolveDevelopXyzToCameraD65(const DevelopPayload& develop) -> XyzToCameraResult;
+
 [[nodiscard]] auto ColorTransformErrorMessage(ColorTransformError error) -> std::string_view;
 
 /**

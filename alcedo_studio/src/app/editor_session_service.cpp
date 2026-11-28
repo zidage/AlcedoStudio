@@ -16,13 +16,14 @@
 #include <variant>
 
 #include "app/ai_mask_analysis_image.hpp"
+#include "app/browser_preview_render.hpp"
 #include "app/editor_action_policy.hpp"
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_session_edit_controller.hpp"
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_navigation_controller.hpp"
 #include "app/editor_session_render_controller.hpp"
-#include "app/lut_preview_image.hpp"
+#include "app/preset_preview_image.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
@@ -96,6 +97,17 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
   lifecycle_.SetOwnerCheck([this] { return command_queue_.IsOwnerThread(); });
   // Every render intent carries the range probe that the preview publishes (Mask ranges D9).
   render_.SetMaskCoverageProbeSource([this] { return coverage_preview_.State().range_probe; });
+  // The steps of a render (AI Denoise plan, DN14) reach the owner through the queue of the
+  // render results, so a result is handled before the progress of the next render.
+  render_.SetRenderProgressReceiver(
+      [this](ImageLoadRequestId image_load_request, const RenderProgress& progress) {
+        command_queue_.PostCompletion([this, image_load_request, progress] {
+          if (render_.NotifyRenderProgress(image_load_request, progress,
+                                           lifecycle_.active_image_load_request())) {
+            PublishRenderProgressIfChanged();
+          }
+        });
+      });
   // Pacing deadlines are delivered by the session-owner executor itself; a
   // GUI timer is no longer part of the serial schedule.
   default_deadline_handler_ = [this](std::int64_t delay_ns) {
@@ -296,6 +308,15 @@ void EditorSessionService::HandleRenderEvent(const EditorRenderEvent& event) {
     PublishRenderProgressIfChanged();
     return;
   }
+  if (event.kind == EditorRenderEventKind::AiDenoiseErrorChanged) {
+    // No session result: the controller reads ai_denoise_error() at the change notification.
+    if (publication_depth_ != 0) {
+      publication_dirty_ = true;
+    } else {
+      NotifyChange();
+    }
+    return;
+  }
 
   EditorSessionResult result;
   result.operation_id = event.operation_id;
@@ -335,6 +356,7 @@ void EditorSessionService::HandleRenderEvent(const EditorRenderEvent& event) {
       result.message = event.message;
       break;
     case EditorRenderEventKind::BusyChanged:
+    case EditorRenderEventKind::AiDenoiseErrorChanged:
       return;
   }
   result.state    = event.state;
@@ -1862,11 +1884,13 @@ void EditorSessionService::ScheduleDeadlineConsume(std::int64_t delay_ns) {
 }
 
 void EditorSessionService::PublishRenderProgressIfChanged() {
-  const bool busy = render_.render_busy();
-  if (busy == last_published_render_busy_) {
+  const bool busy     = render_.render_busy();
+  auto       progress = render_.render_progress();
+  if (busy == last_published_render_busy_ && progress == last_published_render_progress_) {
     return;
   }
-  last_published_render_busy_ = busy;
+  last_published_render_busy_     = busy;
+  last_published_render_progress_ = std::move(progress);
   NotifyRenderProgress();
 }
 
@@ -2998,85 +3022,139 @@ auto EditorSessionService::RenderAiMaskAnalysisImage(EditorAiMaskAnalysisContent
   return accepted;
 }
 
-auto EditorSessionService::RenderLutPreview(EditorLutPreviewRequest    request,
-                                            EditorLutPreviewCompletion on_complete)
+auto EditorSessionService::RenderLutPreview(EditorLutPreviewRequest        request,
+                                            EditorBrowserPreviewCompletion on_complete)
     -> EditorSessionResult {
   if (!on_complete) {
     return Reject("A LUT preview requires a completion");
   }
   if (!InOwnerReduction()) {
     EditorSessionCommand command;
-    command.kind           = EditorSessionCommandKind::RenderLutPreview;
-    auto shared_request    = std::make_shared<EditorLutPreviewRequest>(std::move(request));
-    auto shared_completion = std::make_shared<EditorLutPreviewCompletion>(std::move(on_complete));
+    command.kind        = EditorSessionCommandKind::RenderLutPreview;
+    auto shared_request = std::make_shared<EditorLutPreviewRequest>(std::move(request));
+    auto shared_completion =
+        std::make_shared<EditorBrowserPreviewCompletion>(std::move(on_complete));
     return SubmitCommand(
         std::move(command), [this, shared_request, shared_completion](const EditorSessionCommand&) {
           return RenderLutPreview(std::move(*shared_request), std::move(*shared_completion));
         });
   }
+  const auto build = [this, &request](const std::shared_ptr<const PipelineGraphSnapshot>& current,
+                                      std::shared_ptr<const PipelineGraphSnapshot>*       preview,
+                                      std::string* /*sensor_key*/, std::string* error) {
+    return dependencies_.history->BuildLutPreviewDocument(lifecycle_.history_guard(), current,
+                                                          request.write, preview, error);
+  };
+  return RenderBrowserPreviewOnOwner(request.image_id, "LUT preview", build,
+                                     std::move(on_complete));
+}
+
+auto EditorSessionService::RenderPresetPreview(EditorPresetPreviewRequest     request,
+                                               EditorBrowserPreviewCompletion on_complete)
+    -> EditorSessionResult {
+  if (!on_complete) {
+    return Reject("A preset preview requires a completion");
+  }
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind        = EditorSessionCommandKind::RenderPresetPreview;
+    auto shared_request = std::make_shared<EditorPresetPreviewRequest>(std::move(request));
+    auto shared_completion =
+        std::make_shared<EditorBrowserPreviewCompletion>(std::move(on_complete));
+    return SubmitCommand(
+        std::move(command), [this, shared_request, shared_completion](const EditorSessionCommand&) {
+          return RenderPresetPreview(std::move(*shared_request), std::move(*shared_completion));
+        });
+  }
+  const auto build = [this, &request](const std::shared_ptr<const PipelineGraphSnapshot>& current,
+                                      std::shared_ptr<const PipelineGraphSnapshot>*       preview,
+                                      std::string* sensor_key, std::string* error) {
+    if (!request.package) {
+      if (error != nullptr) *error = "A preset preview requires a preset package";
+      return false;
+    }
+    // The key of the working document whose sensor settings the preview takes. The caller keys
+    // the result with it: a sensor edit that the owner reduced after the caller computed its own
+    // key is already in this document.
+    *sensor_key = PresetPreviewSensorKey(current->Document());
+    return dependencies_.history->BuildPresetPreviewDocument(lifecycle_.history_guard(), current,
+                                                             *request.package, preview, error);
+  };
+  return RenderBrowserPreviewOnOwner(request.image_id, "preset preview", build,
+                                     std::move(on_complete));
+}
+
+auto EditorSessionService::RenderBrowserPreviewOnOwner(image_id_t image_id, std::string_view noun,
+                                                       const BrowserPreviewDocumentBuilder& build,
+                                                       EditorBrowserPreviewCompletion on_complete)
+    -> EditorSessionResult {
   EditorSessionResult accepted;
   accepted.kind     = EditorSessionResultKind::Accepted;
   accepted.state    = lifecycle_.state();
   accepted.identity = lifecycle_.identity();
-  const auto refuse = [&](EditorLutPreviewStatus status, std::string message) {
+  const std::string name{noun};
+  std::string       sensor_key;
+  const auto        refuse = [&](EditorBrowserPreviewStatus status, std::string message) {
     accepted.message = message;
-    EditorLutPreviewResult refused;
-    refused.status  = status;
-    refused.message = std::move(message);
+    EditorBrowserPreviewResult refused;
+    refused.status     = status;
+    refused.message    = std::move(message);
+    refused.sensor_key = sensor_key;
     on_complete(std::move(refused));
     return accepted;
   };
   if (lifecycle_.state() != EditorSessionState::Interactive || !lifecycle_.has_image()) {
-    return refuse(EditorLutPreviewStatus::Rejected,
-                  "A LUT preview requires an interactive session");
+    return refuse(EditorBrowserPreviewStatus::Rejected,
+                  "A " + name + " requires an interactive session");
   }
   if (!dependencies_.pipeline || !dependencies_.history || !lifecycle_.has_history_guard()) {
-    return refuse(EditorLutPreviewStatus::Rejected, "A LUT preview requires an open image history");
+    return refuse(EditorBrowserPreviewStatus::Rejected,
+                  "A " + name + " requires an open image history");
   }
   if (!dependencies_.images) {
-    return refuse(EditorLutPreviewStatus::Rejected, "Image rendering is not available");
+    return refuse(EditorBrowserPreviewStatus::Rejected, "Image rendering is not available");
   }
   const auto identity = lifecycle_.identity();
-  if (identity.image_id != request.image_id) {
-    return refuse(EditorLutPreviewStatus::Rejected, "The LUT preview belongs to another image");
+  if (identity.image_id != image_id) {
+    return refuse(EditorBrowserPreviewStatus::Rejected,
+                  "The " + name + " belongs to another image");
   }
   auto current = dependencies_.pipeline->CurrentPreview(identity.element_id);
   if (!current) {
-    return refuse(EditorLutPreviewStatus::Rejected,
+    return refuse(EditorBrowserPreviewStatus::Rejected,
                   "The working state of the image is not available");
   }
   std::shared_ptr<const PipelineGraphSnapshot> preview;
   std::string                                  error;
-  if (!dependencies_.history->BuildLutPreviewDocument(lifecycle_.history_guard(), current,
-                                                      request.write, &preview, &error) ||
-      !preview) {
-    return refuse(EditorLutPreviewStatus::Failed,
-                  error.empty() ? "The LUT preview document could not be prepared" : error);
+  if (!build(current, &preview, &sensor_key, &error) || !preview) {
+    return refuse(EditorBrowserPreviewStatus::Failed,
+                  error.empty() ? "The " + name + " document could not be prepared" : error);
   }
 
   EditorImageRenderRequest render;
   render.element_id            = identity.element_id;
   render.image_id              = identity.image_id;
   render.image_load_request_id = lifecycle_.active_image_load_request();
-  render.geometry              = MakeLutPreviewRenderRequest();
-  render.output_color          = LutPreviewOutputColor(preview->Document());
+  render.geometry              = MakeBrowserPreviewRenderRequest();
+  render.output_color          = BrowserPreviewOutputColor(preview->Document());
   render.snapshots             = {std::move(preview)};
   // The port calls the completion only for an accepted job; a refused job keeps it here.
-  auto shared_completion = std::make_shared<EditorLutPreviewCompletion>(std::move(on_complete));
+  auto shared_completion = std::make_shared<EditorBrowserPreviewCompletion>(std::move(on_complete));
   const auto job_id      = dependencies_.images->ScheduleImages(
       std::move(render),
-      [shared_completion](EditorImageRenderResult rendered) {
-        EditorLutPreviewResult result;
-        result.message = std::move(rendered.message);
+      [shared_completion, name, sensor_key](EditorImageRenderResult rendered) {
+        EditorBrowserPreviewResult result;
+        result.message    = std::move(rendered.message);
+        result.sensor_key = sensor_key;
         if (rendered.status == EditorImageRenderStatus::Completed && rendered.images.size() == 1u) {
-          result.status = EditorLutPreviewStatus::Completed;
+          result.status = EditorBrowserPreviewStatus::Completed;
           result.image  = std::move(rendered.images.front());
         } else {
-          result.status = EditorLutPreviewStatus::Failed;
+          result.status = EditorBrowserPreviewStatus::Failed;
           if (result.message.empty()) {
             result.message = rendered.status == EditorImageRenderStatus::Cancelled
-                                      ? "The LUT preview render was cancelled"
-                                      : "The LUT preview render failed";
+                                      ? "The " + name + " render was cancelled"
+                                      : "The " + name + " render failed";
           }
         }
         (*shared_completion)(std::move(result));
@@ -3084,10 +3162,10 @@ auto EditorSessionService::RenderLutPreview(EditorLutPreviewRequest    request,
       &error);
   if (job_id == 0) {
     on_complete = std::move(*shared_completion);
-    return refuse(EditorLutPreviewStatus::Failed,
-                  error.empty() ? "The LUT preview render could not be scheduled" : error);
+    return refuse(EditorBrowserPreviewStatus::Failed,
+                  error.empty() ? "The " + name + " render could not be scheduled" : error);
   }
-  accepted.message = "LUT preview scheduled";
+  accepted.message = "Scheduled the " + name;
   return accepted;
 }
 

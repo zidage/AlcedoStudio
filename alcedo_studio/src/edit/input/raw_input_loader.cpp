@@ -14,11 +14,13 @@
 #include <opencv2/core.hpp>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "decoders/libraw_unpack_guard.hpp"
 #include "decoders/processor/raw_normalization.hpp"
 #include "decoders/processor/raw_rgb_normalization.hpp"
+#include "edit/graph/ai_denoise_model_version.hpp"
 #include "edit/input/detail/prepared_input_finish.hpp"
 #include "edit/input/neural_develop_crop.hpp"
 #include "image/lens_identity_resolver.hpp"
@@ -187,7 +189,8 @@ void FillOutputGeometry(PreparedRawInput& input, DecodeRes decode_res_for_full_r
   const Extent2D     host    = input.host_extent;
 
   if (input.input_kind == RawInputKind::DebayeredRgb ||
-      input.input_kind == RawInputKind::RasterRgb) {
+      input.input_kind == RawInputKind::RasterRgb ||
+      input.input_kind == RawInputKind::DenoisedRgb) {
     const RectI crop            = BuildDecodeCropRect(input.sensor, host, divisor);
     input.demosaic_output_crop  = crop;
     input.develop_output_extent = OrientedExtent(
@@ -453,6 +456,7 @@ auto LinearizationFromLibRaw(LibRaw& raw) -> RawLinearizationParams {
   }
   params.apply_as_shot_wb =
       (raw.imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_APPLIED) == 0 ? 1 : 0;
+  params.libraw_maximum = static_cast<float>(raw.imgdata.rawdata.color.maximum);
   const int tile_width  = raw.imgdata.rawdata.color.cblack[4];
   const int tile_height = raw.imgdata.rawdata.color.cblack[5];
   const int entries     = tile_width * tile_height;
@@ -566,6 +570,10 @@ auto FinishRasterPrepared(PreparedRawInput input, std::uint64_t encoded_hash,
   return input;
 }
 
+auto FullSizeDecodeArea(const RawSensorGeometry& sensor, Extent2D host) -> RectI {
+  return BuildDecodeCropRect(sensor, host, 1);
+}
+
 }  // namespace input_detail
 
 auto PreparedRawInput::CompileSource() const -> DevelopCompileSource {
@@ -574,6 +582,8 @@ auto PreparedRawInput::CompileSource() const -> DevelopCompileSource {
     source.kind = DevelopInputKind::DirectRgb;
   } else if (input_kind == RawInputKind::RasterRgb) {
     source.kind = DevelopInputKind::Raster;
+  } else if (input_kind == RawInputKind::DenoisedRgb) {
+    source.kind = DevelopInputKind::DenoisedRgb;
   } else if (cfa_pattern.kind == RawCfaKind::XTrans6x6) {
     source.kind = DevelopInputKind::XTransCfa;
   } else {
@@ -647,6 +657,50 @@ auto RawInputLoader::FromDirectRgb(HostImagePlane plane, RawSensorGeometry senso
   const auto encoded_hash                     = HashContentBytes(input.pixels.Span());
   const auto encoded_bytes                    = input.pixels.ByteCount();
   return FinishPrepared(std::move(input), DecodeRes::FULL, encoded_hash, encoded_bytes);
+}
+
+auto RawInputLoader::FromDenoisedBayer(const PreparedRawInput& cfa, HostImagePlane denoised,
+                                       std::string_view             model_version,
+                                       const std::array<double, 9>& xyz_to_camera)
+    -> PreparedRawInput {
+  if (cfa.input_kind != RawInputKind::BayerRaw || cfa.cfa_pattern.kind != RawCfaKind::Bayer2x2) {
+    throw std::runtime_error("RawInputLoader::FromDenoisedBayer: a Bayer CFA input is required");
+  }
+  if (cfa.downsample_passes != 0) {
+    throw std::runtime_error("RawInputLoader::FromDenoisedBayer: the CFA input must be full size");
+  }
+  if (!IsAiDenoiseModelVersion(model_version)) {
+    throw std::runtime_error(
+        "RawInputLoader::FromDenoisedBayer: the model version must be 64 lowercase hexadecimal "
+        "digits");
+  }
+  const RectI decode_area = BuildDecodeCropRect(cfa.sensor, cfa.host_extent, 1);
+  if (denoised.format != HostPixelFormat::F32Rgba || !denoised.bytes ||
+      denoised.extent.width != static_cast<std::uint32_t>(decode_area.width) ||
+      denoised.extent.height != static_cast<std::uint32_t>(decode_area.height) ||
+      denoised.stride_bytes != denoised.extent.width * 4U * sizeof(float)) {
+    throw std::runtime_error(
+        "RawInputLoader::FromDenoisedBayer: the denoised plane must be tightly packed F32 RGBA of "
+        "the decode area " +
+        std::to_string(decode_area.width) + "x" + std::to_string(decode_area.height));
+  }
+
+  PreparedRawInput input;
+  input.pixels               = std::move(denoised);
+  input.host_extent          = input.pixels.extent;
+  input.input_kind           = RawInputKind::DenoisedRgb;
+  input.cfa_pattern          = cfa.cfa_pattern;
+  input.linearization        = cfa.linearization;
+  input.rgb_linearization    = raw_norm::BuildDenoisedRgbLinearization(cfa.linearization);
+  input.sensor               = cfa.sensor;
+  input.color_context        = cfa.color_context;
+  input.dng_warp_rectilinear = cfa.dng_warp_rectilinear;
+  CollapseSensorToHost(input.sensor, input.host_extent);
+  auto result =
+      FinishPrepared(std::move(input), DecodeRes::FULL, cfa.source_key.encoded_content_hash,
+                     cfa.source_key.encoded_byte_count);
+  result.source_key.denoise_hash = HashAiDenoiseRun(model_version, xyz_to_camera);
+  return result;
 }
 
 auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes decode_res)

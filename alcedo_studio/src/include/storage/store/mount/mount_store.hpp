@@ -13,7 +13,9 @@
 
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/store/database.hpp"
+#include "storage/store/image/source_file_store.hpp"
 #include "type/mount_records.hpp"
+#include "type/source_file_record.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -32,7 +34,7 @@ namespace alcedo {
  */
 class MountStore {
  public:
-  explicit MountStore(Database& database);
+  MountStore(Database& database, SourceFileStore& sources);
 
   /**
    * @brief Insert the row of a new mount.
@@ -61,6 +63,13 @@ class MountStore {
    * @throws std::runtime_error when no mount has the id.
    */
   void UpdateMountLastScanTime(mount_id_t mount_id, std::time_t last_scan_at);
+
+  /**
+   * @brief Store the display name of the volume of the mount @p mount_id (#1076).
+   * @param volume_name Empty when the volume has no name (stored as NULL).
+   * @throws std::runtime_error when no mount has the id.
+   */
+  void UpdateMountVolumeName(mount_id_t mount_id, const std::string& volume_name);
 
   /**
    * @brief Remove the row of the mount @p mount_id. Elements, links, and source records stay.
@@ -112,6 +121,7 @@ class MountStore {
       -> std::vector<FileLocationRecord>;
 
   Database& database_;
+  SourceFileStore& sources_;
 };
 
 }  // namespace alcedo

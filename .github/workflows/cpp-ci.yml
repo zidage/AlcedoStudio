@@ -40,6 +40,14 @@ jobs:
       - name: Check console output
         run: python3 scripts/check_console_output.py
 
+      - name: Test the std::jthread check
+        run: python3 -m unittest scripts/tests/check_std_jthread_test.py
+
+      # Apple libc++ does not declare std::jthread or std::stop_token under -std=c++20, so a use
+      # builds on Windows and fails the macOS job much later.
+      - name: Check std::jthread
+        run: python3 scripts/check_std_jthread.py
+
   macos-arm-metal:
     name: macOS arm64 Metal
     runs-on: macos-15

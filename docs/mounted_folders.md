@@ -11,28 +11,73 @@ color labels, the Delete mark, and the collection links of each photo.
 The product plan is the [Mounted Folder Plan](roadmap/alcedo_studio/storage/mounted_folder_plan.md).
 The parameters are in the table at the end.
 
+## The Collections panel
+
+Below **All Photos**, the Collections panel has two sections:
+
+- **Collections**: the **Library** row and the ordinary collections below it. The Library row is
+  the library root. You arrange these rows.
+- **Disk**: the mounts, grouped by volume. Each volume has a header row with its name and its
+  mount point (`D:`), or **Offline**; its mounts follow below it. These rows follow the disk.
+
+The parent of a mount is always the library root, so an ordinary collection never holds a mount.
+**All Photos** shows every photo of the project. The **Library** row shows the photos directly in
+the library root, with its collections as tiles above them.
+
 ## Mount a folder
 
-1. In the Collections panel, select **All Photos** or a collection. Click **Import** at the foot
-   of the panel, and choose **Mount Folder...**. You can also right-click the row and choose
-   **Mount Folder Here...**.
+1. In the Collections panel, click **+** on the **Disk** header. You can also click **Import** at
+   the foot of the panel, choose **Import Folder...**, and choose **Mount Folder** in the dialog.
 2. Choose the directory in the system folder dialog.
-3. A collection with the name of the directory appears below the row. Its first scan runs as a
+3. The **Import Folder** dialog opens with **Mount Folder** selected. It shows the photo count,
+   the subfolder count, and the volume of the directory. Click **Mount N photos**.
+4. The mount appears in the Disk section, below the row of its volume. Its first scan runs as a
    background task, and the photos appear while the scan imports them.
 
-**Mount Folder...** and the two import items above it in the **Import** menu all keep the
-files where they are. The difference is who owns the structure:
+## Import or mount
 
-- **Mount Folder...** mounts the directory: its subdirectories are collections, and the collection
-  follows the disk.
-- **Import Images...** and **Import Folder...** put the photos into the selected collection once. The
-  photos are then yours to arrange, and later changes on the disk do not reach the library.
+The **Import** menu at the foot of the panel has two items:
 
-While a mounted row is selected, the three items are disabled: a mount cannot hold another
-mount or imported photos.
+- **Import Images...** imports the files that you choose into the selected collection.
+- **Import Folder...** opens the **Import Folder** dialog after the system folder dialog.
 
-Each mount has its own directory tree, separate from the trees of the other mounts. The parent
-row of a new mount is an ordinary collection or the library root.
+Both choices of the dialog keep the files where they are. The difference is who owns the
+structure:
+
+| Choice | Arrange freely | Sync folder structure |
+| --- | --- | --- |
+| **Import into Collection** | Yes | No |
+| **Mount Folder** | No | Yes |
+
+- **Import into Collection** puts the photos into the collection that you pick in the tree once.
+  The photos are then yours to arrange, and later changes on the disk do not reach the library.
+  The type chips of the count line choose the file types. **Search collections** filters the
+  tree, and **New collection** adds a collection inside the picked one.
+- **Mount Folder** mounts the directory: its subdirectories are collections, and the collection
+  follows the disk. The dialog shows the volume of the mount.
+
+**Remember my choice** stores the choice as the default action of Import Folder (Settings,
+Default Behavior, Import). With a stored choice, **Import Folder...** runs it after the system
+folder dialog:
+
+- Import imports into the selected collection, with the file types of the last dialog. While **All Photos** or a
+  mounted row is selected, the photos go into **Library**.
+- Mount mounts the directory.
+
+The **+** of the Disk header always mounts. **Ask every time** in Settings shows the dialog again.
+
+A folder that you drop on the grid or on a collection row opens the dialog with that collection
+as the destination. While a mounted row is selected, **Import Images...** is disabled: a mount
+cannot hold imported photos.
+
+When a volume without a mount arrives, for example a camera card, a card at the top of the Disk
+section shows its name, its mount point, and `DCIM` when the volume holds one. **Import...** and
+**Mount...** open the Import Folder dialog for the `DCIM` directory, or the system folder dialog
+at the root of the volume.
+
+Each mount has its own directory tree, separate from the trees of the other mounts.
+Alcedo Studio records the display name of the volume of each mount when you mount the folder and
+at each scan that reaches the volume. An offline mount keeps the last recorded name.
 
 The root row of a mount shows a folder icon with an arrow; the folders below it show the folder
 icon. The count of a mounted row counts its present and missing photos, in the folder and in all folders below it, as for every collection. The
@@ -108,6 +153,13 @@ color labels, and Delete mark stay editable, and its edits stay.
   from the project, with their edit history and Versions, after you confirm the count. This is
   the only way that a mounted photo leaves the project.
 
+## Photos of the library root
+
+The **Library** row lists the photos that no collection holds. Its count counts those photos and
+the photos of the ordinary collections. A mounted photo counts there only when you added it to an
+ordinary collection. **All Photos** lists and counts every photo of the project, the mounted
+photos included.
+
 ## Rules for mounted collections
 
 - **New Collection**, **Rename**, **Delete collection**, and dragging apply to ordinary rows; a
@@ -138,4 +190,5 @@ describes them.
 | Watcher delay | Time after the last change notification of a mount before its scan starts | 5 s | Plan, section 14 |
 | Fingerprint block | Bytes that the fingerprint reads at the start and at the end of a file | 128 KiB each | Plan, section 14 |
 | New file batch | New files that one stored batch of a scan imports | 500 | Plan, section 14 |
+| Import Folder action | Default action of Import Folder: `ask`, `import`, or `mount` | `ask` | Preference `library/importFolderAction` |
 | Volume identity | Identity of the volume that holds the directory: the volume GUID path (Windows), the volume UUID (macOS), or the file system UUID (Linux); `\\server\share` for a network share | Read when the mount is created or located | `ReadVolumeIdentity` |

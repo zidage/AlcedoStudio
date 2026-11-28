@@ -19,6 +19,7 @@
 #include "decoded_rgb_test_support.hpp"
 #include "decoders/processor/nn/demosaicnet_cache.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess_common.hpp"
+#include "denoised_rgb_test_support.hpp"
 #include "dng_profile_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
@@ -145,6 +146,19 @@ TEST_F(CudaDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquival
 
 TEST_F(CudaDevelopFixture, RgbDngWarpProducesFinalSensorImageAndReusesPublishedCache) {
   gpu_dag_test::VerifyRgbWarpPublishes<CudaRenderDevice>();
+}
+
+TEST_F(CudaDevelopFixture, DenoisedPlaneBecomesTheSensorImageWithTheCfaClamp) {
+  gpu_dag_test::VerifyDenoisedPlaneBecomesTheSensorImageWithTheCfaClamp<CudaRenderDevice>();
+}
+
+TEST_F(CudaDevelopFixture, FullSizeRenderWithTheSwitchOnAndACfaInputReportsTheError) {
+  gpu_dag_test::VerifyFullSizeRenderWithTheSwitchOnAndACfaInputReportsTheError<CudaRenderDevice>();
+}
+
+TEST_F(CudaDevelopFixture, DenoisedExpectedCropKeepsTheLevelsAndLowersTheNoiseOfTheCfaRender) {
+  gpu_dag_test::VerifyDenoisedExpectedCropKeepsTheLevelsAndLowersTheNoiseOfTheCfaRender<
+      CudaRenderDevice>();
 }
 
 TEST_F(CudaDevelopFixture, EnabledLensVignettingChangesDevelopSensorPixels) {

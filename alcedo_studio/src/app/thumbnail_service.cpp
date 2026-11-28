@@ -161,6 +161,12 @@ struct RenditionRequest {
   image_id_t                image_id   = 0;
   ThumbnailResolution       resolution = ThumbnailResolution::k1024;
   std::function<bool()>     canceled;
+  /// A preview render (ThumbnailService::RenderPreview): builds the rendered document from the
+  /// committed snapshot. Empty for a thumbnail, which renders the committed snapshot itself.
+  std::function<ThumbnailPreviewDocument(const std::shared_ptr<const PipelineGraphSnapshot>&)>
+                                          build_document;
+  /// Output encoding of the render; set by the lookup stage of a preview render only.
+  std::optional<ExportColorProfileConfig> output_color;
   /// Takes the RGBA8 display buffer and the output encoding of its pixels. Returns the guard that
   /// now owns it, or null when the requester no longer wants it; only an owned buffer is written
   /// to the disk cache.
@@ -214,6 +220,24 @@ auto ThumbnailEncodingOf(const PipelineGraphSnapshot& snapshot) -> ViewerDisplay
   }
   return {};
 }
+
+namespace {
+
+/// Output encoding of a render of @p snapshot with @p output_color: the rule of the renderer.
+auto RenditionEncodingOf(const PipelineGraphSnapshot&                   snapshot,
+                         const std::optional<ExportColorProfileConfig>& output_color)
+    -> ViewerDisplayConfig {
+  if (!output_color.has_value()) {
+    return ThumbnailEncodingOf(snapshot);
+  }
+  ViewerDisplayConfig encoding{};
+  encoding.encoding_space = output_color->encoding_space;
+  encoding.encoding_eotf  = output_color->encoding_eotf;
+  encoding.peak_luminance = output_color->peak_luminance;
+  return encoding;
+}
+
+}  // namespace
 
 struct ThumbnailService::State {
   static constexpr size_t default_cache_size_ = 64;
@@ -411,6 +435,27 @@ void ThumbnailService::State::LookUpRendition(const std::shared_ptr<State>&     
     return;
   }
 
+  if (request->build_document) {
+    // A preview render: the caller document of the photo, with no disk cache read or write.
+    ThumbnailPreviewDocument preview;
+    try {
+      preview = request->build_document(snapshot);
+    } catch (const std::exception& e) {
+      request->Fail(ThumbnailRequestStatus::kError, e.what());
+      return;
+    }
+    if (!preview.snapshot) {
+      request->Fail(ThumbnailRequestStatus::kError,
+                    std::format("[ERROR] ThumbnailService: the preview of element {} has no "
+                                "document.",
+                                request->element_id));
+      return;
+    }
+    request->output_color = std::move(preview.output_color);
+    DecodeRenditionSource(st, request, std::move(preview.snapshot), std::nullopt);
+    return;
+  }
+
   const auto disk_key = st->BuildDiskCacheKey(*snapshot, request->resolution);
   if (disk_key.has_value()) {
     auto disk_buffer = st->disk_cache_service_->Read(*disk_key);
@@ -500,7 +545,8 @@ void ThumbnailService::State::ScheduleRenditionRender(
   task.options_.is_callback_              = true;
   task.options_.is_seq_callback_          = false;
   task.cancel_requested_                  = [request] { return request->IsCanceled(); };
-  const ViewerDisplayConfig encoding      = ThumbnailEncodingOf(*snapshot);
+  task.options_.export_output_color_      = request->output_color;
+  const ViewerDisplayConfig encoding      = RenditionEncodingOf(*snapshot, request->output_color);
   task.snapshot_                          = std::move(snapshot);
   task.prepared_input_                    = std::move(source);
 
@@ -713,6 +759,50 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
   };
 
   State::StartRendition(st, std::move(request));
+}
+
+void ThumbnailService::RenderPreview(ThumbnailPreviewRequest request) {
+  auto st = state_;
+  if (!st || !st->image_pool_service_ || !st->pipeline_service_) {
+    throw std::runtime_error("[ERROR] ThumbnailService: Services not initialized.");
+  }
+  if (!request.build_document || !request.on_complete) {
+    throw std::invalid_argument(
+        "[ERROR] ThumbnailService: a preview render needs a document builder and a completion.");
+  }
+
+  auto rendition            = std::make_shared<RenditionRequest>();
+  rendition->element_id     = request.element_id;
+  rendition->image_id       = request.image_id;
+  rendition->resolution     = request.resolution;
+  rendition->build_document = std::move(request.build_document);
+  auto on_complete =
+      std::make_shared<std::function<void(ThumbnailPreviewResult)>>(std::move(request.on_complete));
+  // The pixels go to the caller only: no guard is returned, so nothing enters the memory cache,
+  // and the request has no disk cache key.
+  rendition->on_pixels =
+      [on_complete](std::unique_ptr<ImageBuffer> pixels,
+                    const ViewerDisplayConfig&   encoding) -> std::shared_ptr<ThumbnailGuard> {
+    ThumbnailPreviewResult result;
+    result.status   = ThumbnailRequestStatus::kReady;
+    result.pixels   = std::shared_ptr<ImageBuffer>(std::move(pixels));
+    result.encoding = encoding;
+    try {
+      (*on_complete)(std::move(result));
+    } catch (...) {
+    }
+    return nullptr;
+  };
+  rendition->on_failure = [on_complete](ThumbnailRequestStatus status, std::string message) {
+    ThumbnailPreviewResult result;
+    result.status  = status;
+    result.message = std::move(message);
+    try {
+      (*on_complete)(std::move(result));
+    } catch (...) {
+    }
+  };
+  State::StartRendition(st, std::move(rendition));
 }
 
 void ThumbnailService::CancelPending(const ThumbnailCacheKey& key) {

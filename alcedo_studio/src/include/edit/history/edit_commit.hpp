@@ -5,6 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <exception>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -25,10 +28,16 @@ struct EditCommitAccess;
  *
  * All commits are first-parent commits whose payload is a canonical PipelineEditBatch.
  * Root-child commits have nullopt first_parent_hash.
+ *
+ * Every factory establishes the identity of the commit: the commit hash is the hash of
+ * @ref CanonicalHashInput. The payload is kept as its canonical text, the exact bytes of the hash
+ * input. A commit read from storage (@ref FromStoredRow) is checked against its hash on that text
+ * and parses and validates the payload on the first @ref GetPayloadJSON, so a reader of the graph
+ * pays only for the payloads that it uses. Copies share the payload.
  */
 class EditCommit {
  public:
-  EditCommit() = default;
+  EditCommit();
 
   /**
    * @brief Create a first-parent commit whose payload is a typed batch.
@@ -45,7 +54,16 @@ class EditCommit {
   auto        GetRootId() const -> root_id_t { return root_id_; }
   auto        GetFirstParentHash() const -> head_commit_hash_t { return first_parent_hash_; }
   auto        GetCreatedAtNs() const -> std::uint64_t { return created_at_ns_; }
-  auto        GetPayloadJSON() const -> const nlohmann::json& { return edit_payload_; }
+
+  /**
+   * @brief The payload, a validated PipelineEditBatch JSON object.
+   * @throws std::runtime_error when a payload read from storage is not a valid batch. The
+   *         first call parses and validates; later calls return the same value or error.
+   */
+  auto        GetPayloadJSON() const -> const nlohmann::json&;
+
+  /// Canonical text of the payload: the bytes that the commit hash covers and storage keeps.
+  auto        GetPayloadText() const -> const std::string& { return payload_->text; }
 
   /// Host-endianness-independent hash input bytes for this commit object.
   auto CanonicalHashInput() const -> std::vector<std::uint8_t>;
@@ -58,18 +76,40 @@ class EditCommit {
   auto ToJSON() const -> nlohmann::json;
   static auto FromJSON(const nlohmann::json& j) -> EditCommit;
 
+  /**
+   * @brief Rebuild a commit from the columns of its stored row.
+   *
+   * Checks @p commit_hash against the hash of the stored fields and @p payload_text, without
+   * parsing the payload. The payload is parsed and validated on the first GetPayloadJSON.
+   * @throws std::runtime_error when the hash does not match the stored fields.
+   */
+  static auto FromStoredRow(commit_hash_t commit_hash, root_id_t root_id,
+                            head_commit_hash_t first_parent, std::uint64_t created_at_ns,
+                            std::string payload_text) -> EditCommit;
+
  private:
   friend struct edit_history_test::EditCommitAccess;
+
+  /// Payload text and its parsed value; shared by the copies of one commit.
+  struct Payload {
+    std::string                text;
+    mutable std::once_flag     parsed_once;
+    mutable nlohmann::json     json;
+    mutable std::exception_ptr parse_error;
+  };
 
   static auto MakePipelineEditAtTimestamp(root_id_t root_id, head_commit_hash_t first_parent,
                                           std::uint64_t created_at_ns, PipelineEditBatch payload)
       -> EditCommit;
 
+  /// A payload whose @p json the caller has validated (or the empty object of a default commit).
+  static auto        ValidatedPayload(nlohmann::json json) -> std::shared_ptr<const Payload>;
+
   commit_hash_t      commit_hash_{};
   root_id_t          root_id_{};
   head_commit_hash_t first_parent_hash_ = std::nullopt;
   std::uint64_t      created_at_ns_     = 0;
-  nlohmann::json     edit_payload_      = nlohmann::json::object();
+  std::shared_ptr<const Payload> payload_;
 };
 
 /**

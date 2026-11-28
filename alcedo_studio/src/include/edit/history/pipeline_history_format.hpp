@@ -33,13 +33,18 @@ namespace alcedo {
  * open. Readers through 0.11.0 reject 0.12.0 before writing Element rows. An image root id does
  * not depend on the Element row and stays unchanged.
  *
- * Project metadata 0.13.0 adds the project-wide PhotoStack and PhotoStackMember tables.
- * Projects from 0.10.0 through 0.12.0 gain empty stack tables. The next save writes 0.13.0,
- * which older readers reject before writing project data. Image-edit identities stay unchanged.
+ * The photo-stacking branch first wrote project metadata 0.13.0 with the PhotoStack and
+ * PhotoStackMember tables. Project metadata 0.15.0 allows files in one folder, including the
+ * library root, to share a name. An older build indexes each file by name and rejects 0.15.0
+ * before loading duplicate names.
+ *
+ * Project metadata 0.16.0 combines both changes. Supported projects without stack tables gain
+ * empty tables on open, and the next save writes 0.16.0. Builds through 0.15.0 reject it before
+ * writing project data. Image-edit identities stay unchanged.
  *
  * | Identity | Constant | Value |
  * | --- | --- | --- |
- * | Project metadata | @ref kProjectFileVersion | 0.13.0 |
+ * | Project metadata | @ref kProjectFileVersion | 0.16.0 |
  * | Packed project header | @ref kPackedProjectFormatVersion | 7 |
  * | Pipeline document JSON | @ref kPipelineDocumentFormatVersion | 7 |
  * | Image edit schema | @ref kImageEditSchemaVersion | 5 |
@@ -53,8 +58,9 @@ namespace alcedo {
  */
 
 /// Project metadata version written by SaveProject and required on open.
-inline constexpr std::string_view kProjectFileVersion = "0.13.0";
-/// Inclusive lower bound: 0.10.0 opens and gains marks, mount records, and stack tables.
+inline constexpr std::string_view kProjectFileVersion = "0.16.0";
+/// Inclusive lower bound of accepted project metadata: 0.10.0 opens and gains the mark columns
+/// the mounted folder records, and stack tables.
 inline constexpr std::string_view kMinSupportedProjectFileVersion = "0.10.0";
 /// Inclusive upper bound of accepted project metadata. Equals @ref kProjectFileVersion.
 inline constexpr std::string_view kMaxSupportedProjectFileVersion = kProjectFileVersion;

@@ -104,6 +104,7 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
   }
   request.cancel_requested = cancel_requested_;
   request.prepared_input   = prepared_input_;
+  request.progress         = render_progress_;
   auto&      desc          = options_.render_desc_;
   const auto requested_render_type        = desc.render_type_;
 
@@ -176,6 +177,7 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     quality.sink             = pipeline_executor_->GetFrameSink();
     quality.cancel_requested = request.cancel_requested;
     quality.prepared_input   = request.prepared_input;
+    quality.progress         = request.progress;
     // A settled frame carries the Mask coverage probe like an interactive frame does, so the
     // coverage follows the committed document and "Show selection" presents without a drag.
     if (desc.mask_coverage_probe_.has_value() && desc.mask_coverage_sink_ != nullptr) {
@@ -199,7 +201,10 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     return request;
   }
   if (requested_render_type == RenderType::THUMBNAIL) {
-    presentation_mode = FramePresentationMode::ViewportTransformed;
+    presentation_mode    = FramePresentationMode::ViewportTransformed;
+    // Empty for a thumbnail; a preview render of a library photo (ThumbnailService::RenderPreview)
+    // sets the SDR encoding of a browser tile for an HDR document.
+    request.output_color = options_.export_output_color_;
     finish(desc.decode_res_, true, ExecutorRole::Batch,
            static_cast<int>(desc.max_edge_), false, std::nullopt);
     return request;

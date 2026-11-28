@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
 #include "decoders/dng_default_crop.hpp"
 #include "decoders/processor/raw_color_context.hpp"
@@ -27,13 +29,27 @@ inline constexpr std::uint32_t kRawInputPreparationVersion = 7;
 /**
  * @brief FNV-1a 64-bit hash of opaque bytes. Used for encoded-source identity, not pixels.
  */
-[[nodiscard]] inline auto      HashContentBytes(std::span<const std::byte> bytes) -> std::uint64_t {
-  std::uint64_t hash = 14695981039346656037ull;
+[[nodiscard]] inline auto      HashContentBytes(std::span<const std::byte> bytes,
+                                                std::uint64_t hash = 14695981039346656037ull)
+    -> std::uint64_t {
   for (const auto byte : bytes) {
     hash ^= static_cast<std::uint8_t>(byte);
     hash *= 1099511628211ull;
   }
   return hash;
+}
+
+/**
+ * @brief PreparedSourceKey::denoise_hash of an AI Denoise run: the hash of the model version text
+ *        and of the camera matrix of the gain match (@p xyz_to_camera, issue 1055). Never 0.
+ */
+[[nodiscard]] inline auto HashAiDenoiseRun(std::string_view             model_version,
+                                           const std::array<double, 9>& xyz_to_camera)
+    -> std::uint64_t {
+  auto hash =
+      HashContentBytes(std::as_bytes(std::span(model_version.data(), model_version.size())));
+  hash = HashContentBytes(std::as_bytes(std::span(xyz_to_camera)), hash);
+  return hash == 0 ? 1 : hash;
 }
 
 enum class HostPixelFormat : std::uint8_t {
@@ -110,13 +126,16 @@ struct PreparedSourceLookup {
   std::uint64_t encoded_byte_count   = 0;
   std::uint8_t  downsample_passes    = 0;
   std::uint32_t preparation_version  = kRawInputPreparationVersion;
+  /// The AI Denoise entry of the source (HashAiDenoiseRun of the installed model version and the
+  /// camera matrix of the gain match); 0 for the unpacked entry.
+  std::uint64_t denoise_hash         = 0;
 };
 
 inline auto operator==(const PreparedSourceLookup& a, const PreparedSourceLookup& b) -> bool {
   return a.encoded_content_hash == b.encoded_content_hash &&
          a.encoded_byte_count == b.encoded_byte_count &&
          a.downsample_passes == b.downsample_passes &&
-         a.preparation_version == b.preparation_version;
+         a.preparation_version == b.preparation_version && a.denoise_hash == b.denoise_hash;
 }
 
 inline auto operator<(const PreparedSourceLookup& a, const PreparedSourceLookup& b) -> bool {
@@ -129,7 +148,10 @@ inline auto operator<(const PreparedSourceLookup& a, const PreparedSourceLookup&
   if (a.downsample_passes != b.downsample_passes) {
     return a.downsample_passes < b.downsample_passes;
   }
-  return a.preparation_version < b.preparation_version;
+  if (a.preparation_version != b.preparation_version) {
+    return a.preparation_version < b.preparation_version;
+  }
+  return a.denoise_hash < b.denoise_hash;
 }
 
 /**
@@ -145,10 +167,14 @@ struct PreparedSourceKey {
   RectI              sensor_active_area{};
   std::int32_t       orientation_flip    = 0;
   std::uint32_t      preparation_version = kRawInputPreparationVersion;
+  /// RawInputKind::DenoisedRgb only: the hash of the AI Denoise run that made the pixels, its
+  /// model version and the camera matrix of its gain match (HashAiDenoiseRun). 0 for every other
+  /// input.
+  std::uint64_t      denoise_hash        = 0;
 
   [[nodiscard]] auto Lookup() const -> PreparedSourceLookup {
     return PreparedSourceLookup{encoded_content_hash, encoded_byte_count, downsample_passes,
-                                preparation_version};
+                                preparation_version, denoise_hash};
   }
 };
 
@@ -158,7 +184,7 @@ inline auto operator==(const PreparedSourceKey& a, const PreparedSourceKey& b) -
          a.cfa_hash == b.cfa_hash && a.dng_warp_hash == b.dng_warp_hash &&
          a.downsample_passes == b.downsample_passes &&
          a.sensor_active_area == b.sensor_active_area && a.orientation_flip == b.orientation_flip &&
-         a.preparation_version == b.preparation_version;
+         a.preparation_version == b.preparation_version && a.denoise_hash == b.denoise_hash;
 }
 
 /**

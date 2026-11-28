@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Alcedo.Main 1.0
+import "FileDrop.js" as FileDrop
 
 // Named Version refs and their stable graph identities. This panel is kept
 // independent from the transaction timeline so each rail destination owns its
@@ -10,10 +11,20 @@ import Alcedo.Main 1.0
 // Naming is inline (Enter commits, Escape cancels, focus-loss commits only
 // non-empty changed text). Create / branch use a draft row under the Versions
 // header; rename edits the card title in place. There is no modal naming
-// dialog. Active selection is outline-only; removal uses a labeled trash
-// action, never a stop-playback glyph.
+// dialog. Active selection is outline-only. A right click on a card opens its menu:
+// Rename, Export Version (a preset file at a path from the system save dialog), and
+// Remove.
 //
 // List scroll is restorable from the rail across Loader teardown (Phase 7A R6).
+//
+// Presets (edit presets plan 2.1 and 2.2): the preset part sits above the Versions
+// part, with a splitter whose height PresetController stores. A drag of a Version
+// row onto the preset part saves a preset; a drag of a preset tile onto the Versions
+// list applies it as a new Version. Escape cancels the drag; a drop outside the
+// accepting part does nothing. A .alcpreset file dropped on the Versions list is
+// applied one time. A drop guide (DropGuideOverlay) shows where a drop goes: on the
+// Versions list while a preset is selected or dragged, on the preset part while a
+// Version is dragged.
 Item {
     id: root
     objectName: "editorVersionsPageBody"
@@ -23,6 +34,12 @@ Item {
     property var historyModel: null
     // AdjustmentTransferController: pastes the copied adjustments as a new Version.
     property var adjustmentTransfer: null
+    // PresetController: the preset part and its commands.
+    property var presets: typeof appModules !== "undefined" && appModules
+                          ? appModules.presets : null
+    // PresetPreviewController: the preset tile previews of the open photo.
+    property var presetPreview: typeof appModules !== "undefined" && appModules
+                                ? appModules.presetPreview : null
     property bool versionCheckoutEnabled: true
     property string versionCheckoutDisabledReason: ""
     // EditorComparisonController; the header Compare action opens Version comparison.
@@ -69,7 +86,7 @@ Item {
     readonly property bool canMutateVersions: root.versionCheckoutEnabled && root.editorSession
                                               && root.editorSession.actions.canCheckoutVersion
                                               && !root.draftSubmitPending
-    // Same gate as editorForkFromRootButton: the Ctrl+A command shares the
+    // Same condition as editorForkFromRootButton: the Ctrl+A command shares the
     // fork-from-root action's availability so a disabled action never consumes
     // the key.
     readonly property bool canCreateDefaultRootVersion:
@@ -77,9 +94,114 @@ Item {
         && root.editorSession.actions.canCreateRootVersion
     readonly property real listContentY: versionList ? versionList.contentY : 0
 
+    // Presets: an apply makes a Version of the open photo; a save reads one of its Versions.
+    readonly property bool canApplyPresets: !!root.presets && root.versionCheckoutEnabled
+                                            && !!root.editorSession && root.editorSession.hasImage
+    readonly property bool canSavePresets: !!root.presets && !!root.editorSession
+                                           && root.editorSession.hasImage
+    readonly property real presetsMinHeight: presetsSection.headerHeight
+    readonly property real presetsMaxHeight:
+        Math.max(root.presetsMinHeight, root.height - appTheme.spaceLg * 2 - splitter.height
+                                        - appTheme.editorVersionsPartMinHeight)
+    readonly property real presetsHeight: {
+        const stored = root.presets ? Number(root.presets.browserHeight || 0) : 0
+        const wanted = stored > 0 ? stored : appTheme.editorPresetPaneHeight
+        return Math.max(root.presetsMinHeight, Math.min(root.presetsMaxHeight, wanted))
+    }
+
+    // Drag between the two parts: "version" (save a preset) or "preset" (apply it).
+    property string dragKind: ""
+    property string dragId: ""
+    property string dragName: ""
+    property point dragPoint: Qt.point(0, 0)
+    readonly property bool dragOverPresets: root.dragKind === "version"
+                                            && root.pointInside(presetsSection, root.dragPoint)
+    readonly property bool dragOverVersions: root.dragKind === "preset"
+                                             && root.pointInside(versionsListWell, root.dragPoint)
+
+    // Drop guide of the Versions list: a selected preset shows its band until an apply
+    // of that preset succeeds; a preset drag shows it until the drop. A Version drag
+    // shows the band of the preset part instead.
+    readonly property string selectedPresetId: presetsSection.browser.selectedPresetId
+    property string dropGuideDismissedPresetId: ""
+    readonly property bool versionsDropGuideShown:
+        root.canApplyPresets
+        && (root.dragKind === "preset"
+            || (root.dragKind.length === 0 && root.selectedPresetId.length > 0
+                && root.selectedPresetId !== root.dropGuideDismissedPresetId))
+    onSelectedPresetIdChanged: root.dropGuideDismissedPresetId = ""
+
+    function pointInside(item, point) {
+        const local = item.mapFromItem(root, point.x, point.y)
+        return local.x >= 0 && local.y >= 0 && local.x < item.width && local.y < item.height
+    }
+
+    function beginDrag(kind, id, name, sceneX, sceneY) {
+        root.dragKind = kind
+        root.dragId = id
+        root.dragName = name
+        root.forceActiveFocus()
+        root.moveDrag(sceneX, sceneY)
+    }
+
+    function moveDrag(sceneX, sceneY) {
+        if (root.dragKind.length > 0)
+            root.dragPoint = root.mapFromItem(null, sceneX, sceneY)
+    }
+
+    function finishDrag(sceneX, sceneY) {
+        if (root.dragKind.length === 0)
+            return
+        root.moveDrag(sceneX, sceneY)
+        const kind = root.dragKind
+        const id = root.dragId
+        const savePreset = root.dragOverPresets
+        const applyPreset = root.dragOverVersions
+        root.cancelDrag()
+        if (kind === "version" && savePreset)
+            root.saveVersionAsPreset(id)
+        else if (kind === "preset" && applyPreset)
+            root.applyPreset(id)
+    }
+
+    function cancelDrag() {
+        root.dragKind = ""
+        root.dragId = ""
+        root.dragName = ""
+    }
+
+    function saveVersionAsPreset(versionId) {
+        if (root.canSavePresets)
+            presetsSection.reportSave(root.presets.SaveVersionAsPreset(versionId))
+    }
+
+    function applyPreset(presetId) {
+        if (!root.canApplyPresets)
+            return
+        root.captureListScroll()
+        const result = root.presets.ApplyToEditor(presetId)
+        presetsSection.report(result)
+        if (result && result.success === true)
+            root.dropGuideDismissedPresetId = presetId
+        root.restoreListScroll()
+    }
+
+    function applyPresetFile(url) {
+        if (!root.canApplyPresets)
+            return
+        root.captureListScroll()
+        presetsSection.report(root.presets.ApplyFileToEditor(url))
+        root.restoreListScroll()
+    }
+
     focus: true
 
     Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Escape && root.dragKind.length > 0) {
+            root.cancelDrag()
+            event.accepted = true
+            return
+        }
         if (ShortcutRegistry.commandIdForKey("editor.versions", event.key,
                                              event.modifiers)
                 === "versions.createDefaultFromRoot"
@@ -250,7 +372,7 @@ Item {
         var terminal = result.terminal === true
         // SaveStarted = 4. Hide the naming row while the checkpoint runs, but
         // keep draftSubmitPending until a terminal event or model success so
-        // duplicate submits stay blocked. Version checkout remains gated by the
+        // duplicate submits stay blocked. Version checkout stays blocked by the
         // save-checkpoint lease until the backend releases it.
         if (!terminal && kind === 4) {
             if (result.operationId !== undefined)
@@ -331,7 +453,7 @@ Item {
     }
 
     // Direct create with the same default-name calculation as the inline
-    // forkRoot draft; skips the naming row. Caller gates on
+    // forkRoot draft; skips the naming row. The caller checks
     // canCreateDefaultRootVersion.
     function createDefaultRootVersion() {
         if (!root.historyModel)
@@ -356,6 +478,21 @@ Item {
         root.captureListScroll()
         root.historyModel.removeVersion(versionId)
         root.restoreListScroll()
+    }
+
+    // Export Version: the system save dialog, then the Version as a preset file (#1124).
+    // A failure shows in the error badge of the preset part.
+    function exportVersion(versionId) {
+        if (root.canSavePresets)
+            presetsSection.report(root.presets.ExportVersion(versionId))
+    }
+
+    function openVersionMenu(versionId, displayName, active, sceneX, sceneY) {
+        versionMenu.versionId = versionId
+        versionMenu.displayName = displayName
+        versionMenu.versionActive = active
+        versionMenu.parent = Overlay.overlay
+        versionMenu.openAt(sceneX, sceneY)
     }
 
     Timer {
@@ -430,9 +567,156 @@ Item {
         }
     }
 
+    EditorPresetsSection {
+        id: presetsSection
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.leftMargin: appTheme.spaceLg
+        anchors.rightMargin: appTheme.spaceLg
+        anchors.topMargin: appTheme.spaceLg
+        height: root.presetsHeight
+        clip: true
+        presets: root.presets
+        presetPreview: root.presetPreview
+        canApply: root.canApplyPresets
+        versionDropHighlight: root.dragOverPresets
+        versionDragActive: root.dragKind === "version" && root.canSavePresets
+        versionDragName: root.dragKind === "version" ? root.dragName : ""
+        onApplyRequested: function (presetId) { root.applyPreset(presetId) }
+        onApplyFileRequested: function (url) { root.applyPresetFile(url) }
+        onPresetDragStarted: function (presetId, name, sceneX, sceneY) {
+            if (root.canApplyPresets)
+                root.beginDrag("preset", presetId, name, sceneX, sceneY)
+        }
+        onPresetDragMoved: function (sceneX, sceneY) { root.moveDrag(sceneX, sceneY) }
+        onPresetDragFinished: function (sceneX, sceneY) { root.finishDrag(sceneX, sceneY) }
+    }
+
+    // Splitter between the two parts. A drag sets the preset part height (stored by
+    // PresetController); the preset part can shrink to its header. Double click
+    // restores the default height.
+    Item {
+        id: splitter
+        objectName: "editorPresetsSplitter"
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: presetsSection.bottom
+        height: appTheme.spaceMd
+        property real startHeight: 0
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: parent.width - appTheme.spaceLg * 2
+            height: 1
+            color: splitterHover.hovered || splitterDrag.active ? appTheme.textMutedColor
+                                                                : appTheme.cardBorderColor
+        }
+
+        HoverHandler {
+            id: splitterHover
+            cursorShape: Qt.SizeVerCursor
+        }
+
+        DragHandler {
+            id: splitterDrag
+            target: null
+            xAxis.enabled: false
+            cursorShape: Qt.SizeVerCursor
+            onActiveChanged: {
+                if (active)
+                    splitter.startHeight = root.presetsHeight
+            }
+            onTranslationChanged: {
+                if (active && root.presets)
+                    root.presets.browserHeight = Math.max(
+                        root.presetsMinHeight,
+                        Math.min(root.presetsMaxHeight, splitter.startHeight + translation.y))
+            }
+        }
+
+        TapHandler {
+            onDoubleTapped: {
+                if (root.presets)
+                    root.presets.browserHeight = appTheme.editorPresetPaneHeight
+            }
+        }
+    }
+
+    // Right click on a Version card. Rename and Export start when the menu has closed: on
+    // close the menu gives the focus back to the item that had it before, which would end an
+    // inline rename at once, and the save dialog must not open under a closing menu.
+    AppContextMenu {
+        id: versionMenu
+        objectName: "editorVersionMenu"
+        property string versionId: ""
+        property string displayName: ""
+        property bool versionActive: false
+        property string actionAfterClose: ""
+        onClosed: {
+            const action = actionAfterClose
+            actionAfterClose = ""
+            if (action === "rename")
+                root.openRenameVersion(versionId, displayName)
+            else if (action === "export")
+                root.exportVersion(versionId)
+        }
+        AppMenuItem {
+            objectName: "editorVersionMenuRenameItem"
+            text: qsTr("Rename Version")
+            enabled: root.canMutateVersions && root.editorSession.actions.canRenameVersion
+            onTriggered: versionMenu.actionAfterClose = "rename"
+        }
+        AppMenuItem {
+            objectName: "editorVersionMenuExportItem"
+            text: qsTr("Export Version...")
+            enabled: root.canSavePresets
+            onTriggered: versionMenu.actionAfterClose = "export"
+        }
+        AppMenuItem {
+            objectName: "editorVersionMenuRemoveItem"
+            text: qsTr("Remove Version")
+            enabled: root.versionCheckoutEnabled && !versionMenu.versionActive
+                     && !!root.historyModel && root.historyModel.versions.count > 1
+                     && !!root.editorSession && root.editorSession.actions.canRemoveVersion
+            onTriggered: root.removeVersionPreservingScroll(versionMenu.versionId)
+        }
+    }
+
+    // The name of the dragged Version or preset follows the pointer.
+    Rectangle {
+        objectName: "editorPresetsDragLabel"
+        visible: root.dragKind.length > 0
+        z: 100
+        x: root.dragPoint.x + appTheme.spaceSm
+        y: root.dragPoint.y + appTheme.spaceSm
+        width: dragLabel.implicitWidth + appTheme.spaceMd * 2
+        height: dragLabel.implicitHeight + appTheme.spaceXs * 2
+        radius: appTheme.controlRadiusSmall
+        color: appTheme.bgBaseColor
+        border.width: 1
+        border.color: root.dragOverPresets || root.dragOverVersions ? appTheme.textColor
+                                                                    : appTheme.cardBorderColor
+
+        Label {
+            id: dragLabel
+            anchors.centerIn: parent
+            textFormat: Text.PlainText
+            text: root.dragName
+            color: appTheme.textColor
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+        }
+    }
+
     ColumnLayout {
-        anchors.fill: parent
-        anchors.margins: appTheme.spaceLg
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: splitter.bottom
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: appTheme.spaceLg
+        anchors.rightMargin: appTheme.spaceLg
+        anchors.bottomMargin: appTheme.spaceLg
         spacing: appTheme.spaceMd
 
         RowLayout {
@@ -654,6 +938,7 @@ Item {
         }
 
         Item {
+            id: versionsListWell
             objectName: "editorVersionsListWell"
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -664,7 +949,52 @@ Item {
                 radius: appTheme.controlRadiusSmall
                 color: appTheme.bgBaseColor
                 border.width: 1
-                border.color: root.colCardBorder
+                border.color: root.dragOverVersions || presetFileDrop.url.length > 0
+                              ? root.colText : root.colCardBorder
+            }
+
+            // One .alcpreset file from the system: apply it one time (plan 2.2, R8).
+            DropArea {
+                id: presetFileDrop
+                objectName: "editorVersionsPresetFileDropArea"
+                anchors.fill: parent
+                keys: ["text/uri-list"]
+                property string url: ""
+                function presetFileUrl(dragEvent) {
+                    const urls = FileDrop.localFileUrls(dragEvent)
+                    return urls.length === 1 && urls[0].toLowerCase().endsWith(".alcpreset")
+                           ? urls[0] : ""
+                }
+                onEntered: function (drag) {
+                    url = root.canApplyPresets ? presetFileUrl(drag) : ""
+                    if (url.length > 0)
+                        drag.accept(Qt.CopyAction)
+                    else
+                        drag.accepted = false
+                }
+                onExited: url = ""
+                onDropped: function (drop) {
+                    const dropped = url.length > 0 ? url : presetFileUrl(drop)
+                    url = ""
+                    if (dropped.length === 0 || !root.canApplyPresets) {
+                        drop.accepted = false
+                        return
+                    }
+                    drop.accept(Qt.CopyAction)
+                    root.applyPresetFile(dropped)
+                }
+            }
+
+            // A selected preset or a preset drag: the band says that a drop here applies the
+            // preset. It sits above the list (z) and takes no input.
+            DropGuideOverlay {
+                objectName: "editorVersionsDropGuide"
+                anchors.fill: parent
+                shown: root.versionsDropGuideShown
+                expanded: root.dragOverVersions || presetFileDrop.url.length > 0
+                bandText: qsTr("Drag here to apply this preset")
+                expandedText: qsTr("Release to apply this preset")
+                detailText: root.dragKind === "preset" ? root.dragName : ""
             }
 
             ListView {
@@ -722,22 +1052,65 @@ Item {
                     ListView.onReused: {}
 
                     MouseArea {
+                        objectName: "editorVersionCardMouseArea"
                         anchors.fill: parent
                         z: 0
-                        // Do not gate checkout on draftSubmitPending: a stuck
+                        enabled: !versionCard.renaming
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        // A drag of the row saves a preset; the list must not flick instead.
+                        preventStealing: true
+                        property point pressPoint: Qt.point(0, 0)
+                        property bool dragged: false
+                        onPressed: function (mouse) {
+                            pressPoint = Qt.point(mouse.x, mouse.y)
+                            dragged = false
+                            if (mouse.button === Qt.RightButton) {
+                                const scene = mapToItem(null, mouse.x, mouse.y)
+                                root.openVersionMenu(versionId, displayName, versionActive,
+                                                     scene.x, scene.y)
+                            }
+                        }
+                        onPositionChanged: function (mouse) {
+                            if (!(mouse.buttons & Qt.LeftButton) || !root.canSavePresets)
+                                return
+                            const scene = mapToItem(null, mouse.x, mouse.y)
+                            if (!dragged) {
+                                const dx = mouse.x - pressPoint.x
+                                const dy = mouse.y - pressPoint.y
+                                if (Math.sqrt(dx * dx + dy * dy) < Qt.styleHints.startDragDistance)
+                                    return
+                                dragged = true
+                                root.beginDrag("version", versionId, displayName, scene.x, scene.y)
+                            }
+                            root.moveDrag(scene.x, scene.y)
+                        }
+                        onReleased: function (mouse) {
+                            if (dragged) {
+                                const scene = mapToItem(null, mouse.x, mouse.y)
+                                root.finishDrag(scene.x, scene.y)
+                            }
+                        }
+                        onCanceled: {
+                            if (dragged)
+                                root.cancelDrag()
+                        }
+                        // Do not block checkout on draftSubmitPending: a stuck
                         // pending bit after async create must not freeze the list.
                         // Save-checkpoint leases already disable canCheckoutVersion.
-                        enabled: root.versionCheckoutEnabled && !versionActive
-                        onClicked: root.checkoutVersionPreservingScroll(versionId)
+                        onClicked: function (mouse) {
+                            if (mouse.button === Qt.LeftButton && !dragged
+                                    && root.versionCheckoutEnabled && !versionActive)
+                                root.checkoutVersionPreservingScroll(versionId)
+                        }
                     }
 
                     ColumnLayout {
                         id: versionCardColumn
                         anchors.left: parent.left
-                        anchors.right: actionRow.left
+                        anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.leftMargin: appTheme.spaceMd
-                        anchors.rightMargin: appTheme.spaceXs
+                        anchors.rightMargin: appTheme.spaceMd
                         spacing: appTheme.spaceXs
 
                         Label {
@@ -874,50 +1247,6 @@ Item {
                                                                     : appTheme.uiFontFamily
                                 font.pixelSize: appTheme.fontSizeCaption
                             }
-                        }
-                    }
-
-                    Row {
-                        id: actionRow
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.rightMargin: appTheme.spaceXs
-                        spacing: appTheme.spaceXs
-                        z: 2
-
-                        IconActionButton {
-                            objectName: "editorRenameVersionButton"
-                            compact: true
-                            enabled: root.canMutateVersions && root.editorSession.actions.canRenameVersion
-                            iconSrc: "qrc:/panel_icons/edit.svg"
-                            iconColorDefault: root.colText
-                            iconColorMuted: root.colMuted
-                            fillIdle: root.colCardSurface
-                            fillHover: appTheme.buttonHoveredFillColor
-                            fillPressed: appTheme.buttonPressedFillColor
-                            fillSelected: appTheme.buttonSelectedFillColor
-                            focusRingColor: root.colText
-                            actionName: qsTr("Rename Version")
-                            onClicked: root.openRenameVersion(versionId, displayName)
-                        }
-
-                        IconActionButton {
-                            objectName: "editorRemoveVersionButton"
-                            compact: true
-                            enabled: root.versionCheckoutEnabled && !versionActive
-                                     && root.historyModel && root.historyModel.versions.count > 1
-                                     && root.editorSession
-                                     && root.editorSession.actions.canRemoveVersion
-                            iconSrc: "qrc:/panel_icons/trash.svg"
-                            iconColorDefault: root.colText
-                            iconColorMuted: root.colMuted
-                            fillIdle: root.colCardSurface
-                            fillHover: appTheme.buttonHoveredFillColor
-                            fillPressed: appTheme.buttonPressedFillColor
-                            fillSelected: appTheme.buttonSelectedFillColor
-                            focusRingColor: root.colText
-                            actionName: qsTr("Remove Version")
-                            onClicked: root.removeVersionPreservingScroll(versionId)
                         }
                     }
                 }

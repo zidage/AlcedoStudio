@@ -14,15 +14,18 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <QEvent>
 #include <QEventLoop>
 #include <QSignalSpy>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
 #include <algorithm>
+#include <chrono>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "type/supported_file_type.hpp"
@@ -56,6 +59,18 @@ inline void ProcessEvents(int ms = 200) {
 inline bool WaitForSignal(QSignalSpy& spy, int timeoutMs = 5000) {
   if (!spy.isEmpty()) return true;
   return spy.wait(timeoutMs);
+}
+
+/// Wait until the tree read of @p folders is applied. Delivers only the queued calls that were
+/// posted to @p folders (the tree and the count results), so a scan or an import that reports
+/// through the event loop does not advance. True when no tree read is pending.
+inline bool WaitForFolderTree(FolderController& folders, int timeoutMs = 10000) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  while (folders.tree_read_pending() && std::chrono::steady_clock::now() < deadline) {
+    QCoreApplication::sendPostedEvents(&folders, QEvent::MetaCall);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  return !folders.tree_read_pending();
 }
 
 /// Collect RAW test images from a subdirectory under TEST_IMG_PATH.

@@ -74,6 +74,9 @@ requirements and do not depend on a task-specific skill being activated.
   protected members do not.
 - Name types, functions, variables, and tests after the data they represent or the operation they
   perform. Apply the terminology rules below to identifiers as well as prose.
+- Use `std::thread` with an explicit join, and `std::atomic<bool>` for a stop request. Apple
+  libc++ does not declare `std::jthread` or `std::stop_token` under `-std=c++20`;
+  `scripts/check_std_jthread.py` fails CI on a use.
 
 ### Include the defining header; do not forward-declare by default
 
@@ -235,6 +238,27 @@ Do not include `codex` in a branch name. Use a functional name such as
 When the user explicitly asks you to commit or to create a pull request, do only that. Do not run
 a build or any test suite as part of the request. Report the verification that already exists,
 and state what was not built or tested.
+
+### Issue links and stacked pull requests
+
+- A pull request that resolves an issue has one line `Closes #<number>` (or `Fixes #<number>`)
+  for each issue. GitHub reads only the closing keywords. `Issue: #<number>`,
+  `Tracking issue: #<number>`, `Part of #<number>`, and `Stacked on #<number>` close nothing.
+- A tracking issue shows its progress through its sub-issues. Do not keep a list of phases with
+  check boxes in its body. A phase pull request does not name the tracking issue with a closing
+  keyword; close the tracking issue after its last sub-issue.
+- Open a pull request from `main` when it does not need the code of another open pull request.
+  Stack only pull requests that depend on each other.
+- Make a dependent chain a GitHub stack: `gh stack init`, `gh stack add`, and `gh stack submit`,
+  or `gh stack link <bottom> ... <top>` for pull requests that are already open. Merge the stack
+  with `gh stack merge <top pull request> --merge --yes`. The pull requests land on `main` in one
+  operation.
+- Do not merge an upper pull request of a chain with `gh pr merge`: it merges into the branch
+  below, not into `main`. Merge a chain that is not a GitHub stack from the bottom up, and set
+  the base of each pull request to `main` before its merge (`gh pr edit <number> --base main`).
+- The workflow `close-merged-issues.yml` runs on each push to `main`. It closes the open issues
+  that the merged pull requests of the pushed commits name with a closing keyword, also when the
+  pull request merged into another branch. It does not read `Issue: #<number>`.
 
 ### Temporary files and local state
 

@@ -24,9 +24,10 @@ Item {
     // `modelsForBrand(brand)` ([{value,label}|string]); production passes the
     // registered EditorLensCatalogModel, tests may pass a fixture stub.
     property var catalog: null
-    /// Image EXIF lens identity (EditorSessionController exifLensMake/Model).
-    property string exifLensMake: ""
-    property string exifLensModel: ""
+    /// Lensfun profile that the Auto setting uses for the image
+    /// (EditorSessionController autoLensMake/Model); empty when no profile matches.
+    property string autoLensMake: ""
+    property string autoLensModel: ""
     /// Submitted selection (panel lens maker/model params). "" brand = Auto.
     property string selectedValue: ""
     property string selectedBrand: ""
@@ -47,8 +48,7 @@ Item {
     property var _allEntries: []
     property var filteredBrands: []
     property var filteredEntries: []
-    /// Detected catalog row for the EXIF identity, or null when recognition
-    /// fails (missing EXIF lens or no catalog match).
+    /// Catalog row of the Auto profile, or null when the image has no profile.
     property var detectedEntry: null
     readonly property bool detectionAvailable: detectedEntry !== null
     readonly property int entryCount: filteredEntries.length
@@ -157,47 +157,22 @@ Item {
         return 3
     }
 
-    /// Map an EXIF lens identity onto a catalog row. Exact normalized equality
-    /// wins, then containment in either direction, then full token coverage;
-    /// a normalized maker match on the entry brand always breaks ties.
+    /// Catalog row named by the Lensfun profile @p make / @p model, or null.
+    /// The catalog lists the Lensfun maker and model names, so the profile
+    /// names select their row exactly. A text match against other rows would
+    /// name a lens that the render does not use (a "15-30mm F2.8" EXIF name
+    /// matched a Pentax K-mount row on a Sony camera).
     function findDetectedEntry(make, model) {
-        const normModel = normalizeLensText(model)
-        if (normModel.length === 0)
+        const brand = String(make || "")
+        const value = String(model || "")
+        if (brand.length === 0 || value.length === 0)
             return null
-        const normMake = normalizeLensText(make)
-        var best = null
-        var bestScore = -1
         for (var i = 0; i < _allEntries.length; ++i) {
             const entry = _allEntries[i]
-            var score = -1
-            if (entry._normValue === normModel) {
-                score = 100
-            } else if (normModel.length >= 4 && entry._normValue.indexOf(normModel) >= 0) {
-                score = 60 + 30 * (normModel.length / Math.max(1, entry._normValue.length))
-            } else if (entry._normValue.length >= 4 && normModel.indexOf(entry._normValue) >= 0) {
-                score = 40 + 30 * (entry._normValue.length / Math.max(1, normModel.length))
-            } else {
-                const tokens = lensQueryTokens(model)
-                var allPresent = tokens.length > 0
-                for (var t = 0; t < tokens.length; ++t) {
-                    if (entry._haystack.indexOf(tokens[t]) < 0) {
-                        allPresent = false
-                        break
-                    }
-                }
-                if (allPresent)
-                    score = 20
-            }
-            if (score < 0)
-                continue
-            if (normMake.length > 0 && entry._normBrand.indexOf(normMake) >= 0)
-                score += 1000
-            if (score > bestScore) {
-                bestScore = score
-                best = entry
-            }
+            if (entry.brand === brand && entry.value === value)
+                return entry
         }
-        return best
+        return null
     }
 
     // ── List building / filtering ──────────────────────────────────────────
@@ -229,7 +204,7 @@ Item {
         }
         _allEntries = list
         refilter()
-        detectedEntry = findDetectedEntry(root.exifLensMake, root.exifLensModel)
+        detectedEntry = findDetectedEntry(root.autoLensMake, root.autoLensModel)
     }
 
     function refilter() {
@@ -305,8 +280,8 @@ Item {
     }
 
     onCatalogChanged: rebuildCatalog()
-    onExifLensMakeChanged: detectedEntry = findDetectedEntry(root.exifLensMake, root.exifLensModel)
-    onExifLensModelChanged: detectedEntry = findDetectedEntry(root.exifLensMake, root.exifLensModel)
+    onAutoLensMakeChanged: detectedEntry = findDetectedEntry(root.autoLensMake, root.autoLensModel)
+    onAutoLensModelChanged: detectedEntry = findDetectedEntry(root.autoLensMake, root.autoLensModel)
     onBrandFilterChanged: refilter()
     onBrandQueryChanged: refilter()
     onLensQueryChanged: refilter()

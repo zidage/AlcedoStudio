@@ -165,8 +165,8 @@ class MountScanRun {
   /// The stored state of the mount in the form of the comparison (Mounted Folder Plan, MF3).
   auto ReadRecords() -> MountScanRecords {
     MountScanRecords records;
-    const auto       tree = sleeve_service_.ReadMountTree(mount_.root_folder_id, mount_.id);
-    for (const auto& folder : tree.folders) {
+    // The folders only: a memory read that loads no file element (Sleeve Node Cache Plan, SN5).
+    for (const auto& folder : sleeve_service_.ReadMountFolders(mount_.root_folder_id, mount_.id)) {
       records.folders.push_back(MountScanFolderRecord{folder.folder_id, folder.relative_path});
     }
 
@@ -307,8 +307,7 @@ class MountScanRun {
       return true;
     }
     std::unordered_map<std::wstring, sl_element_id_t> folder_at{{L"", mount_.root_folder_id}};
-    for (const auto& folder :
-         sleeve_service_.ReadMountTree(mount_.root_folder_id, mount_.id).folders) {
+    for (const auto& folder : sleeve_service_.ReadMountFolders(mount_.root_folder_id, mount_.id)) {
       folder_at.emplace(folder.relative_path, folder.folder_id);
     }
 
@@ -400,21 +399,23 @@ MountService::MountService(std::shared_ptr<Storage>           storage,
                            std::shared_ptr<SleeveServiceImpl> sleeve_service,
                            std::shared_ptr<ImagePoolService>  image_pool_service,
                            VolumeMountPointList               list_volumes,
-                           VolumeIdentityReader               read_volume_identity)
+                           VolumeIdentityReader               read_volume_identity,
+                           VolumeLabelReader                  read_volume_label)
     : storage_(std::move(storage)),
       sleeve_service_(std::move(sleeve_service)),
       image_pool_service_(std::move(image_pool_service)),
       list_volumes_(list_volumes ? std::move(list_volumes)
                                  : VolumeMountPointList(&ListVolumeMountPoints)),
       read_volume_identity_(read_volume_identity ? std::move(read_volume_identity)
-                                                 : VolumeIdentityReader(&ReadVolumeIdentity)) {
+                                                 : VolumeIdentityReader(&ReadVolumeIdentity)),
+      read_volume_label_(read_volume_label ? std::move(read_volume_label)
+                                           : VolumeLabelReader(&ReadVolumeLabel)) {
   if (!storage_ || !sleeve_service_ || !image_pool_service_) {
     throw std::invalid_argument("MountService: storage, sleeve, and image pool are required");
   }
 }
 
-auto MountService::CreateMount(sl_element_id_t              parent_folder_id,
-                               const std::filesystem::path& directory) -> mount_id_t {
+auto MountService::CreateMount(const std::filesystem::path& directory) -> mount_id_t {
   std::lock_guard lock(operation_mutex_);
 
   std::error_code ec;
@@ -423,23 +424,6 @@ auto MountService::CreateMount(sl_element_id_t              parent_folder_id,
     throw MountOperationError(MountError::kDirectoryUnreachable,
                               std::format("MountService: '{}' is not a reachable directory",
                                           conv::ToBytes(directory.wstring())));
-  }
-
-  std::shared_ptr<SleeveElement> parent;
-  try {
-    parent = sleeve_service_->Read<std::shared_ptr<SleeveElement>>(
-        [parent_folder_id](FileSystem& fs) { return fs.Get(parent_folder_id); });
-  } catch (const std::exception&) {
-  }
-  if (!parent || parent->type_ != ElementType::FOLDER || parent->sync_flag_ == SyncFlag::DELETED) {
-    throw MountOperationError(
-        MountError::kParentIsNotAFolder,
-        std::format("MountService: the element {} is not a folder", parent_folder_id));
-  }
-  if (parent->mount_id_.has_value()) {
-    throw MountOperationError(
-        MountError::kParentIsMounted,
-        std::format("MountService: the folder {} is a mounted folder", parent_folder_id));
   }
 
   auto& mounts = storage_->GetMountStore();
@@ -456,14 +440,17 @@ auto MountService::CreateMount(sl_element_id_t              parent_folder_id,
   record.id              = mounts.ReadNextMountId();
   record.volume_identity = read_volume_identity_(root);
   record.root_path       = root;
+  auto label             = read_volume_label_(root);
+  record.volume_name     = std::move(label.name);
 
-  auto [folder, sync] =
-      sleeve_service_->CreateMountRootFolder(parent_folder_id, MountRootName(root), record.id);
-  record.root_folder_id = folder->element_id_;
-  std::string error     = sync.message_;
+  auto [folder, sync]    = sleeve_service_->CreateMountRootFolder(MountRootName(root), record.id);
+  record.root_folder_id  = folder->element_id_;
+  std::string error      = sync.message_;
   if (sync.success_) {
     try {
       mounts.InsertMountRoot(record);
+      // The volume is reached, but no scan ran: the mount stays kNotScanned until its first
+      // scan, which records the mount point again.
       SetReachability(record.id, MountReachability::kNotScanned);
       return record.id;
     } catch (const std::exception& e) {
@@ -510,7 +497,13 @@ auto MountService::ScanMount(const MountScanRequest& request) -> MountScanResult
     result.status = MountScanStatus::kOffline;
     return result;
   }
-  SetReachability(mount.id, MountReachability::kOnline);
+  try {
+    result.volume_name_updated = RecordVolumeReached(mount);
+  } catch (const std::exception& e) {
+    result.status = MountScanStatus::kStorageFailure;
+    result.error  = e.what();
+    return result;
+  }
   if (listing.status == MountDirectoryListingStatus::kStopped) {
     result.status = MountScanStatus::kCanceled;
     return result;
@@ -547,8 +540,8 @@ void MountService::RemoveMount(mount_id_t mount_id) {
         MountError::kStorageFailure,
         std::format("MountService: the mount {} was not removed: {}", mount_id, e.what()));
   }
-  std::lock_guard reachability_lock(reachability_mutex_);
-  reachability_.erase(mount_id);
+  std::lock_guard session_lock(session_mutex_);
+  session_states_.erase(mount_id);
 }
 
 void MountService::RelocateRoot(mount_id_t mount_id, const std::filesystem::path& directory) {
@@ -665,7 +658,7 @@ void MountService::LocateMissingFile(sl_element_id_t              element_id,
   } catch (const std::exception&) {
   }
   const auto source = mounts.ReadSourceFile(element_id);
-  if (!element || element->type_ != ElementType::FILE || element->sync_flag_ == SyncFlag::DELETED ||
+  if (!element || element->type_ != ElementType::FILE || !element->IsLive() ||
       !element->mount_id_.has_value() || !source.has_value() ||
       source->state != SourceFileState::kMissing) {
     throw MountOperationError(
@@ -725,8 +718,7 @@ void MountService::LocateMissingFile(sl_element_id_t              element_id,
     changes.mount_id       = mount.id;
     changes.root_folder_id = mount.root_folder_id;
     std::unordered_set<std::wstring> folders;
-    for (const auto& folder :
-         sleeve_service_->ReadMountTree(mount.root_folder_id, mount.id).folders) {
+    for (const auto& folder : sleeve_service_->ReadMountFolders(mount.root_folder_id, mount.id)) {
       folders.insert(folder.relative_path);
     }
     // A directory that the last scan did not see gets its folders now, a parent first.
@@ -824,9 +816,10 @@ auto MountService::ListMounts() const -> std::vector<MountSummary> {
     summary.present_count = summary.present_element_ids.size();
     summary.missing_count = summary.missing_element_ids.size();
     {
-      std::lock_guard lock(reachability_mutex_);
-      if (const auto it = reachability_.find(record.id); it != reachability_.end()) {
-        summary.reachability = it->second;
+      std::lock_guard lock(session_mutex_);
+      if (const auto it = session_states_.find(record.id); it != session_states_.end()) {
+        summary.reachability       = it->second.reachability;
+        summary.volume_mount_point = it->second.volume_mount_point;
       }
     }
     summary.record = std::move(record);
@@ -846,8 +839,24 @@ auto MountService::FindMount(mount_id_t mount_id) const -> MountRootRecord {
 }
 
 void MountService::SetReachability(mount_id_t mount_id, MountReachability reachability) {
-  std::lock_guard lock(reachability_mutex_);
-  reachability_[mount_id] = reachability;
+  std::lock_guard lock(session_mutex_);
+  session_states_[mount_id] = MountSessionState{reachability, {}};
+}
+
+void MountService::SetOnline(mount_id_t mount_id, std::filesystem::path mount_point) {
+  std::lock_guard lock(session_mutex_);
+  session_states_[mount_id] = MountSessionState{MountReachability::kOnline, std::move(mount_point)};
+}
+
+auto MountService::RecordVolumeReached(const MountRootRecord& mount) -> bool {
+  auto label = read_volume_label_(mount.root_path);
+  SetOnline(mount.id, std::move(label.mount_point));
+  // An unchanged name is not written again, so a scan that finds no change writes nothing.
+  if (label.name == mount.volume_name) {
+    return false;
+  }
+  storage_->GetMountStore().UpdateMountVolumeName(mount.id, label.name);
+  return true;
 }
 
 }  // namespace alcedo

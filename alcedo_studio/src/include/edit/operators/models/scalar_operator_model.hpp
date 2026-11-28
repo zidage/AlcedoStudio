@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/json_read.hpp"
 #include "edit/operators/models/operator_model_base.hpp"
 
 namespace alcedo {
@@ -65,7 +66,7 @@ class ScalarOperatorModel final
   void LoadJson(const nlohmann::json& json) override {
     float value = Traits::kDefault;
     if (json.contains(Traits::kJsonKey) && json[Traits::kJsonKey].is_number()) {
-      value = json[Traits::kJsonKey].template get<float>();
+      value = json_util::ToFloat(json[Traits::kJsonKey], Traits::kJsonKey.data());
     }
     SetValue(value);
   }

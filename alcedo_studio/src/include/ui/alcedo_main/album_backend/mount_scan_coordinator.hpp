@@ -16,6 +16,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -143,6 +144,8 @@ struct MountScanCoordinatorDependencies {
   std::function<void(mount_id_t)>        on_batch_stored;
   /// Called on the UI thread when a scan ends.
   std::function<void(mount_id_t, const MountScanResult&)> on_scan_ended;
+  /// The volume identity of a mount point for IsArrivedVolumeAt; empty takes ReadVolumeIdentity.
+  std::function<std::string(const std::filesystem::path&)> read_volume_identity;
 };
 
 /**
@@ -159,7 +162,13 @@ struct MountScanCoordinatorDependencies {
  * Volume events (#1020): the removal of the volume of a watched mount, or the cancel of that
  * removal, requests a scan of the mount at once; the scan finds the mount offline or watches it
  * again. The arrival of a volume requests a scan of each offline mount after the volume arrival
- * delay; a connected drive brings its mount online and its missing photos return.
+ * delay; a connected drive brings its mount online and its missing photos return. A new mount
+ * point whose volume holds no mount of the project emits VolumeWithoutMountArrived (#1076): no
+ * mount has the identity of the volume, and no mount root is at or below the mount point. A
+ * mount root at or below the mount point counts only when the mount or the volume has no known
+ * identity: a mount of another volume that used the same mount point does not hide the card of
+ * the new volume (#1087). A mount point that is gone emits MountPointRemoved, so the card of its
+ * volume closes.
  *
  * One scan runs at a time. A request for the mount of the running scan sets its "scan again"
  * flag: when the scan ends, one more scan of that mount starts. Production interleaving: the
@@ -295,15 +304,41 @@ class MountScanCoordinator final : public QObject {
   /// True while the worker that BeginStop stopped has not ended. It can still write its batch.
   [[nodiscard]] auto HasStoppedWorker() const -> bool { return stopped_worker_.has_value(); }
 
+  /**
+   * @brief True when the volume that VolumeWithoutMountArrived reported is still at its mount
+   *        point (#1087): the mount point exists and its volume has the identity @p identity.
+   *
+   * The card of the volume calls it before Import and Mount, so a volume that replaced the
+   * reported one at the same mount point is not used in its place. An empty @p identity matches
+   * a volume that has no identity. It reads the volume on the calling thread, as the watcher does
+   * at the arrival.
+   */
+  [[nodiscard]] auto IsArrivedVolumeAt(const std::filesystem::path& mount_point,
+                                       const std::string& identity) const -> bool;
+
  signals:
   /// The worker that BeginStop stopped has ended; HasStoppedWorker is false.
   void StoppedWorkerEnded();
+  /// A volume that holds no mount of the open project arrived (#1076). Emitted only while the
+  /// coordinator is started.
+  /// @param volumeName The display name of the volume; empty when it has none.
+  /// @param mountPoint The mount point (`E:\` on Windows, the mount path on macOS and Linux).
+  /// @param hasDcimDirectory True when the root of the volume holds a `DCIM` directory.
+  /// @param volumeIdentity The identity of the volume (ReadVolumeIdentity) for
+  ///        IsArrivedVolumeAt; empty when it has none.
+  void VolumeWithoutMountArrived(const QString& volumeName, const QString& mountPoint,
+                                 bool hasDcimDirectory, const QString& volumeIdentity);
+  /// A mount point is gone from the mount table (#1087): its volume was ejected or pulled out.
+  /// Emitted only while the coordinator is started.
+  void MountPointRemoved(const QString& mountPoint);
 
  private:
   friend class MountScanHold;
 
   struct MountState {
     std::filesystem::path           root;
+    /// MountRootRecord::volume_identity; empty when the volume has none.
+    std::string                     volume_identity;
     QString                         title;
     std::optional<MountScanTrigger> queued;
     std::optional<MountScanTrigger> scan_again;
@@ -362,6 +397,8 @@ class MountScanCoordinator final : public QObject {
   void HandleDirectoryChanged(mount_id_t mount_id);
   void HandleVolumeRemoved(mount_id_t mount_id);
   void HandleVolumeArrived();
+  void HandleMountPointArrived(const ArrivedVolume& volume);
+  void HandleMountPointRemoved(const std::filesystem::path& mount_point);
   /// Start the next queued operation, else the next queued scan, when the worker is free.
   void StartNextScan();
   void StartOperation(PendingOperation pending);
@@ -396,6 +433,7 @@ class MountScanCoordinator final : public QObject {
   std::chrono::milliseconds                               volume_arrival_delay_;
   std::function<void(mount_id_t)>                         on_batch_stored_;
   std::function<void(mount_id_t, const MountScanResult&)> on_scan_ended_;
+  std::function<std::string(const std::filesystem::path&)> read_volume_identity_;
 
   std::shared_ptr<MountScanPort>                          port_;
   std::unordered_map<mount_id_t, MountState>              mounts_;
@@ -473,8 +511,9 @@ auto MountScanChangedPhotos(const MountScanResult& result) -> bool;
  * @brief True when the scan wrote a library change that the project file must hold (#1015).
  *
  * A new, adopted, moved, changed, returned, or missing photo, a folder added or removed, a
- * relocated root, or a failed batch (batches before it can be stored). A file that the scan could
- * not import writes no row, and the next scan tries it again, so it alone does not count.
+ * relocated root, a new volume name (#1088), or a failed batch (batches before it can be
+ * stored). A file that the scan could not import writes no row, and the next scan tries it
+ * again, so it alone does not count.
  */
 auto MountScanStoredChanges(const MountScanResult& result) -> bool;
 

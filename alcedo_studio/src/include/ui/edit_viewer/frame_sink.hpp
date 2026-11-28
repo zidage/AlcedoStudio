@@ -130,6 +130,9 @@ struct ViewerFrame {
   FramePresentationMode       presentation_mode = FramePresentationMode::FullFrame;
   FramePreviewMetadata        preview_metadata  = {};
 
+  // Geometry of these completed pixels, retained until asynchronous presentation.
+  ResolvedRenderGeometry      geometry{};
+
   explicit                    operator bool() const {
     return width > 0 && height > 0 && row_bytes > 0 && pixels != nullptr;
   }

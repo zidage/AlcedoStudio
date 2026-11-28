@@ -122,7 +122,6 @@ void ElementMapper::RestoreFields(SleeveElement& element, const ElementMapperPar
   element.last_modified_time_ = modified;
   element.ref_count_          = param.ref_count;
   element.mount_id_           = mount_id;
-  element.sync_flag_          = SyncFlag::SYNCED;
 }
 
 auto ElementMapper::GetElementByName(const std::wstring& name)

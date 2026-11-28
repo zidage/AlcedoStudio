@@ -53,10 +53,6 @@ auto MountCommandErrorText(std::exception_ptr error) -> QString {
     switch (e.Code()) {
       case MountError::kNestedMount:
         return Tr("The folder is inside a mounted folder or holds one.");
-      case MountError::kParentIsMounted:
-        return Tr("A mounted folder cannot hold another mount.");
-      case MountError::kParentIsNotAFolder:
-        return Tr("The collection no longer exists.");
       case MountError::kDirectoryUnreachable:
         return Tr("The folder cannot be reached.");
       case MountError::kUnknownMount:
@@ -95,6 +91,25 @@ void FolderController::AddMountFields(const ExistingFolderEntry& folder, QVarian
   row.insert(QStringLiteral("mountMissingCount"),
              root ? static_cast<qulonglong>(summary->missing_count) : 0ULL);
   row.insert(QStringLiteral("structureEditable"), !folder.mount_id_.has_value());
+  // The Disk section groups the mounts by volume (#1078): the stored identity, else the mount
+  // point of this session, else the root of the directory path.
+  QString volume_key;
+  QString volume_name;
+  QString mount_point;
+  QString volume_root;
+  if (summary != nullptr) {
+    const auto& record = summary->record;
+    volume_name        = QString::fromStdString(record.volume_name);
+    mount_point        = album_util::MountPointDisplay(summary->volume_mount_point);
+    volume_root        = album_util::MountPointDisplay(record.root_path.root_path());
+    volume_key         = !record.volume_identity.empty()
+                             ? QString::fromStdString(record.volume_identity)
+                             : (!mount_point.isEmpty() ? mount_point : volume_root);
+  }
+  row.insert(QStringLiteral("mountVolumeKey"), volume_key);
+  row.insert(QStringLiteral("mountVolumeName"), volume_name);
+  row.insert(QStringLiteral("mountPoint"), mount_point);
+  row.insert(QStringLiteral("mountVolumeRoot"), volume_root);
 }
 
 auto FolderController::FindMountSummary(mount_id_t mount_id) const -> const MountSummary* {
@@ -165,10 +180,9 @@ auto FolderController::IsMissingMountedPhoto(uint elementId) const -> bool {
   return missing_mounted_ids_.contains(static_cast<sl_element_id_t>(elementId));
 }
 
-auto FolderController::HoldsPresentMountedPhoto(const QVariantList& elementIds) const -> bool {
-  return std::any_of(elementIds.begin(), elementIds.end(), [this](const QVariant& id) {
-    return present_mounted_ids_.contains(static_cast<sl_element_id_t>(id.toULongLong()));
-  });
+auto FolderController::IsMountedPhoto(uint elementId) const -> bool {
+  const auto element_id = static_cast<sl_element_id_t>(elementId);
+  return present_mounted_ids_.contains(element_id) || missing_mounted_ids_.contains(element_id);
 }
 
 auto FolderController::MissingPhotoLocateFolder(uint elementId) const -> QUrl {
@@ -217,8 +231,7 @@ auto FolderController::MountCommandRefusal() const -> QString {
   return {};
 }
 
-auto FolderController::StartCreateMount(sl_element_id_t              parent_folder_id,
-                                        const std::filesystem::path& directory,
+auto FolderController::StartCreateMount(const std::filesystem::path& directory,
                                         std::function<void(std::exception_ptr, mount_id_t)> done,
                                         MountScanEndedCallback first_scan_ended) -> QString {
   if (auto refusal = MountCommandRefusal(); !refusal.isEmpty()) {
@@ -227,14 +240,12 @@ auto FolderController::StartCreateMount(sl_element_id_t              parent_fold
   auto mounts  = project_->handler().project()->GetMountService();
   auto created = std::make_shared<mount_id_t>(0);
   mount_scans_->RunMountOperation(
-      [mounts, parent_folder_id, directory, created] {
-        *created = mounts->CreateMount(parent_folder_id, directory);
-      },
+      [mounts, directory, created] { *created = mounts->CreateMount(directory); },
       [this, created, done = std::move(done),
        first_scan_ended = std::move(first_scan_ended)](std::exception_ptr error) mutable {
         if (!error) {
           mount_scans_->ReloadMounts();
-          library_->ReloadFolderTree(current_folder_path_);
+          library_->ReloadFolderTree();
           (void)SaveProjectState();
           mount_scans_->RequestScan(*created, MountScanTrigger::kSynchronize,
                                     std::move(first_scan_ended));
@@ -266,7 +277,7 @@ auto FolderController::StartUnmount(mount_id_t mount_id, MountCommandDone done) 
                                   [this, done = std::move(done)](std::exception_ptr error) {
                                     if (!error) {
                                       mount_scans_->ReloadMounts();
-                                      library_->ReloadFolderTree(current_folder_path_);
+                                      library_->ReloadFolderTree();
                                       library_->RequestLibraryContentRefresh();
                                       (void)SaveProjectState();
                                     }
@@ -319,7 +330,7 @@ auto FolderController::StartLocateMissingPhoto(sl_element_id_t              elem
             thumbnails->InvalidateThumbnail(element_id);
           }
           // The located file can be in a directory that the last scan did not see.
-          library_->ReloadFolderTree(current_folder_path_);
+          library_->ReloadFolderTree();
           library_->RequestLibraryContentRefresh();
           (void)SaveProjectState();
         }
@@ -378,15 +389,14 @@ void FolderController::ReportMountCommand(std::exception_ptr         error,
   status_->ScheduleIdleTaskStateReset(1200);
 }
 
-void FolderController::MountFolder(uint parentFolderUiId, const QUrl& directory) {
-  const auto parent         = FolderElementIdForUiId(parentFolderUiId);
+void FolderController::MountFolder(const QUrl& directory) {
   const auto directory_path = ToPath(directory);
-  if (!parent.has_value() || !directory_path.has_value()) {
+  if (!directory_path.has_value()) {
     status_->SetTaskState(PL_TEXT("The folder cannot be reached."), 0, false);
     return;
   }
   const auto refusal =
-      StartCreateMount(*parent, *directory_path, [this](std::exception_ptr error, mount_id_t) {
+      StartCreateMount(*directory_path, [this](std::exception_ptr error, mount_id_t) {
         ReportMountCommand(error, PL_TEXT("Folder mounted."));
       });
   if (!refusal.isEmpty()) {

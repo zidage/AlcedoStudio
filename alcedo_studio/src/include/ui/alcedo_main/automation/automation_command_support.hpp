@@ -64,8 +64,14 @@ auto ResolveAutomationElementRows(ProjectService& project, const QJsonObject& pa
                                   AutomationReply& reply)
     -> std::optional<std::vector<SearchResultRow>>;
 
-/// Sends @p code with @p message and `data.reason` set to @p message, the form of `rejected`,
-/// `failed`, and `not_ready` errors that report an owner message.
+/// The `data` of an error that reports the owner message @p message: `reason` set to
+/// @p message, and `ai_denoise_error` (`kind`, `text`) when @p message holds an AI Denoise render
+/// error (ParseAiDenoiseRenderError; AI Denoise integration plan, DN13). `kind` is
+/// `model_not_installed`, `device_too_slow`, `run_failed`, or `sensor_not_supported`.
+auto AutomationOwnerErrorData(const QString& message) -> QJsonObject;
+
+/// Sends @p code with @p message and AutomationOwnerErrorData(@p message), the form of
+/// `rejected`, `failed`, and `not_ready` errors that report an owner message.
 void SendAutomationOwnerError(AutomationReply& reply, AutomationErrorCode code,
                               const QString& message);
 

@@ -11,7 +11,7 @@ Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
 `AdjustmentSlider.qml`, `AlcedoSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
 `ThemeSwitch.qml`, `SkeletonBlock.qml`, `StaggeredGridLoader.qml`,
-`StaggeredGridMark.qml`, `AlertBadge.qml`, `AlcedoScrollBar.qml`
+`StaggeredGridMark.qml`, `AlertBadge.qml`, `AlcedoScrollBar.qml`, `ViewportRenderAlert.qml`
 
 Per-file decisions: `docs/VI/README.md`. That catalog specializes this global
 system for individual QML files and is updated with each approved visual change.
@@ -71,6 +71,7 @@ Monospace (`monoFontFamily`, DM Mono) is limited to these surfaces:
 | Transaction card hash | `monoFontFamily` + `fontSizeCaption` | `Commit <8-hex>` per row |
 | Transaction before/after | `monoFontFamily` + `fontSizeBody` | Delta value line (`0 → +0.35`) |
 | Adjustment header EXIF tokens | `monoFontFamily` + `fontSizeCaption` | Four equal-width cells: `100mm`, `f2.8`, `1/500s`, `ISO 100` |
+| Viewport render alert detail | `monoFontFamily` + `fontSizeCaption` | The raw error text under Show Details (paths, error codes) |
 
 Version and transaction **titles**, times, and section chrome stay on
 `uiFontFamily`. The selected node display name in the adjustment header also stays
@@ -127,6 +128,12 @@ This rule applies to every new or changed message. Existing `dangerColor` text
 in files a change does not touch has not been converted yet; convert it when
 the file is next changed. `dangerColor` itself remains the token for
 destructive buttons, failure status lamps, and error borders.
+
+The viewport render alert (`ViewportRenderAlert.qml`, below) is the one
+exception, chosen by the user for #1056: an error that stops the render of the
+open photo blurs the whole viewport, so the photo-off icon, the title, and the
+neutral text on the blur carry the state, and the message is muted secondary
+text.
 
 ### Hard ban: unrequested status dots
 
@@ -312,8 +319,36 @@ strength (not the current edit), 256 px on the long edge. The preview slot has
 the 3:2 shape of the filmstrip slot and the full tile content width; the photo
 fits the slot, is centered, and has `controlRadiusSmall` corners (`MultiEffect`
 mask). Until the preview is ready, and for a LUT that cannot be applied, the slot
-shows the `editorLutTileIconSize` cube centered on the well. The list layout has
-no preview slot.
+shows the `editorLutTileIconSize` cube centered on the well. A list row has the
+same preview slot at `editorBrowserListThumbWidth` left of the title (see
+"Browser list rows").
+
+**Browser list rows (LUT and preset browsers):** the toolbar of both browsers has
+the sunken search field (`BrowserSearchField.qml`) and the grid / list switch
+(`BrowserViewModeToggle.qml`). In the list layout every LUT or preset is one row
+across the well with `spaceXs / 2` between rows: a 3:2 preview slot
+(`BrowserPreviewThumb.qml`, the slot of the grid tiles) `editorBrowserListThumbWidth`
+wide and centered on the row, then the name left-aligned in `fontSizeBody`. The
+placeholder icon of the slot shrinks to 60 % of the slot height. Selection,
+applied outline, and hover well are the grid tile states.
+
+**Versions panel presets (edit presets plan, PS2):** the Versions panel has a
+preset part above the Versions part, divided by a 1 px `cardBorderColor`
+splitter line (`textMutedColor` on hover and drag). The preset part has the
+`Presets` header with `plus.svg` (Add Preset...) and `dots.svg` (menu), an
+`AlertBadge` for errors, and the preset browser: the search field and the grid /
+list switch above tiles or list rows in a sunken `bgBaseColor` well with
+`spaceXs` gaps, a `textMutedColor` caption title for each group, the
+`tray-download.svg` icon only when the folder is empty, and the `search.svg` icon
+only when no preset matches the search. Each word of the search must occur in the
+group or the name of a preset; the layout is one setting for the Versions panel
+and the Apply Preset dialog. A tile is the LUT
+tile structure: a 3:2 image area (`cardSurfaceColor` until PS3 adds previews),
+the name centered below it, outline selection, and the hover well. A preset
+that is not available shows `info.svg` in `alertBadgeFillColor`. Names,
+group titles, tooltips, and error badges are plain text. During a drag between
+the two parts, the accepting part draws its well border in `textColor`, and a
+`bgBaseColor` label with the dragged name follows the pointer.
 
 **Editor filmstrip tiles:** the filmstrip shares the Library selection, and a
 tile has two independent states. (User request 2026-10-28: the former bone well
@@ -801,6 +836,10 @@ the two side columns read as one family.
 | `editorLutBrowserFilterWidth` | 184 | LUT browser filter sidebar width |
 | `editorLutTileMinWidth` | 128 | Minimum LUT tile width; the grid fits as many columns as this allows |
 | `editorLutTileIconSize` | 36 | LUT tile cube placeholder icon, centered in the preview slot until the preview is ready |
+| `editorPresetPaneHeight` | 240 | Default height of the preset part of the Versions panel (splitter drag; double click restores it) |
+| `editorVersionsPartMinHeight` | 160 | Smallest Versions part that the preset splitter leaves |
+| `editorPresetTileMinWidth` | 104 | Minimum preset tile width; the browser fits as many columns as this allows |
+| `editorBrowserListThumbWidth` | 48 | Width of the 3:2 preview slot of a LUT or preset list row |
 | `editorAdjustmentHeaderMinHeight` | 58 | Node-name / EXIF header under the scope: EXIF caption line, `spaceXs` gap, compact Mask-tool row |
 | `collectionsSidebarWidth` | 264 | Default width of the left collections column; a double-click on its edge sets it again |
 | `collectionsSidebarMinWidth` | 208 | Narrowest drag-resized collections column |
@@ -1161,6 +1200,72 @@ cream tones.
 | --- | --- | --- |
 | `maskCoverageTintColor` | `#FF5050` (light red, every theme) | Coverage tint of the viewport composite |
 | `maskCoverageTintOpacity` | 0.5 | Overlay opacity at full coverage |
+
+### Viewport render alert
+
+An error that stops the render of the open photo (the AI Denoise errors of #1050
+first) is shown by `ViewportRenderAlert.qml` over the whole viewport (#1056).
+`BlurredOverlay` blurs the viewport stage and dims it with
+`viewportAlertScrimColor`; a centered column in the style of the workspace empty
+state stands on it, with no card:
+
+| Part | Tokens |
+| --- | --- |
+| Column | `viewportAlertWidth` (380), at most the viewport width less 2 x `spaceLg` |
+| Icon | `photo-off.svg`, `iconOpticalSize`, `viewportAlertSecondaryTextColor` |
+| Title | `headlineFontFamily`, `fontSizeHeadline`, `fontWeightHeading`, `textColor`, centered, wraps; `spaceMd` above |
+| Message | One short translated sentence: `fontSizeTitle`, `viewportAlertSecondaryTextColor`, centered; `spaceXs` above |
+| Show Details | Body text and `chevron-right.svg` (`layerIconGlyphSize`, turns 90 degrees over `motionFadeMs` when open) in `viewportAlertSecondaryTextColor`, `textColor` on hover; `spaceMd` above |
+| Detail | `viewportAlertDetailFillColor` well, 1 px `glassStrokeColor`, `controlRadius`, `spaceSm` / `spaceMd` padding; the raw error text in `monoFontFamily` + `fontSizeCaption` + `textColor`, selectable, wraps anywhere; after `viewportAlertDetailMaxLines` (8) lines it scrolls with an `AlcedoScrollBar` that stays shown |
+| Copy | `clipboard.svg` at the top right of the well (`layerIconHitSize` / `layerIconGlyphSize`); copies the whole detail; the tooltip reads "Copied" for `viewportAlertCopiedMs` |
+| Buttons | `DialogActionButton`, `viewportAlertButtonHeight` (32), `controlRadiusSmall`, `fontSizeBody`, centered; the main action is `light` and stands at the right, a second action is `normal`; `spaceLg` above |
+
+The alert takes the pointer and the wheel of the whole viewport. Show Details
+starts closed for each new error and stays open while the same error is shown
+again. The title and the message come from the caller in the language of the UI;
+the detail is the raw error text in full.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `viewportAlertWidth` | 380 | Width of the column |
+| `viewportAlertButtonHeight` | 32 | Height of the action buttons |
+| `viewportAlertDetailMaxLines` | 8 | Detail lines before the well scrolls |
+| `viewportAlertCopiedMs` | 1500 | Time the Copy tooltip reads "Copied" |
+| `viewportAlertScrimColor` | black at 140/255 | Dim over the blurred viewport; keeps white text readable over a bright photo |
+| `viewportAlertSecondaryTextColor` | `textColor` at 170/255 | Icon, message, Show Details, Copy |
+| `viewportAlertDetailFillColor` | black at 97/255 | Detail well |
+
+### Viewport render progress
+
+A render of the open photo that reads the RAW file or runs the AI Denoise model
+shows its steps in `EditorRenderProgress.qml` (AI Denoise plan, DN14). The user
+requested the pill on 2026-11-23 (direction A of the DN14 mock); it is an
+exception to "Hard ban: unrequested pills and badges" for this surface only.
+
+| Part | Tokens |
+| --- | --- |
+| Pill | At the bottom left of the viewport, `spaceMd` from the left and the bottom edge; `viewportProgressPillHeight` (26), fully rounded, `viewportProgressPillColor`, 1 px `glassStrokeColor`; `spaceSm` padding and spacing |
+| Step dots | One for each step of the render, `viewportProgressDotSize` (6); a done step `viewportProgressFillColor`, the current step `textColor`, a later step `viewportProgressTrackColor` |
+| Step name | `fontSizeCaption`, `fontWeightHeading`, `textColor` |
+| Count | `fontSizeCaption`, `viewportAlertSecondaryTextColor`, tabular figures: `12 / 24 tiles`, or the Develop group (`Sensor`, `Lens and geometry`, `Color`, `Color Grade 1 of 2`, `Display`) |
+| Bar | At the bottom edge of the viewport, `viewportProgressBarHeight` (3); one segment for each step, `viewportProgressSegmentGap` (2) apart; track `viewportProgressTrackColor`, fill `viewportProgressFillColor`; a step with no count sweeps a 30% fill |
+
+The pill and the bar fade in and out over `viewportProgressFadeMs` (200). While
+the pill shows, the center spinner of the viewport hides. The render alert covers
+them when the render fails. Before the first frame, the placeholder image of the
+photo (`appModules.editorPlaceholder`) fills the viewport like the frame at the fit
+zoom, under the pill and the bar.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `viewportProgressPillHeight` | 26 | Height of the pill |
+| `viewportProgressDotSize` | 6 | Step dot |
+| `viewportProgressBarHeight` | 3 | Height of the bar |
+| `viewportProgressSegmentGap` | 2 | Gap between the segments of the bar |
+| `viewportProgressFadeMs` | 200 | Fade of the pill and the bar |
+| `viewportProgressPillColor` | (18, 18, 18) at 184/255 | Pill fill over the photo |
+| `viewportProgressTrackColor` | white at 36/255 | Track of the bar; a later step dot |
+| `viewportProgressFillColor` | white at 230/255 | Fill of the bar; a done step dot |
 
 ### AI Mask tool panel
 
@@ -1676,6 +1781,7 @@ acknowledgements and components of README.md "Acknowledgments": the subject on o
 | `AppMenuItem.qml` | Shared dark menu row (state gutter, wrapping label, sub-menu arrow, hover wash) |
 | `AppMenuSeparator.qml` | Shared 1 px menu group divider |
 | `AlertBadge.qml` | Warning and error message: wrapped white caption text on an `alertBadgeFillColor` badge; hidden while empty |
+| `ViewportRenderAlert.qml` | Error that stops the render of the open photo (#1056): blurs and dims the editor viewport and shows a centered column; see "Viewport render alert". The caller maps its error to `title`, `message`, `detail`, and one or two actions. `EditorAiDenoiseErrorCard.qml` uses it |
 | `SkeletonBlock.qml` | Content placeholder: `bgBaseColor` block with the moving `hoverColor` band (Motion); `animated: false` draws a static tile |
 | `StaggeredGridLoader.qml` | Library loading: a grid of rounded tiles with a diagonal wave (Motion, "Library loading"); `rows: 0` fills the height as a placeholder grid, a fixed 3 x 3 grid with `scaleDepth` is the compact mark |
 | `StaggeredGridMark.qml` | The compact 3 x 3 staggered grid as one shader quad on the shared `appTheme.loadingWavePhase` clock: the loading mark of a photo (Library card, justified tile, Editor filmstrip card) and of the Library over a kept result |

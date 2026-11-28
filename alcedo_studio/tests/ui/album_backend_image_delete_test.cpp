@@ -121,7 +121,8 @@ TEST_F(DeleteTests, DeleteImages_RemovesImageAndRelatedRows) {
     shownCountAfterDelete = backend.library()->ShownCount();
   }
 
-  EXPECT_TRUE(result.value("success").toBool());
+  EXPECT_TRUE(result.value("success").toBool())
+      << result.value("message").toString().toStdString();
   EXPECT_EQ(result.value("deletedCount").toInt(), 1);
   EXPECT_EQ(result.value("failedCount").toInt(), 0);
   EXPECT_EQ(shownCountAfterDelete, 0);
@@ -221,6 +222,49 @@ TEST_F(DeleteTests, DeleteImages_BlockedByInteractionPolicyLock) {
   EXPECT_FALSE(backend.images()->delete_running());
   ProcessEvents(100);
   EXPECT_EQ(finished.count(), 0);
+}
+
+// #1135: a lock on one image of the request skips that image; the other images are deleted.
+TEST_F(DeleteTests, DeleteImages_SkipsTheLockedImageAndDeletesTheOthers) {
+  const auto populated = CreatePopulatedPackedProject(temp_dir_, {}, 2);
+  ASSERT_TRUE(populated.has_value());
+  ASSERT_EQ(populated->images_.size(), 2u);
+
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(LoadPackedProject(backend, populated->packed_path_));
+  ProcessEvents(500);
+  ASSERT_EQ(backend.library()->ShownCount(), 2);
+  auto* registry = qobject_cast<BackgroundTaskController*>(backend.background_tasks());
+  ASSERT_NE(registry, nullptr);
+
+  const auto             locked_id = populated->images_[0].file_id_;
+  const auto             free_id   = populated->images_[1].file_id_;
+  BackgroundTaskSnapshot snapshot;
+  snapshot.kind_            = BackgroundTaskKind::AdjustmentPaste;
+  snapshot.state_           = BackgroundTaskState::Running;
+  snapshot.title_           = QStringLiteral("paste");
+  snapshot.cancelable_      = false;
+  snapshot.shutdown_policy_ = BackgroundTaskShutdownPolicy::CancelAndWait;
+  snapshot.locks_.push_back(InteractionLock{InteractionCapability::DeleteImages,
+                                            static_cast<quint64>(locked_id),
+                                            QStringLiteral("locked by the test")});
+  const QString     task_id = registry->RegisterTask(snapshot);
+
+  const QVariantMap result =
+      DeleteAndWait(backend, {TargetOf(locked_id, populated->images_[0].image_id_),
+                              TargetOf(free_id, populated->images_[1].image_id_)});
+  registry->FinishTask(task_id, BackgroundTaskState::Succeeded);
+  ProcessEvents(500);
+
+  EXPECT_TRUE(result.value("success").toBool()) << result.value("message").toString().toStdString();
+  EXPECT_EQ(result.value("deletedCount").toInt(), 1);
+  EXPECT_EQ(result.value("failedCount").toInt(), 0);
+  EXPECT_EQ(result.value("lockedElementIds").toList(), QVariantList{static_cast<uint>(locked_id)});
+  const QVariantList deleted = result.value("deletedElementIds").toList();
+  ASSERT_EQ(deleted.size(), 1);
+  EXPECT_EQ(deleted.front().toUInt(), static_cast<uint>(free_id));
+  EXPECT_TRUE(result.value("message").toString().contains(QStringLiteral("skipped")));
+  EXPECT_EQ(backend.library()->ShownCount(), 1);
 }
 
 TEST_F(DeleteTests, AddToAlbumThenDeleteFromAlbum_KeepsRootFile) {

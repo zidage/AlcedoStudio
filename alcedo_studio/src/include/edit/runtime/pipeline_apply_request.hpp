@@ -14,6 +14,7 @@
 #include "edit/runtime/curve_input_histogram.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/mask_coverage_probe.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "io/image/export_color_profile_config.hpp"
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
@@ -56,6 +57,10 @@ struct PipelineApplyRequest {
   /// sink of the request after the frame (issue #888). The caller sets it only for a render of
   /// the whole edit frame. Not part of any key: the photo output does not change.
   std::optional<CurveInputHistogramRequest>   curve_input_histogram;
+  /// Receives the steps of a render that reads the RAW file or runs the AI Denoise model
+  /// (AI Denoise plan, DN14); a render that reads only the caches reports nothing. Called on the
+  /// render thread. Not part of any key.
+  RenderProgressCallback                      progress;
 };
 
 /// Long-edge limit, in output pixels, of the editor's full-image Quality Base render.

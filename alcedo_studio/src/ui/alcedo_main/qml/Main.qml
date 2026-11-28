@@ -499,6 +499,7 @@ ApplicationWindow {
         imageActionsController.selectionState = selectionStateObj
         imageActionsController.imageContextMenu = appDialogs.imageContextMenu
         imageActionsController.adjustmentTransferDialog = appDialogs.adjustmentTransferDialog
+        imageActionsController.applyPresetDialog = appDialogs.applyPresetDialog
         imageActionsController.deleteConfirmDialog = appDialogs.deleteConfirmDialog
         projectLaunchController.welcomeDialog = appDialogs.welcomeDialog
         projectLaunchController.start()
@@ -513,8 +514,8 @@ ApplicationWindow {
     }
 
 
-    function showSnackbar(messageText) {
-        notificationSnackbar.show(messageText)
+    function showSnackbar(messageText, durationMs) {
+        notificationSnackbar.show(messageText, durationMs)
     }
 
     function requestSaveProject() {
@@ -547,8 +548,9 @@ ApplicationWindow {
 
     // Collection name for the drop overlay and the folder dialog title.
     function collectionDisplayName(folderId) {
+        // A drop with folder 0 goes into the library root (#1078).
         if (Number(folderId) === 0) {
-            return qsTr("All Photos")
+            return qsTr("Library")
         }
         const rows = appModules.folders ? appModules.folders.folders : []
         for (let i = 0; i < rows.length; ++i) {
@@ -560,7 +562,7 @@ ApplicationWindow {
     }
 
     function importDroppedUrls(urls, folderId) {
-        appDialogs.importDroppedUrls(urls, Number(folderId), root.collectionDisplayName(folderId))
+        appDialogs.importDroppedUrls(urls, Number(folderId))
     }
 
     function openLutImportDialog() {
@@ -691,7 +693,7 @@ ApplicationWindow {
                                                    ? workspaceHost.libraryItem.thumbnailMaxEdge : 0
     readonly property alias selectionState: selectionStateObj
     readonly property var importDialog: appDialogs.importDialog
-    readonly property var importFolderDialog: appDialogs.importFolderDialog
+    readonly property var importFolderFlow: appDialogs.importFolderFlow
     readonly property var globalSearchDialog: appDialogs.globalSearchDialog
 
     SelectionState {
@@ -735,6 +737,7 @@ ApplicationWindow {
 
         TopToolbar {
             id: topToolbar
+            Layout.rightMargin: windowCaptionLayer.reservedWidth
             theme: root
             host: root
         }
@@ -768,6 +771,7 @@ ApplicationWindow {
                     enabled: !root.collectionsSidebarExpanded
                     theme: root
                     allPhotosSelected: Number(appModules.folders.currentFolderId) === 0
+                                       && appModules.folders.libraryRootSelected !== true
                     onSearchRequested: root.globalSearchDialog.openFromCollection()
                     onBackgroundTasksRequested: root.openBackgroundTasksDialog()
                     onAllPhotosRequested: {
@@ -809,7 +813,9 @@ ApplicationWindow {
                     backendInteractive: root.backendInteractive
                     fileDropEnabled: root.fileDropImportAllowed
                     onImportRequested: root.importDialog.open()
-                    onImportFromFolderRequested: root.importFolderDialog.open()
+                    onImportFolderRequested: function(action, folderUrl, startFolderUrl) {
+                        root.importFolderFlow.begin(action, folderUrl, startFolderUrl)
+                    }
                     onFilesDropped: function(urls, folderId) {
                         root.importDroppedUrls(urls, folderId)
                     }
@@ -957,8 +963,20 @@ ApplicationWindow {
     }
 
     WindowResizeHandles {
+        id: windowResizeHandles
         host: root
         active: root.visibility === Window.Windowed && !root.nativeTrafficLightsEnabled
+    }
+
+    // Drawn caption buttons and the toolbar drag strip, above every popup so a
+    // modal dialog cannot take the window's controls away (issue 1140).
+    WindowCaptionLayer {
+        id: windowCaptionLayer
+        host: root
+        theme: root
+        toolbar: topToolbar
+        active: !root.nativeTrafficLightsEnabled
+        resizeInset: windowResizeHandles.active ? windowResizeHandles.edge : 0
     }
 
     // Workspace-scoped commands: the registry scope string tracks the router's

@@ -1,0 +1,29 @@
+name: Feature request
+description: A specific feature or change that you want in Alcedo Studio.
+title: "[FEATURE] "
+type: Feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the request. You can write in English or Chinese.
+        For an idea that is not yet a specific request, start a discussion in the Ideas category.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What you want to do
+    validations:
+      required: true
+  - type: textarea
+    id: limit
+    attributes:
+      label: Why the current application does not let you do it
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: What the application does when the feature is there. Screenshots of other applications are welcome.
+    validations:
+      required: true

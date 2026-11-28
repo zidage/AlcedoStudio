@@ -12,15 +12,18 @@
 #include <QStandardPaths>
 #include <algorithm>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
 
+#include "edit/input/ai_denoise_error.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
-#include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/library_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
@@ -68,20 +71,27 @@ auto           SanitizeBitDepth(ImageFormatType format, ExportFormatOptions::BIT
   }
 }
 
+auto TokenText(std::string_view token) -> QString {
+  return QString::fromUtf8(token.data(), static_cast<qsizetype>(token.size()));
+}
+
 auto ExportStatusKey(const sl_element_id_t elementId, const image_id_t imageId) -> QString {
   return QString::number(static_cast<qulonglong>(elementId)) + ":" +
          QString::number(static_cast<qulonglong>(imageId));
 }
 
-/// The exportItemStatuses value of a finished task.
-auto ExportItemStatus(bool succeeded, bool source_missing) -> QString {
+}  // namespace
+
+auto ExportItemStatusOf(bool succeeded, bool source_missing, std::string_view message) -> QString {
   if (succeeded) {
     return QStringLiteral("succeeded");
   }
-  return source_missing ? QStringLiteral("missing") : QStringLiteral("failed");
+  if (source_missing) {
+    return QStringLiteral("missing");
+  }
+  return alcedo::ParseAiDenoiseRenderError(message).has_value() ? QStringLiteral("ai_denoise")
+                                                                : QStringLiteral("failed");
 }
-
-}  // namespace
 
 ImportExportHandler::ImportExportHandler(ProjectModule* project, LibraryModule* library,
                                          FolderController* folders, IUiStatusSink* status,
@@ -292,6 +302,70 @@ void ImportExportHandler::StartFolderImportToFolderAsUser(const int folderUiId) 
   StartImportPaths(paths, true, allowed, std::move(dropped_paths));
 }
 
+void ImportExportHandler::StartFolderImportOfFolderAsUser(const QString& folderUrlOrPath,
+                                                          const int      folderUiId) {
+  if (!UserImportAllowed()) {
+    return;
+  }
+  if (import_running_) {
+    status_->SetTaskState(PL_TEXT("Import already running."), 0, true);
+    return;
+  }
+  // #1086: the destination is the project and the collection element chosen now. A row id only
+  // names a row of the current tree, and a reload during the scan gives it to another row.
+  const std::weak_ptr<ProjectService> project = project_->handler().project();
+  const auto destination = folderUiId >= 0 && !project.expired()
+                               ? folders_->FolderElementIdForUiId(static_cast<uint>(folderUiId))
+                               : std::nullopt;
+  if (!destination.has_value()) {
+    status_->SetTaskState(PL_TEXT("The collection is no longer in the library."), 0, false);
+    return;
+  }
+  // The types that the scan allows by default: the stored selection the dialog opens with.
+  folder_scan_->Start(folderUrlOrPath);
+  status_->SetTaskState(PL_TEXT("Scanning folder..."), 0, false);
+  // One import per scan: another Start or a Cancel gives the scan a new serial number, and the
+  // connection then ends without importing.
+  const auto serial = folder_scan_->ScanSerial();
+  auto       done   = std::make_shared<QMetaObject::Connection>();
+  *done             = connect(
+      folder_scan_, &FolderImportScanModel::ScanStateChanged, this,
+      [this, serial, project, destination_id = destination.value(), done]() {
+        if (folder_scan_->ScanSerial() != serial) {
+          disconnect(*done);
+          return;
+        }
+        if (!folder_scan_->ScanFinished()) {
+          return;
+        }
+        disconnect(*done);
+        // A project switch, or a reload of the same file, makes a new ProjectService; the old
+        // one has then expired or differs from the open one.
+        const auto open_project = project.lock();
+        if (!open_project || open_project != project_->handler().project() ||
+            project_->handler().project_loading()) {
+          status_->SetTaskState(
+              PL_TEXT("The project changed, so the folder was not imported."), 0, false);
+          return;
+        }
+        if (!folder_scan_->FolderValid()) {
+          status_->SetTaskState(PL_TEXT("The folder could not be read."), 0, false);
+          return;
+        }
+        if (folder_scan_->AllowedFileCount() == 0) {
+          status_->SetTaskState(PL_TEXT("No files found in this folder."), 0, false);
+          return;
+        }
+        const auto row = folders_->FolderUiIdForElementId(destination_id);
+        if (!row.has_value()) {
+          status_->SetTaskState(PL_TEXT("The collection is no longer in the library."), 0,
+                                false);
+          return;
+        }
+        StartFolderImportToFolderAsUser(static_cast<int>(row.value()));
+      });
+}
+
 void ImportExportHandler::StartFolderImport() {
   if (!folder_scan_->ScanFinished()) {
     status_->SetTaskState(PL_TEXT("The folder is still being scanned."), 0, false);
@@ -345,14 +419,19 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
     return;
   }
   // #1016, decision D10: one file has one element. The scan of a mount imports the files of its
-  // directory as mounted photos, so the user import leaves them to it.
-  if (const auto left_to_scans = RemoveMountScanPaths(paths); left_to_scans > 0) {
-    status_->SetServiceMessage(
-        PL_TEXT("%1 file(s) are in a mounted folder. The scan of that folder adds them.",
-                static_cast<qulonglong>(left_to_scans)));
-    if (paths.empty()) {
-      return;
-    }
+  // directory as mounted photos, so the user import leaves them to it. The Library snackbar
+  // reports the count (#1089).
+  import_left_to_mounts_ = static_cast<int>(RemoveMountScanPaths(paths));
+  if (import_left_to_mounts_ > 0 && paths.empty()) {
+    status_->SetTaskState(
+        PL_TEXT("%1 file(s) are already in a mounted folder and will not be imported this time.",
+                import_left_to_mounts_),
+        0, false);
+    emit ImportStateChanged();
+    emit importStateChanged();
+    emit ImportLeftAllToMounts(import_left_to_mounts_);
+    emit importLeftAllToMounts(import_left_to_mounts_);
+    return;
   }
 
   if (!preserveTarget) {
@@ -376,6 +455,8 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
   import_raw_total_     = 0;
   import_raw_completed_ = 0;
   import_raw_failed_    = 0;
+  import_duplicates_     = 0;
+  import_raw_duplicates_ = 0;
   import_status_text_ = PL_TEXT("Preparing %1 file(s)...", import_total_);
   import_progress_queued_->store(false);
   emit ImportStateChanged();
@@ -414,6 +495,7 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
   ImportOptions options;
   options.allowed_categories_ = allowedCategories;
   options.any_category_paths_ = std::move(anyCategoryPaths);
+  options.skip_duplicates     = LibraryBehaviorPreferences::LoadSkipDuplicateImports();
   // #1016: no scan batch writes the project from here to CompleteImport. The job starts when the
   // running scan has completed its batch; a cancel before that start reads no file.
   import_scan_hold_           = mount_scans_ != nullptr ? mount_scans_->Hold() : MountScanHold{};
@@ -469,6 +551,8 @@ void ImportExportHandler::ApplyImportProgress() {
   const uint32_t        canceled    = progress.canceled_.load();
   const uint32_t        raw_failed  = progress.raw_failed_.load();
   const uint32_t        raw_done    = progress.raw_imported_.load();
+  const uint32_t        raw_duplicates = progress.raw_duplicates_skipped.load();
+  const uint32_t        duplicates     = progress.duplicates_skipped.load();
   const uint32_t        failed      = progress.failed_.load();
   const uint32_t        imported    = progress.metadata_done_.load();
   const uint32_t        prepared    = progress.placeholders_created_.load();
@@ -483,6 +567,8 @@ void ImportExportHandler::ApplyImportProgress() {
   import_raw_total_                 = static_cast<int>(progress.raw_total_);
   import_raw_completed_             = static_cast<int>(raw_done);
   import_raw_failed_                = static_cast<int>(raw_failed);
+  import_duplicates_                   = static_cast<int>(duplicates);
+  import_raw_duplicates_               = static_cast<int>(raw_duplicates);
   import_phase_       = job->submission_closed_.load() ? ImportPhaseState::Reading
                                                        : ImportPhaseState::Preparing;
   if (!job->IsCancelled()) {
@@ -491,7 +577,7 @@ void ImportExportHandler::ApplyImportProgress() {
   emit ImportStateChanged();
   emit importStateChanged();
 
-  const int processed_percent = static_cast<int>(((imported + failed) * 100U) / total);
+  const int processed_percent = static_cast<int>(((imported + failed + duplicates) * 100U) / total);
   status_->SetTaskState(import_status_text_, processed_percent, true);
   if (nikon_ && nikon_->is_reimporting()) {
     nikon_->UpdateReimportProgress(imported, total, failed);
@@ -633,6 +719,7 @@ void ImportExportHandler::StartExportWithRecipeOptionsForTargets(
   }
 
   export_item_statuses_.clear();
+  export_item_ai_denoise_errors_.clear();
   ++export_run_id_;
   for (const auto& [elementId, imageId] : queue_result.queued_targets_) {
     export_item_statuses_.insert(ExportStatusKey(elementId, imageId), QStringLiteral("queued"));
@@ -714,9 +801,18 @@ void ImportExportHandler::RenderQueuedExport(int skippedCount) {
                   state_changed = true;
                 }
                 if (progress.task_finished_) {
-                  self->export_item_statuses_.insert(
-                      status_key,
-                      ExportItemStatus(progress.task_success_, progress.task_source_missing_));
+                  const QString status =
+                      ExportItemStatusOf(progress.task_success_, progress.task_source_missing_,
+                                         progress.task_message_);
+                  self->export_item_statuses_.insert(status_key, status);
+                  if (status == QStringLiteral("ai_denoise")) {
+                    const auto error = alcedo::ParseAiDenoiseRenderError(progress.task_message_);
+                    self->export_item_ai_denoise_errors_.insert(
+                        status_key,
+                        QVariantMap{{QStringLiteral("kind"),
+                                     TokenText(alcedo::AiDenoiseErrorKindToken(error->kind))},
+                                    {QStringLiteral("text"), QString::fromStdString(error->text)}});
+                  }
                   state_changed = true;
                 }
               }
@@ -825,6 +921,8 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   import_raw_total_     = static_cast<int>(result.raw_requested_);
   import_raw_completed_ = static_cast<int>(result.raw_imported_);
   import_raw_failed_    = static_cast<int>(result.raw_failed_);
+  import_duplicates_     = static_cast<int>(result.duplicates_skipped);
+  import_raw_duplicates_ = static_cast<int>(result.raw_duplicates_skipped);
   import_status_text_ = PL_TEXT("Saving %1 imported photo(s) to the library...", result.imported_);
   emit ImportStateChanged();
   emit importStateChanged();
@@ -898,13 +996,17 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
 
   const uint32_t skipped     = result.unsupported_ + result.excluded_type_ + result.canceled_;
   const uint32_t errors      = result.failed_ - std::min(result.failed_, skipped);
-  auto           task_text =
-      PL_TEXT("Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed",
-              result.imported_, result.excluded_type_, result.unsupported_, errors);
+  auto           task_text   = PL_TEXT(
+      "Import complete: %1 imported, %2 duplicates skipped, %3 not selected, %4 unsupported, %5 "
+      "failed",
+      result.imported_, result.duplicates_skipped, result.excluded_type_, result.unsupported_,
+      errors);
   if (result.canceled_ > 0) {
     task_text = PL_TEXT(
-        "Import canceled: %1 imported, %2 not read, %3 not selected, %4 unsupported, %5 failed",
-        result.imported_, result.canceled_, result.excluded_type_, result.unsupported_, errors);
+        "Import canceled: %1 imported, %2 duplicates skipped, %3 not read, %4 not selected, %5 "
+        "unsupported, %6 failed",
+        result.imported_, result.duplicates_skipped, result.canceled_, result.excluded_type_,
+        result.unsupported_, errors);
   }
   if (!outcome.state_saved_) {
     status_->SetServiceMessage(PL_TEXT("Import finished, but saving project state failed."));
@@ -924,6 +1026,8 @@ void ImportExportHandler::CompleteImport(const ImportResult&                    
   import_raw_total_     = static_cast<int>(result.raw_requested_);
   import_raw_completed_ = static_cast<int>(result.raw_imported_);
   import_raw_failed_    = static_cast<int>(result.raw_failed_);
+  import_duplicates_     = static_cast<int>(result.duplicates_skipped);
+  import_raw_duplicates_ = static_cast<int>(result.raw_duplicates_skipped);
   import_status_text_ = task_text;
   emit ImportStateChanged();
   emit importStateChanged();
@@ -1283,6 +1387,7 @@ void ImportExportHandler::ResetExportProgressState(const i18n::LocalizedText& st
   export_status_text_        = status;
   export_error_summary_text_ = {};
   export_item_statuses_.clear();
+  export_item_ai_denoise_errors_.clear();
   export_total_     = 0;
   export_completed_ = 0;
   export_succeeded_ = 0;
@@ -1296,6 +1401,7 @@ void ImportExportHandler::SetExportFailureState(const i18n::LocalizedText& messa
   export_status_text_        = message;
   export_error_summary_text_ = {};
   export_item_statuses_.clear();
+  export_item_ai_denoise_errors_.clear();
   emit ExportStateChanged();
   emit exportStateChanged();
   status_->SetTaskState(message, 0, false);

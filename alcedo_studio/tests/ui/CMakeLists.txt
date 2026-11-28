@@ -208,7 +208,7 @@ target_link_libraries(EditorSessionHistoryPortTest
   ProfileToneCurve
   AdjustmentTransferService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   EditorWorkingDocument
   EditorSessionEditController
@@ -248,7 +248,7 @@ target_include_directories(EditorComparisonInputsTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorComparisonInputsTest
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -289,7 +289,7 @@ target_link_libraries(EditorComparisonServiceTest
   EditorSessionService
   EditorComparisonService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -332,7 +332,7 @@ target_link_libraries(EditorMaskCoveragePreviewTest
   AiMaskEditSession
   EditorComparisonService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -371,7 +371,7 @@ target_link_libraries(EditorHistoryMoveDuringInputTest
   EditorSessionService
   EditorComparisonService
   AiMaskAnalysisImage
-  LutPreviewImage
+  BrowserPreviewImage
   EditorComparisonInputs
   AdjustmentTransferService
   EditorWorkingDocument
@@ -398,6 +398,45 @@ alcedo_ui_gtest_discover_tests(EditorHistoryMoveDuringInputTest
   TEST_PREFIX "EditorHistoryMoveDuringInputTest."
   PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
 alcedo_register_test_target(EditorHistoryMoveDuringInputTest ui)
+
+# AI Denoise integration plan, DN7: the model error of the open photo and the switch through the
+# production session facade over the real history port.
+add_executable(EditorAiDenoiseSessionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_ai_denoise_session_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
+target_include_directories(EditorAiDenoiseSessionTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorAiDenoiseSessionTest
+  EditorSessionService
+  EditorComparisonService
+  AiMaskAnalysisImage
+  BrowserPreviewImage
+  EditorComparisonInputs
+  AdjustmentTransferService
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
+  EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
+  EditorMiniGitMaterializer
+  PipelineMgmtService
+  ProjectService
+  PipelineHistory
+  EditPipeline
+  GTest::gtest_main)
+set_target_properties(EditorAiDenoiseSessionTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
+alcedo_ui_gtest_discover_tests(EditorAiDenoiseSessionTest
+  TEST_PREFIX "EditorAiDenoiseSessionTest."
+  PROPERTIES LABELS "editor_session")
+alcedo_register_test_target(EditorAiDenoiseSessionTest ui)
 
 # Checkpoint storage owns Mini-Git materialization and recovery.
 # Same direct-adapter link rule as history port: avoid AlbumBackendLib for unit runs.
@@ -494,6 +533,17 @@ alcedo_ui_gtest_discover_tests(EditorComparisonLargeRawPairTest
   PROPERTIES LABELS "editor_session;editor_comparison")
 alcedo_register_test_target(EditorComparisonLargeRawPairTest ui)
 
+# AI Denoise integration plan, DN7: the switch owner of the editor.
+def_ui_test(EditorAiDenoiseControlTest editor_ai_denoise_control_test.cpp)
+alcedo_register_test_target(EditorAiDenoiseControlTest ui)
+# AI Denoise integration plan, DN8: Turn Off AI Denoise of an export queue item.
+def_ui_test(ExportAiDenoiseControlTest export_ai_denoise_control_test.cpp)
+alcedo_register_test_target(ExportAiDenoiseControlTest ui)
+
+# AI Denoise integration plan, DN14: the image of the editor viewport before the first frame.
+def_ui_test(EditorViewportPlaceholderTest editor_viewport_placeholder_test.cpp)
+alcedo_register_test_target(EditorViewportPlaceholderTest ui)
+
 def_ui_test(AlbumBackendImportTest   album_backend_import_test.cpp)
 alcedo_register_test_target(AlbumBackendImportTest ui)
 
@@ -554,6 +604,9 @@ alcedo_register_test_target(AlbumSectionModelTest ui)
 # Issue 745: justified-rows Library layout geometry, its window model, and the layout setting.
 def_ui_test(JustifiedLayoutTest justified_layout_test.cpp)
 alcedo_register_test_target(JustifiedLayoutTest ui)
+# Issue 1077: the default action of Import Folder.
+def_ui_test(LibraryBehaviorPreferencesTest library_behavior_preferences_test.cpp)
+alcedo_register_test_target(LibraryBehaviorPreferencesTest ui)
 def_ui_test(AlbumBackendLibraryQueryTest album_backend_library_query_test.cpp)
 alcedo_register_test_target(AlbumBackendLibraryQueryTest ui)
 
@@ -623,6 +676,19 @@ alcedo_register_test_target(AdjustmentTransferDialogModelTest ui)
 
 def_ui_test(AdjustmentTransferControllerTest adjustment_transfer_controller_test.cpp)
 alcedo_register_test_target(AdjustmentTransferControllerTest ui)
+
+# Preset commands of the Versions panel (edit presets plan, PS2).
+def_ui_test(PresetControllerTest preset_controller_test.cpp)
+alcedo_register_test_target(PresetControllerTest ui)
+
+# Apply Preset for many photos and the dialog previews of a library photo (edit presets plan, PS4).
+def_ui_test(PresetApplyTargetsTest preset_apply_targets_test.cpp)
+alcedo_register_test_target(PresetApplyTargetsTest ui)
+
+# Preset browser previews of the open photo (edit presets plan, PS3).
+def_ui_test(PresetPreviewControllerTest preset_preview_controller_test.cpp)
+target_link_libraries(PresetPreviewControllerTest PRIVATE BrowserPreviewImage)
+alcedo_register_test_target(PresetPreviewControllerTest ui)
 
 # Phase 0: deterministic editor RHI checks (backend parse, fixtures, lease schema).
 add_executable(EditorRhiContractsTest

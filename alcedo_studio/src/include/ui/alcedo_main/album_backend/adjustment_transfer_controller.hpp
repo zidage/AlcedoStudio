@@ -99,6 +99,21 @@ class AdjustmentTransferController final : public QObject {
    * while an automation agent holds control.
    */
   Q_INVOKABLE QVariantMap Paste(const QVariantList& targetEntries, const QString& strategy);
+  /**
+   * @brief Paste @p package onto @p targetEntries as one new Version named @p version_name each.
+   *
+   * The routing of every multi-target Paste (Paste Adjustments and Apply Preset, edit presets
+   * plan PS4): the image open in the editor pastes through the editor session queue; every
+   * other target pastes in the AdjustmentPaste background task of the apply coordinator, and
+   * @ref PasteFinished reports it. Refused while an automation agent holds control. The package
+   * is copied for the worker; the caller keeps its own.
+   *
+   * @return `{success, message?, pending, editorMessage?}` at once: pending is true when the
+   *         background task started.
+   */
+  auto PastePackageToTargets(const alcedo::AdjustmentTransferPackage& package,
+                             const QVariantList& targetEntries, const QString& version_name)
+      -> QVariantMap;
   Q_INVOKABLE QVariantMap PasteIntoEditor(QObject* editorSession);
   Q_INVOKABLE void        Discard();
 

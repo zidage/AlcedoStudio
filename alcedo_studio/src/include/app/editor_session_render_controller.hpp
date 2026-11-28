@@ -15,7 +15,9 @@
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/input/ai_denoise_error.hpp"
 #include "edit/runtime/curve_input_histogram.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -29,6 +31,8 @@ enum class EditorRenderEventKind : std::uint8_t {
   RenderReused,
   RenderRejected,
   BusyChanged,
+  /// The AI Denoise error of the open photo was set or cleared (integration plan, DN7).
+  AiDenoiseErrorChanged,
 };
 
 struct EditorRenderEvent {
@@ -50,6 +54,10 @@ struct EditorRenderEvent {
 class EditorSessionRenderController final {
  public:
   using EventCallback = std::function<void(const EditorRenderEvent&)>;
+  /// Receives the progress of a render of the image-load request that built its intent (DN14).
+  /// Called on the render worker; the receiver hands the value to the owner of the session.
+  using RenderProgressReceiver =
+      std::function<void(ImageLoadRequestId image_load_request, const RenderProgress& progress)>;
 
   struct Dependencies {
     std::shared_ptr<IEditorRenderSubmitPort> render;
@@ -79,6 +87,25 @@ class EditorSessionRenderController final {
   void SetCurveInputHistogramRequest(std::optional<CurveInputHistogramRequest> request);
   [[nodiscard]] auto curve_input_histogram_request() const
       -> std::optional<CurveInputHistogramRequest>;
+  /**
+   * @brief Receiver of the render progress that every new render intent carries (AI Denoise
+   *        plan, DN14). Empty: intents carry no progress callback. Any thread.
+   */
+  void SetRenderProgressReceiver(RenderProgressReceiver receiver);
+  /**
+   * @brief Keep @p progress as the progress of the open photo when @p image_load_request is
+   *        @p active_image_load_request (DN14). Call on the owner of the session, ordered with
+   *        @ref NotifyRenderResult.
+   * @return True when the kept progress changed.
+   */
+  auto NotifyRenderProgress(ImageLoadRequestId image_load_request, const RenderProgress& progress,
+                            ImageLoadRequestId active_image_load_request) -> bool;
+  /**
+   * @brief The step of the render of the open photo that reads the RAW file or runs the model
+   *        (DN14); empty when no such render runs. A ready, failed, cancelled, or refused frame of
+   *        the photo and the load of another photo clear it.
+   */
+  [[nodiscard]] auto render_progress() const -> std::optional<RenderProgress>;
   /// The viewport was minimized/hidden (true) or shown again (false). On resume,
   /// frames the sink refused while suspended are routed again for the current
   /// state: the first frame of a loading image, else a QualityBase refresh, and
@@ -124,6 +151,14 @@ class EditorSessionRenderController final {
   /// Aggregate coordinator busy state.
   [[nodiscard]] auto render_busy() const -> bool;
 
+  /**
+   * @brief The AI Denoise error of the last frame of the open photo (integration plan, DN7).
+   *
+   * A failed frame whose message has an AI Denoise error sets it; a ready frame of the photo and
+   * the load of another photo clear it. Each change emits `AiDenoiseErrorChanged`.
+   */
+  [[nodiscard]] auto ai_denoise_error() const -> std::optional<AiDenoiseRenderError>;
+
   /// Coordinator diagnostics pass-through.
   [[nodiscard]] auto render_diagnostics() const -> EditorRenderCoordinatorDiagnostics;
 
@@ -156,6 +191,11 @@ class EditorSessionRenderController final {
   /// Emit a FirstFrameReady event when image acquisition and rendering finish.
   /// The facade applies the Interactive lifecycle transition in its handler.
   void                TryEnterInteractiveFromFirstFrame(const EditorSessionIdentity& identity);
+  /// Record the end of the first frame (its time) once and enter Interactive.
+  void                CompleteFirstFrame();
+  /// Set or clear @ref ai_denoise_error_; emits `AiDenoiseErrorChanged` when it changes.
+  void                SetAiDenoiseError(std::optional<AiDenoiseRenderError> error,
+                                        const EditorSessionIdentity& identity, EditorSessionState state);
   /// Check if a render result matches the active first-frame request and the
   /// provided identity.
   [[nodiscard]] auto  MatchesActiveFirstFrame(const EditorRenderResult&    render_result,
@@ -209,11 +249,16 @@ class EditorSessionRenderController final {
   bool                                                 last_notified_render_busy_ = false;
   std::optional<std::chrono::steady_clock::time_point> first_frame_route_time_{};
   double                                               first_frame_time_ms_ = -1.0;
+  std::optional<AiDenoiseRenderError>                  ai_denoise_error_;
   std::atomic<bool>                                    geometry_overlay_active_{false};
   mutable std::mutex                                   probe_source_mutex_;
   std::function<std::optional<MaskCoverageProbe>()>    probe_source_;
   /// Guarded by probe_source_mutex_.
   std::optional<CurveInputHistogramRequest>            curve_input_histogram_;
+  /// Guarded by probe_source_mutex_.
+  RenderProgressReceiver                               render_progress_receiver_;
+  /// Guarded by mutex_.
+  std::optional<RenderProgress>                        render_progress_;
   /// Set one suspension reason and route the refused frames when no reason is left.
   void SetSuspension(bool EditorSessionRenderController::* reason, bool suspended,
                      const EditorSessionIdentity& identity, ImageLoadRequestId image_load_request,

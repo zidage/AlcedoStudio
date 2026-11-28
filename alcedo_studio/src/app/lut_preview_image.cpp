@@ -9,7 +9,6 @@
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
-#include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 
@@ -50,23 +49,6 @@ auto BuildLutPreviewDocument(const CommitGraph& graph, const LoadedRootState& ro
   // The private document is frozen and dropped here; only the frozen copy leaves this call.
   return PipelineGraphSnapshot::Preview(document->Freeze(), current->ElementId(),
                                         current->Lineage(), transaction_chain_hash_t{});
-}
-
-auto MakeLutPreviewRenderRequest() -> RenderRequest {
-  RenderRequest request;
-  request.document_geometry   = DocumentGeometryUse::ApplyCropAndRotation;
-  request.resolution.max_edge = kLutPreviewLongEdge;
-  request.resolution.quality  = RenderQuality::Preview;
-  return request;
-}
-
-auto LutPreviewOutputColor(const PipelineDocument& document)
-    -> std::optional<ExportColorProfileConfig> {
-  const auto* drt = document.Drt();
-  if (drt != nullptr && IsHdrExportEncoding(*drt)) {
-    return ExportColorProfileConfig{};
-  }
-  return std::nullopt;
 }
 
 }  // namespace alcedo

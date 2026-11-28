@@ -2,6 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <optional>

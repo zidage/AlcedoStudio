@@ -13,6 +13,9 @@ Item {
     property var host: null
     property var workspaceRouter: appModules.workspaceRouter
     property var editorSession: appModules.editorSession
+    property var aiDenoise: appModules.editorAiDenoise
+    // The image of the viewport before the first frame of a photo (AI Denoise plan, DN14).
+    property var viewportPlaceholder: appModules.editorPlaceholder
     property var interactionPolicy: appModules.interactionPolicy
     property Item blurSource: null
     // True while the workspace width follows the collections sidebar fold (WorkspaceHost). The
@@ -286,11 +289,47 @@ Item {
                         Component.onCompleted: root.bindMaskOverlay()
                     }
 
+                    // Before the first frame: the library thumbnail of the photo, or its camera
+                    // preview (DN14). It covers the viewport (an earlier photo or an empty
+                    // target), fitted like the frame at the fit zoom, until the viewport has
+                    // composed a frame after it showed. `presentationAvailable` only says that
+                    // the viewport has a render target, which it has before any frame.
+                    Image {
+                        id: viewportPlaceholderImage
+                        objectName: "editorViewportPlaceholder"
+                        anchors.centerIn: parent
+                        width: viewportSlot.stageWidth
+                        height: viewportSlot.stageHeight
+                        scale: viewportSlot.stageScale
+                        visible: root.hasImage && source.toString().length > 0
+                                 && status === Image.Ready
+                        source: root.hasImage && root.viewportPlaceholder
+                                ? root.viewportPlaceholder.source : ""
+                        fillMode: Image.PreserveAspectFit
+                        cache: false
+                        smooth: true
+                        mipmap: true
+                        // Above the viewport item, under the overlays and the status chrome.
+                        z: 2.5
+
+                        // The composed frames of the viewport when this image showed.
+                        property real composedAtShow: 0
+                        readonly property bool frameComposedSinceShow:
+                            visible && editorViewportItem.presentedFrameCount > composedAtShow
+                        onSourceChanged: composedAtShow = editorViewportItem.presentedFrameCount
+                        onFrameComposedSinceShowChanged: {
+                            if (frameComposedSinceShow && root.viewportPlaceholder)
+                                root.viewportPlaceholder.release()
+                        }
+                    }
+
                     // Spinner / status remain ordinary QML (not baked into the RHI pass).
                     Label {
                         objectName: "editorViewportStatus"
                         anchors.centerIn: parent
                         visible: root.hasImage && !editorViewportItem.presentationAvailable
+                                 && !aiDenoiseErrorCard.visible
+                                 && !viewportPlaceholderImage.visible
                         text: qsTr("Preparing image viewport")
                         color: root.colMuted
                         font.pixelSize: appTheme.fontSizeSection
@@ -313,7 +352,18 @@ Item {
                                 && root.editorSession
                                 && root.editorSession.renderBusy
                                 && !root.adjustmentRenderBusy
+                                && !renderProgress.showing
                         running: visible
+                        z: 3
+                    }
+
+                    // The steps of a render that reads the RAW file or runs the AI Denoise model
+                    // (DN14): a pill and a bar at the bottom of the viewport.
+                    EditorRenderProgress {
+                        id: renderProgress
+                        anchors.fill: parent
+                        progress: root.hasImage && root.editorSession
+                                  ? root.editorSession.renderProgress : ({})
                         z: 3
                     }
 
@@ -329,6 +379,26 @@ Item {
                                  && root.adjustmentRenderBusy
                         running: visible
                         z: 3
+                    }
+
+                    // The AI Denoise error of the open photo (AI Denoise plan, DN7). It blurs the
+                    // viewport and stays until a frame of the photo is ready.
+                    EditorAiDenoiseErrorCard {
+                        id: aiDenoiseErrorCard
+                        anchors.fill: parent
+                        blurSource: editorViewportItem
+                        error: root.hasImage && root.editorSession
+                               ? root.editorSession.aiDenoiseError : ({})
+                        controlsEnabled: root.editorEditControlsEnabled
+                        z: 4
+                        onManageRequested: {
+                            if (root.host && root.host.openAiModelSettings)
+                                root.host.openAiModelSettings()
+                        }
+                        onTurnOffRequested: {
+                            if (root.aiDenoise)
+                                root.aiDenoise.turnOff()
+                        }
                     }
 
                     // Crop rotation label (text overlay, not QSG).
@@ -1025,6 +1095,7 @@ Item {
                 nodeController: historyVersionsRail.nodeController
                 comparison: root.comparison
                 host: root.host
+                aiDenoise: root.aiDenoise
                 controlsEnabled: root.editorEditControlsEnabled
                 expanded: !root.host || root.host.editorAdjustmentStackExpanded !== false
             }

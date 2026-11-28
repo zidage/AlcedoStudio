@@ -202,7 +202,7 @@ TEST_F(EditorMiniGitMaterializerTest, CurrentProjectReopensWithSameHeadAndChain)
     ASSERT_TRUE(in.is_open());
     nlohmann::json metadata;
     in >> metadata;
-    EXPECT_EQ(metadata.at("project_file_version").get<std::string>(), "0.13.0");
+    EXPECT_EQ(metadata.at("project_file_version").get<std::string>(), "0.16.0");
   }
 
   project_.CloseAndReopenProject();

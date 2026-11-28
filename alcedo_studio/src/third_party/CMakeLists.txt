@@ -304,6 +304,12 @@ if(NOT EXISTS "${PUERHLAB_ULTRAHDR_SOURCE_DIR}/CMakeLists.txt")
         "and re-configure.")
 endif()
 
+# Resolve shared libjpeg before libultrahdr narrows its search to static archives.
+# Linux development packages can provide only the shared library.
+if(UNIX AND NOT APPLE)
+    find_package(JPEG REQUIRED)
+endif()
+
 set(UHDR_BUILD_EXAMPLES OFF CACHE BOOL "Disable libultrahdr examples" FORCE)
 set(UHDR_BUILD_TESTS OFF CACHE BOOL "Disable libultrahdr tests" FORCE)
 set(UHDR_BUILD_BENCHMARK OFF CACHE BOOL "Disable libultrahdr benchmarks" FORCE)
@@ -325,6 +331,13 @@ if(EXISTS "${PUERHLAB_ULTRAHDR_IMAGE_IO_HEADER}")
         "${PUERHLAB_ULTRAHDR_SOURCE_DIR}"
         "${CMAKE_BINARY_DIR}/third_party/libultrahdr"
     )
+
+    # The pinned UltraHDR headers use uint8_t without including its defining
+    # header. GCC 16 no longer supplies it through unrelated STL headers.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(core PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-include>"
+                                            "$<$<COMPILE_LANGUAGE:CXX>:cstdint>")
+    endif()
 
     if(TARGET uhdr)
         add_library(puerhlab_ultrahdr INTERFACE)
@@ -563,7 +576,7 @@ set(PUERHLAB_METALCPP_HELPER_INCLUDE_DIR
     CACHE INTERNAL
     "Header directory for project-local metal-cpp wrapper headers.")
 
-if(NOT EXISTS "${PUERHLAB_METALCPP_SOURCE_DIR}/Metal/Metal.hpp")
+if(ALCEDO_METAL_ENABLED AND NOT EXISTS "${PUERHLAB_METALCPP_SOURCE_DIR}/Metal/Metal.hpp")
     message(FATAL_ERROR
         "Bundled metal-cpp source was not found at ${PUERHLAB_METALCPP_SOURCE_DIR}. "
         "Run `git submodule update --init --recursive pu-erh_lab/src/third_party/metal-cpp` and re-configure.")
@@ -574,10 +587,10 @@ target_include_directories(puerhlab_metal_cpp
     INTERFACE
         "${PUERHLAB_METALCPP_HELPER_INCLUDE_DIR}"
 )
-target_include_directories(puerhlab_metal_cpp
-    SYSTEM INTERFACE
-        "${PUERHLAB_METALCPP_SOURCE_DIR}"
-)
+if(EXISTS "${PUERHLAB_METALCPP_SOURCE_DIR}/Metal/Metal.hpp")
+    target_include_directories(puerhlab_metal_cpp SYSTEM INTERFACE
+        "${PUERHLAB_METALCPP_SOURCE_DIR}")
+endif()
 target_compile_features(puerhlab_metal_cpp INTERFACE cxx_std_20)
 
 if(APPLE)

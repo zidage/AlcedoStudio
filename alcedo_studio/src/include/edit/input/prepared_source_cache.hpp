@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <span>
+#include <string_view>
 
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/input/raw_input_loader.hpp"
@@ -36,10 +38,16 @@ class PreparedSourceCache {
    */
   using UnpackFn = std::function<PreparedRawInput(std::span<const std::byte>, DecodeRes)>;
 
+  /// The AI Denoise run of a miss of @ref AcquireDenoised: the denoised input of a full-size
+  /// Bayer input (DenoiseModelSession::Denoise in the product).
+  using DenoiseFn = std::function<PreparedRawInput(const PreparedRawInput&)>;
+
   struct Stats {
     std::uint64_t hits                   = 0;
     std::uint64_t misses                 = 0;
     std::uint64_t libraw_open_unpack_count = 0;
+    /// Misses of @ref AcquireDenoised that ran the model.
+    std::uint64_t denoise_runs             = 0;
   };
 
   class Lease {
@@ -77,6 +85,43 @@ class PreparedSourceCache {
       -> Lease;
 
   /**
+   * @brief Return the leased AI Denoise input of @p encoded at full size (integration plan, DN6).
+   *
+   * The entry has its own lookup: the full-size lookup of the source and the hash of
+   * @p model_version (the installed model) and @p xyz_to_camera (the camera matrix of the gain
+   * match, HashAiDenoiseRun). On a miss, takes the full-size entry
+   * (@ref AcquireEncoded). A Bayer CFA input runs @p denoise, the lease of the CFA entry ends
+   * (the entry is then the first to be evicted), and the result is inserted. Another input
+   * (X-Trans, direct RGB, raster) runs no model: the lease of its own entry is returned, and
+   * the Develop input check reports it.
+   *
+   * @throws whatever the unpacker or @p denoise throws; then no denoised entry is inserted.
+   */
+  [[nodiscard]] auto AcquireDenoised(std::span<const std::byte>   encoded,
+                                     std::string_view             model_version,
+                                     const std::array<double, 9>& xyz_to_camera,
+                                     const DenoiseFn&             denoise) -> Lease;
+
+  /**
+   * @brief True when @ref AcquireEncoded of @p encoded and @p decode_res would find an entry:
+   *        the acquire then reads no RAW file (DN14, the step `Reading RAW`).
+   *
+   * Changes no entry, no use order, and no stats.
+   */
+  [[nodiscard]] auto HoldsEncoded(std::span<const std::byte> encoded, DecodeRes decode_res)
+      -> bool;
+
+  /**
+   * @brief True when @ref AcquireDenoised with these arguments would find its entry: the acquire
+   *        then runs no model (DN14, the step `AI Denoise`).
+   *
+   * Changes no entry, no use order, and no stats.
+   */
+  [[nodiscard]] auto HoldsDenoised(std::span<const std::byte>   encoded,
+                                   std::string_view             model_version,
+                                   const std::array<double, 9>& xyz_to_camera) -> bool;
+
+  /**
    * @brief Host byte budget for unleased entries. Zero means unlimited.
    *
    * Insertion of a leased miss never fails because the budget is full. Unleased entries
@@ -108,6 +153,7 @@ class PreparedSourceCache {
 
   auto HashEncoded(std::span<const std::byte> encoded) -> std::uint64_t;
   void EvictUnleasedToFit(std::size_t extra_bytes);
+  auto Insert(const PreparedSourceLookup& lookup, PreparedRawInput prepared) -> Lease;
   auto MakeLease(std::shared_ptr<Entry> entry) -> Lease;
 
   UnpackFn                                        unpack_;

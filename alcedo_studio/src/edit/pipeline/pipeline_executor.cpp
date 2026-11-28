@@ -36,12 +36,13 @@ namespace {
 template <class RendererType, class Renderers>
 auto RoleRenderer(Renderers& renderers, const PipelineApplyRequest& request,
                   const std::shared_ptr<const LutResourceResolver>& lut_resources,
-                  const std::shared_ptr<const MaskAssetReader>&     mask_assets) -> RendererType& {
+                  const std::shared_ptr<const MaskAssetReader>&     mask_assets,
+                  const std::shared_ptr<DenoiseModelSession>&       ai_denoise) -> RendererType& {
   auto& renderer =
       request.role == ExecutorRole::Interactive ? renderers.interactive : renderers.batch;
   if (!renderer) {
     renderer = std::make_shared<RendererType>(request.role, PreparedSourceCache::UnpackFn{},
-                                              lut_resources, mask_assets);
+                                              lut_resources, mask_assets, ai_denoise);
   }
   return *renderer;
 }
@@ -92,12 +93,18 @@ auto RoleRendererDeviceBytes(const Renderers& renderers) -> std::size_t {
 
 PipelineExecutor::PipelineExecutor(ExecutorRole                               role,
                                    std::shared_ptr<const LutResourceResolver> lut_resources,
-                                   std::shared_ptr<const MaskAssetReader>     mask_assets)
+                                   std::shared_ptr<const MaskAssetReader>     mask_assets,
+                                   std::shared_ptr<DenoiseModelSession>       ai_denoise)
     : serves_interactive_(role == ExecutorRole::Interactive),
       serves_batch_(role == ExecutorRole::Batch),
       resolved_accelerator_backend_(alcedo::ResolveAcceleratorBackend(accelerator_preference_)),
       lut_resources_(lut_resources ? std::move(lut_resources) : DefaultLutResourceResolver()),
-      mask_assets_(mask_assets ? std::move(mask_assets) : DefaultMaskAssetReader()) {}
+      mask_assets_(mask_assets ? std::move(mask_assets) : DefaultMaskAssetReader()),
+      ai_denoise_(ai_denoise ? std::move(ai_denoise) : ProcessAiDenoiseSession()) {}
+
+auto PipelineExecutor::ProcessAiDenoiseSession() -> const std::shared_ptr<DenoiseModelSession>& {
+  return ProcessDenoiseModelSession();
+}
 
 auto PipelineExecutor::Apply(const PipelineGraphSnapshot& snapshot,
                              std::shared_ptr<ImageBuffer> input,
@@ -122,19 +129,22 @@ auto PipelineExecutor::Render(const PipelineGraphSnapshot&        snapshot,
   }
 #ifdef HAVE_CUDA
   if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
-    return RoleRenderer<CudaRenderer>(cuda_renderers_, request, lut_resources_, mask_assets_)
+    return RoleRenderer<CudaRenderer>(cuda_renderers_, request, lut_resources_, mask_assets_,
+                                      ai_denoise_)
         .RenderImage(snapshot, input, request);
   }
 #endif
 #ifdef HAVE_METAL
   if (resolved_accelerator_backend_ == GpuBackendKind::Metal) {
-    return RoleRenderer<MetalRenderer>(metal_renderers_, request, lut_resources_, mask_assets_)
+    return RoleRenderer<MetalRenderer>(metal_renderers_, request, lut_resources_, mask_assets_,
+                                       ai_denoise_)
         .RenderImage(snapshot, input, request);
   }
 #endif
 #ifdef HAVE_OPENCL
   if (resolved_accelerator_backend_ == GpuBackendKind::OpenCL) {
-    return RoleRenderer<OpenClRenderer>(opencl_renderers_, request, lut_resources_, mask_assets_)
+    return RoleRenderer<OpenClRenderer>(opencl_renderers_, request, lut_resources_, mask_assets_,
+                                        ai_denoise_)
         .RenderImage(snapshot, input, request);
   }
 #endif
@@ -203,6 +213,8 @@ void PipelineExecutor::ReleaseBinding() {
   ReleaseRoleRenderers(opencl_renderers_);
 #endif
 }
+
+void PipelineExecutor::ReleaseAiDenoiseSession() { ai_denoise_->Release(); }
 
 auto PipelineExecutor::DeviceResourceBytes() const -> std::size_t {
   std::size_t bytes = 0;

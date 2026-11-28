@@ -110,10 +110,11 @@ auto ReadEditorImageExifDisplay(const ExifDisplayMetaData& metadata) -> EditorIm
 
 auto ReadEditorImageExifDisplay(const Image& image) -> EditorImageExifDisplay {
   EditorImageExifDisplay display;
-  display.file_name = image.image_name_;
   if (image.has_exif_display_.load()) {
     display = ReadEditorImageExifDisplay(image.exif_display_);
   }
+  // After the EXIF read: that read returns a new display without the file name (#1127).
+  display.file_name = image.image_name_;
   if (image.HasRawColorContext()) {
     const auto& context  = image.GetRawColorContext();
     display.camera_make  = context.camera_make_;

@@ -10,12 +10,14 @@
 #include <algorithm>
 #include <exception>
 #include <stdexcept>
+#include <system_error>
 #include <unordered_set>
 #include <utility>
 
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 #include "utils/file/mount_directory_listing.hpp"
+#include "utils/file/volume_identity.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -155,7 +157,8 @@ auto MountScanStoredChanges(const MountScanResult& result) -> bool {
                  result.changed_in_place_count + result.missing_count + result.returned_count +
                  result.folders_added_count + result.folders_removed_count >
              0 ||
-         result.relocated_root.has_value() || result.failed_batch > 0;
+         result.relocated_root.has_value() || result.volume_name_updated ||
+         result.failed_batch > 0;
 }
 
 auto MountScanResultDetail(const MountScanResult& result) -> QString {
@@ -243,14 +246,21 @@ MountScanCoordinator::MountScanCoordinator(MountScanCoordinatorDependencies depe
       activation_interval_(dependencies.activation_interval),
       volume_arrival_delay_(dependencies.volume_arrival_delay),
       on_batch_stored_(std::move(dependencies.on_batch_stored)),
-      on_scan_ended_(std::move(dependencies.on_scan_ended)) {
+      on_scan_ended_(std::move(dependencies.on_scan_ended)),
+      read_volume_identity_(dependencies.read_volume_identity
+                                ? std::move(dependencies.read_volume_identity)
+                                : std::function<std::string(const std::filesystem::path&)>(
+                                      &ReadVolumeIdentity)) {
   if (tasks_ == nullptr || !clock_ || !watcher_) {
     throw std::invalid_argument(
         "MountScanCoordinator: the task list, the clock, and the watcher are required");
   }
   watcher_->SetChangeCallback([this](mount_id_t mount_id) { HandleDirectoryChanged(mount_id); });
-  watcher_->SetVolumeCallbacks([this](mount_id_t mount_id) { HandleVolumeRemoved(mount_id); },
-                               [this] { HandleVolumeArrived(); });
+  watcher_->SetVolumeCallbacks(
+      [this](mount_id_t mount_id) { HandleVolumeRemoved(mount_id); },
+      [this] { HandleVolumeArrived(); },
+      [this](const ArrivedVolume& volume) { HandleMountPointArrived(volume); },
+      [this](const std::filesystem::path& mount_point) { HandleMountPointRemoved(mount_point); });
 }
 
 MountScanCoordinator::~MountScanCoordinator() { Stop(); }
@@ -373,9 +383,10 @@ void MountScanCoordinator::ReloadMounts() {
   for (const auto& summary : summaries) {
     listed.insert(summary.record.id);
     auto [it, inserted] = mounts_.try_emplace(summary.record.id);
-    auto& state         = it->second;
-    state.root          = summary.record.root_path;
-    state.title         = i18n::PathToQString(summary.record.root_path.filename());
+    auto& state           = it->second;
+    state.root            = summary.record.root_path;
+    state.volume_identity = summary.record.volume_identity;
+    state.title           = i18n::PathToQString(summary.record.root_path.filename());
     if (inserted) {
       state.reachability = summary.reachability;
     }
@@ -619,6 +630,41 @@ void MountScanCoordinator::HandleVolumeArrived() {
       RequestScan(mount_id, MountScanTrigger::kVolumeChange);
     });
   }
+}
+
+void MountScanCoordinator::HandleMountPointArrived(const ArrivedVolume& volume) {
+  if (!port_) {
+    return;
+  }
+  // The mounts of an unreachable volume are offline, so the watcher holds no watch for them; the
+  // stored identity and root of each mount decide. Two known identities that differ name two
+  // volumes, so a root at or below the mount point belongs to the other volume (#1087).
+  for (const auto& [mount_id, state] : mounts_) {
+    const bool both_known = !volume.identity.empty() && !state.volume_identity.empty();
+    if (both_known ? state.volume_identity == volume.identity
+                   : IsPathAtOrBelow(state.root, volume.mount_point)) {
+      return;
+    }
+  }
+  emit VolumeWithoutMountArrived(
+      QString::fromStdString(volume.name), i18n::PathToQString(volume.mount_point),
+      volume.has_dcim_directory, QString::fromStdString(volume.identity));
+}
+
+void MountScanCoordinator::HandleMountPointRemoved(const std::filesystem::path& mount_point) {
+  if (!port_) {
+    return;
+  }
+  emit MountPointRemoved(i18n::PathToQString(mount_point));
+}
+
+auto MountScanCoordinator::IsArrivedVolumeAt(const std::filesystem::path& mount_point,
+                                             const std::string& identity) const -> bool {
+  std::error_code ec;
+  if (!std::filesystem::is_directory(mount_point, ec) || ec) {
+    return false;
+  }
+  return read_volume_identity_(mount_point) == identity;
 }
 
 void MountScanCoordinator::StartNextScan() {

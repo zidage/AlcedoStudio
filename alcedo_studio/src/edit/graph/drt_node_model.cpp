@@ -253,6 +253,27 @@ void DetailedFromJson(const nlohmann::json& json, OpenDrtDetailedParams& params)
 #undef ALCEDO_READ_ODRT
 }
 
+/// Range of the display peak luminance in nits. The editor offers 100 to 1000; a larger range
+/// keeps stored documents valid. A value outside it can stop the ACES 2.0 reach search (#1094).
+constexpr double kPeakLuminanceMin = 1.0;
+constexpr double kPeakLuminanceMax = 10000.0;
+
+/// A missing key reads as @p fallback. A present invalid value fails the load; it is not clamped.
+auto ReadPeakLuminance(const nlohmann::json& json, float fallback) -> float {
+  if (!json.contains("peak_luminance")) {
+    return fallback;
+  }
+  const auto& value = json.at("peak_luminance");
+  if (!value.is_number()) {
+    throw std::runtime_error("DRT params: peak_luminance must be a number");
+  }
+  const auto peak = value.get<double>();
+  if (!std::isfinite(peak) || peak < kPeakLuminanceMin || peak > kPeakLuminanceMax) {
+    throw std::runtime_error("DRT params: peak_luminance must be in [1, 10000]");
+  }
+  return static_cast<float>(peak);
+}
+
 /// Missing object or key reads as 0. A present invalid value fails the load; it is not clamped.
 auto ReadDiffusionStrength(const nlohmann::json& json) -> float {
   if (!json.contains("diffusion")) {
@@ -744,6 +765,7 @@ void DrtParamsModel::LoadJson(const nlohmann::json& json) {
   const auto diffusion_strength = ReadDiffusionStrength(json);
   auto       film_print         = ReadFilmPrint(json);
   const auto film_format        = ReadFilmFormat(json);
+  const auto peak_luminance     = ReadPeakLuminance(json, PeakLuminance());
   Mutate(DrtDirty::All, [&](DrtPayload& payload) {
     payload.method = MethodFromString(json_util::ReadString(json, "method", "open_drt"));
     payload.encoding_space =
@@ -752,7 +774,7 @@ void DrtParamsModel::LoadJson(const nlohmann::json& json) {
         EotfFromString(json_util::ReadString(json, "encoding_eotf", "gamma_2_2"));
     payload.limiting_space =
         SpaceFromString(json_util::ReadString(json, "limiting_space", "rec709"));
-    payload.peak_luminance = json_util::ReadFloat(json, "peak_luminance", payload.peak_luminance);
+    payload.peak_luminance = peak_luminance;
     if (json.contains("open_drt") && json["open_drt"].is_object()) {
       const auto& open_drt = json["open_drt"];
       payload.look_preset  = json_util::ReadString(open_drt, "look_preset", payload.look_preset);

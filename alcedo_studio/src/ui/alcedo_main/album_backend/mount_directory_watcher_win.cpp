@@ -16,12 +16,18 @@
 // watch ends and the watcher reports the removal (#1020): the scan finds the mount offline or
 // watches it again. The window also receives the arrival of each volume (the device interface
 // class GUID_DEVINTERFACE_VOLUME), so an offline mount gets a scan when its drive is connected.
+//
+// The new mount points (#1076) and the mount points that are gone (#1087) come from a comparison
+// of the drive list: Windows can assign the drive letter after the device interface
+// notification, so the watcher reads the list at each arrival and removal notification and every
+// kMountTablePollInterval, as the QFileSystemWatcher form reads the mount table.
 
 #include <Windows.h>
 #include <dbt.h>
 
 #include <QMetaObject>
 #include <QObject>
+#include <QTimer>
 #include <QWinEventNotifier>
 #include <memory>
 #include <optional>
@@ -44,6 +50,9 @@ constexpr GUID    kVolumeInterfaceClass = {
 class WinMountDirectoryWatcher final : public MountDirectoryWatcher {
  public:
   WinMountDirectoryWatcher() {
+    poll_timer_.setInterval(kMountTablePollInterval);
+    QObject::connect(&poll_timer_, &QTimer::timeout, &poll_timer_,
+                     [this] { ReportMountPointChanges(); });
     WNDCLASSEXW window_class{};
     window_class.cbSize        = sizeof(window_class);
     window_class.lpfnWndProc   = &WinMountDirectoryWatcher::WindowProc;
@@ -82,9 +91,20 @@ class WinMountDirectoryWatcher final : public MountDirectoryWatcher {
 
   void SetChangeCallback(ChangeCallback callback) override { on_change_ = std::move(callback); }
 
-  void SetVolumeCallbacks(VolumeRemovedCallback removed, VolumeArrivedCallback arrived) override {
-    on_volume_removed_ = std::move(removed);
-    on_volume_arrived_ = std::move(arrived);
+  void SetVolumeCallbacks(VolumeRemovedCallback removed, VolumeArrivedCallback arrived,
+                          MountPointArrivedCallback mount_point_arrived,
+                          MountPointRemovedCallback mount_point_removed) override {
+    on_volume_removed_      = std::move(removed);
+    on_volume_arrived_      = std::move(arrived);
+    on_mount_point_arrived_ = std::move(mount_point_arrived);
+    on_mount_point_removed_ = std::move(mount_point_removed);
+    if (!on_mount_point_arrived_ && !on_mount_point_removed_) {
+      poll_timer_.stop();
+      return;
+    }
+    // The drive list of this call is the state that the first comparison uses.
+    drive_table_.Start();
+    poll_timer_.start();
   }
 
   auto Watch(mount_id_t mount_id, const std::filesystem::path& root,
@@ -190,6 +210,26 @@ class WinMountDirectoryWatcher final : public MountDirectoryWatcher {
     }
   }
 
+  /// Report each drive that is gone from the drive list and each drive that is new in it. A
+  /// volume that replaced another at the same drive letter between two reads is in both lists,
+  /// so it is not reported; the card checks the volume before Import and Mount.
+  void ReportMountPointChanges() {
+    if (!on_mount_point_arrived_ && !on_mount_point_removed_) {
+      return;
+    }
+    const auto changes = drive_table_.Poll();
+    if (on_mount_point_removed_) {
+      for (const auto& mount_point : changes.removed) {
+        on_mount_point_removed_(mount_point);
+      }
+    }
+    if (on_mount_point_arrived_) {
+      for (const auto& mount_point : changes.arrived) {
+        on_mount_point_arrived_(ReadArrivedVolume(mount_point));
+      }
+    }
+  }
+
   /// The mount whose device notification is @p notification.
   auto MountOfNotification(HDEVNOTIFY notification) const -> std::optional<mount_id_t> {
     for (const auto& [mount_id, entry] : entries_) {
@@ -224,8 +264,17 @@ class WinMountDirectoryWatcher final : public MountDirectoryWatcher {
             if (on_volume_arrived_) {
               on_volume_arrived_();
             }
+            ReportMountPointChanges();
           },
           Qt::QueuedConnection);
+      return;
+    }
+    if (event == DBT_DEVICEREMOVECOMPLETE &&
+        header->dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE) {
+      // An ejected volume that holds no watched mount: its card closes now rather than at the
+      // next poll.
+      QMetaObject::invokeMethod(
+          &callback_context_, [this] { ReportMountPointChanges(); }, Qt::QueuedConnection);
       return;
     }
     if (header->dbch_devicetype != DBT_DEVTYP_HANDLE) {
@@ -279,6 +328,11 @@ class WinMountDirectoryWatcher final : public MountDirectoryWatcher {
   ChangeCallback                                         on_change_;
   VolumeRemovedCallback                                  on_volume_removed_;
   VolumeArrivedCallback                                  on_volume_arrived_;
+  MountPointArrivedCallback                              on_mount_point_arrived_;
+  MountPointRemovedCallback                              on_mount_point_removed_;
+  /// The drive list for the new mount points; ListMountPointPaths.
+  MountTableComparison                                   drive_table_;
+  QTimer                                                 poll_timer_;
   std::unordered_map<mount_id_t, std::unique_ptr<Entry>> entries_;
 };
 

@@ -351,6 +351,71 @@ auto ReadAiMaskModelInstallation(const fs::path& model_directory) -> AiModelInst
                                  kAiMaskModelSetMinimumVersion, kAiMaskModelSetMaximumVersion);
 }
 
+auto ReadAiDenoiseModelInstallation(const fs::path& model_directory) -> AiModelInstallation {
+  return ReadAiModelInstallation(model_directory, kAiDenoiseModelPackageId,
+                                 kAiDenoiseModelSetMinimumVersion,
+                                 kAiDenoiseModelSetMaximumVersion);
+}
+
+auto AiModelSetFilePath(const AiModelSetInstallation& installation, std::string_view role)
+    -> std::optional<fs::path> {
+  if (!installation.Complete()) return std::nullopt;
+  std::string bytes;
+  QJsonObject object;
+  if (!ReadSmallPackageFile(installation.directory / PackagePathFromUtf8(kAiModelSetFileName),
+                            kMaximumSmallJsonBytes, &bytes) ||
+      !ParseJsonObject(bytes, &object) || !HasSchema(object, "alcedo-ai-model-set")) {
+    return std::nullopt;
+  }
+  for (const QJsonValue& value : object.value(QStringLiteral("models")).toArray()) {
+    const QJsonObject model = value.toObject();
+    std::string       model_role;
+    std::string       path;
+    if (!ReadText(model, "role", &model_role) || model_role != role ||
+        !ReadText(model, "path", &path) || !IsSafePackageRelativePath(path)) {
+      continue;
+    }
+    const fs::path  file = installation.directory / PackagePathFromUtf8(path);
+    std::error_code error;
+    if (!fs::is_regular_file(file, error)) return std::nullopt;
+    return file;
+  }
+  return std::nullopt;
+}
+
+auto ResolveAiDenoiseGraph(const fs::path& model_directory) -> AiDenoiseGraphLocation {
+  constexpr std::string_view kWhere = "; see Settings > AI Models";
+  if (model_directory.empty()) {
+    return {{}, "no AI model folder is set" + std::string(kWhere)};
+  }
+  const AiModelInstallation installation = ReadAiDenoiseModelInstallation(model_directory);
+  if (installation.supported) {
+    const AiModelSetInstallation& installed = *installation.supported;
+    if (!installed.Complete()) {
+      return {{}, "the installed AI Denoise model is incomplete (" + installed.problem + ")" +
+                      std::string(kWhere)};
+    }
+    if (std::optional<fs::path> graph = AiModelSetFilePath(installed, kAiDenoiseGraphRole)) {
+      return {std::move(*graph), {}};
+    }
+    return {{}, "model_set.json of the installed AI Denoise model names no " +
+                    std::string(kAiDenoiseGraphRole) + std::string(kWhere)};
+  }
+  if (installation.below_minimum_version) {
+    return {{}, "the installed AI Denoise model v" +
+                    std::to_string(*installation.below_minimum_version) +
+                    " is older than this version of Alcedo Studio supports" +
+                    std::string(kWhere)};
+  }
+  if (installation.above_maximum_version) {
+    return {{}, "the installed AI Denoise model v" +
+                    std::to_string(*installation.above_maximum_version) +
+                    " needs a newer version of Alcedo Studio" + std::string(kWhere)};
+  }
+  return {{}, "the AI Denoise model is not installed in " + PackagePathToUtf8(model_directory) +
+                  std::string(kWhere)};
+}
+
 auto RecoverAiModelPackageDirectory(const fs::path& model_directory, std::string_view package_id,
                                     std::uint64_t model_set_version) -> std::vector<std::string> {
   std::vector<std::string> problems;

@@ -52,6 +52,12 @@ void RegisterApplicationModuleTypes() {
   qmlRegisterUncreatableType<AdjustmentTransferDialogModel>(
       "Alcedo.Main", 1, 0, "AdjustmentTransferDialogModel",
       "Owned by AdjustmentTransferController");
+  qmlRegisterUncreatableType<PresetController>("Alcedo.Main", 1, 0, "PresetController",
+                                               "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<PresetListModel>("Alcedo.Main", 1, 0, "PresetListModel",
+                                              "Owned by PresetController");
+  qmlRegisterUncreatableType<PresetPreviewController>(
+      "Alcedo.Main", 1, 0, "PresetPreviewController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorSessionController>(
       "Alcedo.Main", 1, 0, "EditorSessionController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorComparisonController>(
@@ -68,6 +74,8 @@ void RegisterApplicationModuleTypes() {
                                               "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorBehaviorPreferences>(
       "Alcedo.Main", 1, 0, "EditorBehaviorPreferences", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<LibraryBehaviorPreferences>(
+      "Alcedo.Main", 1, 0, "LibraryBehaviorPreferences", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<LibraryViewPreferences>(
       "Alcedo.Main", 1, 0, "LibraryViewPreferences", "Owned by ApplicationModuleHost");
 }

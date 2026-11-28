@@ -25,6 +25,9 @@ auto RootFsPath() -> std::filesystem::path;
 auto RootPathText() -> QString;
 auto InputToPath(const QString& raw) -> std::optional<std::filesystem::path>;
 auto FolderPathToDisplay(const std::filesystem::path& path) -> QString;
+/// The mount point of a volume as the Disk section shows it: a drive without its separator (`E:`),
+/// otherwise the path without a trailing separator (`/Volumes/Card`). Empty for an empty path.
+auto MountPointDisplay(const std::filesystem::path& mount_point) -> QString;
 auto QStringToFsPath(const QString& text) -> std::filesystem::path;
 
 auto DateFromTimeT(std::time_t value) -> QDate;

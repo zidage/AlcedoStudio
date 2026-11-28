@@ -21,6 +21,7 @@
 
 #include "type/supported_file_type.hpp"
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/folder_import_scan_model.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
@@ -668,6 +669,191 @@ TEST_F(ImportTests, FolderScanRestartAfterCancelListsOnlyTheNewFolder) {
                     .toString()
                     .startsWith("small_"));
   }
+}
+
+// Issue #1078: with a remembered Import choice, Import Folder scans the folder and imports it
+// into the row without the dialog. The scan reports the folders below the root and the volume
+// of the root for the count line of the dialog.
+TEST_F(ImportTests, FolderImportWithoutTheDialogImportsAfterTheScan) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto source = temp_dir_ / "remembered_import";
+  WriteTextFiles(source / "a", "a_", 2);
+  WriteTextFiles(source / "b" / "c", "c_", 2);
+  int raw_files = 0;
+  for (const auto& raw : CollectRawTestImages("airplane", 2)) {
+    std::filesystem::copy_file(raw, source / "b" / raw.filename());
+    ++raw_files;
+  }
+  ASSERT_GT(raw_files, 0);
+
+  auto* scan = backend.import_export()->FolderScan();
+  ASSERT_NE(scan, nullptr);
+  backend.import_export()->StartFolderImportOfFolderAsUser(PathToQString(source), 0);
+  // The import starts when the scan ends.
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  QSignalSpy started(backend.import_export(), &ImportExportHandler::ImportStateChanged);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (!backend.import_export()->ImportRunning() &&
+         backend.import_export()->ImportCompleted() == 0 &&
+         std::chrono::steady_clock::now() < deadline) {
+    started.wait(100);
+  }
+  ASSERT_TRUE(backend.import_export()->ImportRunning() ||
+              backend.import_export()->ImportCompleted() > 0);
+  EXPECT_EQ(backend.import_export()->ImportTotal(), raw_files);
+  EXPECT_EQ(scan->SubfolderCount(), 3);
+  EXPECT_FALSE(scan->VolumeMountPoint().isEmpty());
+
+  WaitForImportFinished(backend, 120000);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), raw_files);
+  EXPECT_EQ(backend.import_export()->ImportFailed(), 0);
+}
+
+// Issue #1078: another scan of folderScan drops a pending import without the dialog.
+TEST_F(ImportTests, FolderImportWithoutTheDialogEndsWhenAnotherScanStarts) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto source = temp_dir_ / "dropped_pending_import";
+  std::filesystem::create_directories(source);
+  for (const auto& raw : CollectRawTestImages("airplane", 1)) {
+    std::filesystem::copy_file(raw, source / raw.filename());
+  }
+  const auto other = temp_dir_ / "other_scan";
+  WriteTextFiles(other, "other_", 3);
+
+  auto* scan = backend.import_export()->FolderScan();
+  ASSERT_NE(scan, nullptr);
+  backend.import_export()->StartFolderImportOfFolderAsUser(PathToQString(source), 0);
+  const auto serial = scan->ScanSerial();
+  scan->Start(PathToQString(other));
+  EXPECT_NE(scan->ScanSerial(), serial);
+  WaitForScanFinished(*scan);
+  ASSERT_TRUE(scan->ScanFinished());
+  QCoreApplication::processEvents();
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportTotal(), 0);
+  EXPECT_EQ(scan->FileCount(), 3);
+}
+
+/// A folder with @p count RAW test images in it; returns the number of images copied.
+auto WriteRawFolder(const std::filesystem::path& dir, size_t count) -> int {
+  std::filesystem::create_directories(dir);
+  int copied = 0;
+  for (const auto& raw : CollectRawTestImages("airplane", count)) {
+    std::filesystem::copy_file(raw, dir / raw.filename());
+    ++copied;
+  }
+  return copied;
+}
+
+/// Number of photos the open project holds in the collection @p folder_id.
+auto CollectionPhotoCount(ApplicationModuleHost& backend, sl_element_id_t folder_id) -> size_t {
+  const auto browse = backend.project()->handler().project()->GetAlbumBrowseService();
+  return browse->ListFilesInFolderById(folder_id).size();
+}
+
+/// Waits for a pending import without the dialog: the scan ends and the import runs to its end,
+/// or the scan ends with no import. An import takes the scanned files and clears ScanFinished,
+/// so the wait is on Scanning.
+void WaitForPendingFolderImport(ApplicationModuleHost& backend) {
+  auto*      scan = backend.import_export()->FolderScan();
+  QSignalSpy spy(scan, &FolderImportScanModel::ScanStateChanged);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (scan->Scanning() && std::chrono::steady_clock::now() < deadline) {
+    spy.wait(100);
+  }
+  ASSERT_FALSE(scan->Scanning());
+  ProcessEvents(200);
+  if (backend.import_export()->ImportRunning()) {
+    WaitForImportFinished(backend, 120000);
+  }
+}
+
+// Issue #1086: a tree reload during the scan gives the row id of the destination to another
+// collection. The pending import still goes to the collection chosen at the start.
+TEST_F(ImportTests, FolderImportWithoutTheDialogKeepsItsCollectionAcrossATreeReload) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+  auto*      folders = backend.folders();
+  const auto b_id    = folders->CreateFolderIn(0, QStringLiteral("B"));
+  const auto c_id    = folders->CreateFolderIn(0, QStringLiteral("C"));
+  ASSERT_NE(b_id, 0u);
+  ASSERT_NE(c_id, 0u);
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+  const auto c_row = folders->FolderUiIdForElementId(c_id);
+  const auto b_row = folders->FolderUiIdForElementId(b_id);
+  ASSERT_TRUE(c_row.has_value());
+  ASSERT_TRUE(b_row.has_value());
+
+  const auto source    = temp_dir_ / "reload_during_scan";
+  const int  raw_files = WriteRawFolder(source, 2);
+  ASSERT_GT(raw_files, 0);
+
+  backend.import_export()->StartFolderImportOfFolderAsUser(PathToQString(source),
+                                                           static_cast<int>(c_row.value()));
+  // The scan reports its end through the event loop, so these edits come before it. Each edit
+  // reloads the tree, and the row id of C now names D. WaitForFolderTree delivers the tree
+  // result only, so the scan end stays queued.
+  folders->DeleteFolder(b_row.value());
+  const auto d_id = folders->CreateFolderIn(0, QStringLiteral("D"));
+  ASSERT_NE(d_id, 0u);
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+  ASSERT_EQ(folders->FolderElementIdForUiId(c_row.value()), std::optional<sl_element_id_t>(d_id));
+
+  WaitForPendingFolderImport(backend);
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), raw_files);
+  EXPECT_EQ(CollectionPhotoCount(backend, c_id), static_cast<size_t>(raw_files));
+  EXPECT_EQ(CollectionPhotoCount(backend, d_id), 0u);
+}
+
+// Issue #1086: the collection of a pending import is deleted during the scan. Nothing is
+// imported, and no other collection receives the photos.
+TEST_F(ImportTests, FolderImportWithoutTheDialogEndsWhenItsCollectionIsDeleted) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+  auto*      folders = backend.folders();
+  const auto c_id    = folders->CreateFolderIn(0, QStringLiteral("C"));
+  ASSERT_NE(c_id, 0u);
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+  const auto c_row = folders->FolderUiIdForElementId(c_id);
+  ASSERT_TRUE(c_row.has_value());
+
+  const auto source = temp_dir_ / "delete_during_scan";
+  ASSERT_GT(WriteRawFolder(source, 1), 0);
+
+  backend.import_export()->StartFolderImportOfFolderAsUser(PathToQString(source),
+                                                           static_cast<int>(c_row.value()));
+  folders->DeleteFolder(c_row.value());
+  const auto d_id = folders->CreateFolderIn(0, QStringLiteral("D"));
+  ASSERT_NE(d_id, 0u);
+  ASSERT_TRUE(WaitForFolderTree(*folders));
+
+  WaitForPendingFolderImport(backend);
+  EXPECT_EQ(backend.import_export()->ImportTotal(), 0);
+  EXPECT_EQ(CollectionPhotoCount(backend, d_id), 0u);
+  EXPECT_EQ(CollectionPhotoCount(backend, 0), 0u);
+}
+
+// Issue #1086: the scan starts in project A, and project B opens before it ends. Project B
+// receives no photos from the pending import.
+TEST_F(ImportTests, FolderImportWithoutTheDialogEndsWhenTheProjectChanges) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend, QStringLiteral("project_a")));
+
+  const auto source = temp_dir_ / "switch_during_scan";
+  ASSERT_GT(WriteRawFolder(source, 2), 0);
+
+  backend.import_export()->StartFolderImportOfFolderAsUser(PathToQString(source), 0);
+  ASSERT_TRUE(CreateTestProject(backend, QStringLiteral("project_b")));
+
+  WaitForPendingFolderImport(backend);
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportTotal(), 0);
+  EXPECT_EQ(CollectionPhotoCount(backend, 0), 0u);
 }
 
 TEST_F(ImportTests, FolderImportBeforeScanFinishesDoesNotStartAndMissingFolderIsInvalid) {

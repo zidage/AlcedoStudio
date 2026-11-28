@@ -137,6 +137,55 @@ if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(CudaDemosaicNetEntry PUBLIC HAVE_CUDA)
 endif()
 
+# AI Denoise: the overlap tile planner, the tile loop, and the tile input and output of the UtNet2
+# sessions (all platforms; no ONNX Runtime type).
+def_library(UtNet2TileLoop
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/decoders/processor/nn/overlap_tile_jobs.cpp
+        ${ALCEDO_SRC_ROOT}/decoders/processor/nn/utnet2_tile_loop.cpp
+        ${ALCEDO_SRC_ROOT}/decoders/processor/nn/utnet2_tile_io.cpp
+    PRIVATE_DEPS opencv_core
+)
+
+# AI Denoise: the ONNX Runtime session of the FP16 UtNet2 graph on DirectML (Windows x64, for each
+# render backend). Only this target includes ONNX Runtime headers; its public header has no ONNX
+# Runtime type. onnxruntime.dll is delay-loaded, so the executable that links this target starts
+# without it and the session reports the load error. The session creates its own Direct3D 12
+# device and queue for DirectML (d3d12, dxgi); DirectML.dll is loaded at run time. pdh reads the
+# video memory that all processes use on the adapter (issue #1043).
+include("${CMAKE_SOURCE_DIR}/scripts/cmake/fetch_onnxruntime_directml.cmake")
+if(TARGET alcedo::onnxruntime_directml)
+    # The Windows libraries (d3d12, dxgi, pdh, delayimp) are named in the source with
+    # `#pragma comment(lib)`: a CUDA library that links this target through EditInput passes its
+    # link libraries to the device link of nvcc, which cannot find a library by its bare name.
+    def_library(UtNet2DirectMl
+        SOURCES
+            ${ALCEDO_SRC_ROOT}/decoders/processor/nn/utnet2_directml_session.cpp
+            ${ALCEDO_SRC_ROOT}/decoders/processor/nn/utnet2_onnx_graph.cpp
+        PUBLIC_DEPS UtNet2TileLoop
+        PRIVATE_DEPS alcedo::onnxruntime_directml
+    )
+    # The delay load applies to the host link of the executable, so it is part of the interface.
+    target_link_options(UtNet2DirectMl INTERFACE "$<HOST_LINK:/DELAYLOAD:onnxruntime.dll>")
+endif()
+
+# AI Denoise: the ONNX Runtime sessions of the FP16 UtNet2 graph on the Neural Engine (macOS on
+# Apple silicon, DN10). Only this target includes ONNX Runtime headers; its public header has no
+# ONNX Runtime type. libonnxruntime.1.24.4.dylib is linked: the build tree finds it through the
+# build rpath, the bundle in Contents/Frameworks (CMakeLists.txt of the repository).
+include("${CMAKE_SOURCE_DIR}/scripts/cmake/fetch_onnxruntime_macos.cmake")
+if(TARGET alcedo::onnxruntime_macos)
+    def_library(UtNet2CoreMl
+        SOURCES
+            ${ALCEDO_SRC_ROOT}/decoders/processor/nn/utnet2_coreml_session.cpp
+            ${ALCEDO_SRC_ROOT}/decoders/processor/nn/utnet2_onnx_graph.cpp
+        PUBLIC_DEPS UtNet2TileLoop
+        PRIVATE_DEPS alcedo::onnxruntime_macos
+    )
+    target_compile_definitions(UtNet2CoreMl PRIVATE
+        ALCEDO_ONNXRUNTIME_MACOS_VERSION="${ALCEDO_ONNXRUNTIME_MACOS_VERSION}")
+endif()
+
 
 # ==============================================================================
 # 4. Decoding & IO

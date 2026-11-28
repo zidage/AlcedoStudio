@@ -121,10 +121,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_PROPERTY(QString exifIsoText READ exif_iso_text NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifApertureText READ exif_aperture_text NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifFocalText READ exif_focal_text NOTIFY ImageExifChanged)
-  /// RAW lens identity for the Lens Calibration auto-detect control. Empty when
-  /// the image EXIF carries no lens maker/model. Same lifetime as exifLineText.
-  Q_PROPERTY(QString exifLensMake READ exif_lens_make NOTIFY ImageExifChanged)
-  Q_PROPERTY(QString exifLensModel READ exif_lens_model NOTIFY ImageExifChanged)
+  /// Lensfun profile that Lens Calibration Auto uses for the image, for the auto-detect control.
+  /// Empty when no profile matches the image lens. Same lifetime as exifLineText.
+  Q_PROPERTY(QString autoLensMake READ auto_lens_make NOTIFY ImageExifChanged)
+  Q_PROPERTY(QString autoLensModel READ auto_lens_model NOTIFY ImageExifChanged)
   /// Camera identity of the image RAW color context, for the DCP match of the Camera Profile
   /// section. Empty for an image without one (a raster image). Same lifetime as exifLineText.
   Q_PROPERTY(QString cameraMake READ camera_make NOTIFY ImageExifChanged)
@@ -156,6 +156,14 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Aggregate coordinator diagnostics (reason, replace/cancel counts, last
   // rejection, last submitted role). Never includes pipeline task pointers.
   Q_PROPERTY(QVariantMap renderDiagnostics READ render_diagnostics NOTIFY RenderDiagnosticsChanged)
+  // AI Denoise integration plan, DN7: the model error of the last frame of the open photo,
+  // {kind, text} with kind model_not_installed, device_too_slow, run_failed, or
+  // sensor_not_supported; empty after a ready frame. The viewport error card reads it.
+  Q_PROPERTY(QVariantMap aiDenoiseError READ ai_denoise_error NOTIFY AiDenoiseErrorChanged)
+  // AI Denoise integration plan, DN14: the step of the render of the open photo that reads the
+  // RAW file or runs the model (RenderProgressToVariant); empty when no such render runs. The
+  // viewport pill and bar read it.
+  Q_PROPERTY(QVariantMap renderProgress READ render_progress NOTIFY RenderProgressChanged)
   /// Phase 6C-7: read-only field-value snapshot for panel loading. Keys are
   /// stable field identifiers (e.g. "exposure", "contrast"); values are the
   /// parsed JSON params. Published after open, checkout, undo, redo, recovery,
@@ -217,8 +225,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString    exif_iso_text() const { return exif_iso_text_; }
   [[nodiscard]] QString    exif_aperture_text() const { return exif_aperture_text_; }
   [[nodiscard]] QString    exif_focal_text() const { return exif_focal_text_; }
-  [[nodiscard]] QString    exif_lens_make() const { return exif_lens_make_; }
-  [[nodiscard]] QString    exif_lens_model() const { return exif_lens_model_; }
+  [[nodiscard]] QString    auto_lens_make() const { return auto_lens_make_; }
+  [[nodiscard]] QString    auto_lens_model() const { return auto_lens_model_; }
   [[nodiscard]] QString    camera_make() const { return camera_make_; }
   [[nodiscard]] QString    camera_model() const { return camera_model_; }
   [[nodiscard]] QString    image_file_name() const { return image_file_name_; }
@@ -244,6 +252,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString     last_error() const;
   [[nodiscard]] double      first_frame_time_ms() const;
   [[nodiscard]] QVariantMap render_diagnostics() const;
+  [[nodiscard]] QVariantMap ai_denoise_error() const { return ai_denoise_error_; }
+  [[nodiscard]] QVariantMap render_progress() const { return render_progress_; }
   // Phase 7A R4: typed result of the last history/Version operation, owned by
   // EditorHistoryOperationPublisher (not ad-hoc controller fields).
   [[nodiscard]] QString     last_history_message() const {
@@ -507,6 +517,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void HistoryChanged();
   void RenderBusyChanged();
   void RenderDiagnosticsChanged();
+  void AiDenoiseErrorChanged();
+  void RenderProgressChanged();
   // Phase 6C-7: emitted when the backend adjustment snapshot is published.
   void AdjustmentSnapshotChanged();
   void ActionAvailabilityChanged();
@@ -545,6 +557,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     ApplyOpenLocal(uint elementId, uint imageId);
   void                     ApplyCloseLocal();
   void                     SyncViewportIdentity();
+  /// Publish the AI Denoise error of the backend when it changed (DN7).
+  void                     SyncAiDenoiseError();
+  /// Publish renderProgress from the backend when it changed (DN14).
+  void                     SyncRenderProgress();
   void                     SyncViewportDisplayConfig();
   void                     SyncAlbumHdrFlagFromSnapshot();
   /// Show the open photo's edit state (head commit time and name of the active Version) on
@@ -648,8 +664,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QString                 exif_iso_text_      = QString::fromUtf8("\xE2\x80\x94");
   QString                 exif_aperture_text_ = QString::fromUtf8("\xE2\x80\x94");
   QString                 exif_focal_text_    = QString::fromUtf8("\xE2\x80\x94");
-  QString                 exif_lens_make_;
-  QString                 exif_lens_model_;
+  QString                 auto_lens_make_;
+  /// The last published AI Denoise error, for the change signal of the property.
+  QVariantMap             ai_denoise_error_;
+  QVariantMap             render_progress_;
+  QString                 auto_lens_model_;
   QString                 camera_make_;
   QString                 camera_model_;
   QString                 image_file_name_;

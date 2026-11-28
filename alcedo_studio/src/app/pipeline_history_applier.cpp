@@ -85,8 +85,9 @@ auto ApplyGraph(PipelineDocument& document, std::vector<GraphValidationError> er
 /// one Develop Params JSON, which also carries import-bound data (`camera_profile`,
 /// `as_shot_*`) that the RAW color context re-binds outside history.
 auto DevelopFieldOwnedKeys(std::string_view field_key) -> const std::vector<std::string_view>* {
-  static const std::vector<std::string_view> kRawDecode{
-      "demosaic_method", "highlights_reconstruct", "use_camera_wb", "user_wb"};
+  // `ai_denoise` is present only while AI Denoise is on (integration plan, DN7).
+  static const std::vector<std::string_view> kRawDecode{"demosaic_method", "highlights_reconstruct",
+                                                        "use_camera_wb", "user_wb", "ai_denoise"};
   static const std::vector<std::string_view> kColorTemp{"wb_mode", "custom_cct", "custom_tint"};
   static const std::vector<std::string_view> kLensCalib{
       "lens_enabled",   "apply_vignetting", "apply_distortion",   "apply_tca",

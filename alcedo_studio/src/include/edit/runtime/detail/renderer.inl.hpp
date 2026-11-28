@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/runtime/curve_input_histogram.hpp"
@@ -19,6 +22,7 @@
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/mask_coverage_probe_record.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "edit/runtime/renderer.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "gpu/transient_allocation_policy.hpp"
@@ -28,6 +32,18 @@
 
 namespace alcedo {
 namespace detail {
+
+/// The camera matrix of the AI Denoise gain match: the camera matrix of the render of @p develop
+/// at D65 (issue 1055). A profile without one fails the render here, as it fails the camera colour
+/// pass without AI Denoise.
+inline auto AiDenoiseXyzToCamera(const DevelopPayload& develop) -> std::array<double, 9> {
+  const auto resolved = ResolveDevelopXyzToCameraD65(develop);
+  if (!resolved.ok) {
+    throw std::runtime_error("AI Denoise: " +
+                             ColorTransformFailureMessage(develop, resolved.error));
+  }
+  return resolved.xyz_to_camera;
+}
 
 /// ROI geometry of one GPU DAG render, at Debug level in alcedo.render.roi. Release builds compile
 /// it out; Debug builds write it when QT_LOGGING_RULES enables alcedo.render.roi.debug.
@@ -134,6 +150,12 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     binding_ = key;
   }
   const PipelineDocument& document = snapshot.Document();
+  // AI Denoise (integration plan, DN6, D12): the model runs for a full-size render with the switch
+  // on. A reduced render (thumbnail, semantic input image) renders the CFA path.
+  const auto* const       denoise_develop = document.Develop();
+  const bool run_ai_denoise = ai_denoise_ != nullptr && request.decode_res == DecodeRes::FULL &&
+                              denoise_develop != nullptr &&
+                              denoise_develop->Params().Params().ai_denoise.has_value();
 
   // Encoded bytes; empty when the request carries a prepared input.
   std::span<const std::byte> encoded_bytes;
@@ -155,14 +177,58 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     ~BoundPreviewRequest() { diag::PreviewPerformance::ClearCurrentRequest(); }
   };
   BoundPreviewRequest bound_request(request.submission.metadata.presentation_request_id);
+  // The steps of the render (DN14): only a render that reads the RAW file or runs the model
+  // reports them; a render that reads the caches reports nothing.
+  RenderProgressReporter progress;
+  // The tiles of a model run, for DenoiseModelSession::Denoise.
+  const auto denoise_with_progress = [&](const PreparedRawInput& cfa, std::string_view version,
+                                         const std::array<double, 9>& camera) {
+    progress.AiDenoiseTiles(0, 0);
+    return ai_denoise_->Denoise(cfa, version, camera, [&](int completed, int total) {
+      progress.AiDenoiseTiles(completed, total);
+    });
+  };
   if (interactive) {
-    prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, request.decode_res));
+    if (run_ai_denoise) {
+      const auto version = ai_denoise_->InstalledModelVersion();
+      const auto camera  = detail::AiDenoiseXyzToCamera(denoise_develop->Params().Params());
+      if (request.progress && !source_cache_.HoldsDenoised(encoded_bytes, version, camera)) {
+        const bool read_raw = !source_cache_.HoldsEncoded(encoded_bytes, DecodeRes::FULL);
+        progress            = RenderProgressReporter(request.progress, read_raw, true);
+        if (read_raw) {
+          progress.ReadRawStarted();
+        }
+      }
+      prepared_lease.emplace(source_cache_.AcquireDenoised(
+          encoded_bytes, version, camera, [&](const PreparedRawInput& cfa) {
+            return denoise_with_progress(cfa, version, camera);
+          }));
+    } else {
+      if (request.progress && !source_cache_.HoldsEncoded(encoded_bytes, request.decode_res)) {
+        progress = RenderProgressReporter(request.progress, true, false);
+        progress.ReadRawStarted();
+      }
+      prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, request.decode_res));
+    }
     plan = plan_cache_.GetOrCompile(document, prepared_lease->Get().CompileSource());
   } else {
+    // A batch render unpacks at each render, so it runs the model at each render.
+    const bool batch_unpack = !request.prepared_input;
+    progress = RenderProgressReporter(request.progress, batch_unpack, run_ai_denoise && batch_unpack);
+    if (batch_unpack) {
+      progress.ReadRawStarted();
+    }
     batch_prepared = request.prepared_input
                          ? request.prepared_input
                          : std::make_shared<const PreparedRawInput>(
                                unpack_(encoded_bytes, request.decode_res));
+    if (run_ai_denoise && batch_unpack &&
+        batch_prepared->CompileSource().kind == DevelopInputKind::BayerCfa) {
+      const auto version = ai_denoise_->InstalledModelVersion();
+      const auto camera  = detail::AiDenoiseXyzToCamera(denoise_develop->Params().Params());
+      batch_prepared     = std::make_shared<const PreparedRawInput>(
+          denoise_with_progress(*batch_prepared, version, camera));
+    }
     diag::PreviewCpuInterval compile(diag::PreviewCpuStage::PlanCompile);
     plan = GraphCompiler::CompileStatic(document, batch_prepared->CompileSource(),
                                         Backend::kCapabilityVersion);
@@ -198,6 +264,11 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     switch (prepared.CompileSource().kind) {
       case DevelopInputKind::XTransCfa:
         develop.cfa = diag::PreviewCfaKind::XTrans;
+        break;
+      case DevelopInputKind::DenoisedRgb:
+        develop.cfa        = diag::PreviewCfaKind::Bayer;
+        develop.upload_rgb = true;
+        develop.layout     = diag::PreviewDevelopLayout::UploadRgb;
         break;
       case DevelopInputKind::DirectRgb:
       case DevelopInputKind::Raster:
@@ -262,7 +333,8 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
                                        interactive ? TransientAllocationPolicy::SessionPacked
                                                    : TransientAllocationPolicy::ExactRelease,
                                        persistence, probe.has_value() ? &*probe : nullptr,
-                                       histogram.has_value() ? &*histogram : nullptr);
+                                       histogram.has_value() ? &*histogram : nullptr,
+                                       progress.Active() ? &progress : nullptr);
   } catch (...) {
     // PlanExecutor has already cancelled the render and reported the error.
     release_batch_resources_after_failure();

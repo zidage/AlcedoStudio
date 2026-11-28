@@ -17,7 +17,19 @@
 
 namespace alcedo {
 namespace {
-class PhotoStackLifecycleTest : public test::PhotoStackProjectTest {};
+class PhotoStackLifecycleTest : public test::PhotoStackProjectTest {
+ protected:
+  auto FirstFile() -> std::shared_ptr<SleeveElement> {
+    return project->GetSleeveService()->Read<std::shared_ptr<SleeveElement>>(
+        [this](FileSystem& fs) { return fs.Get(files[0]); });
+  }
+
+  auto AlbumContainsFirstFile(sl_element_id_t album_id) -> bool {
+    const auto ids = project->GetSleeveService()->Read<std::vector<sl_element_id_t>>(
+        [album_id](FileSystem& fs) { return fs.ListFileIds(album_id); });
+    return std::find(ids.begin(), ids.end(), files[0]) != ids.end();
+  }
+};
 
 TEST_F(PhotoStackLifecycleTest, DeletingSavedCoverPromotesFirstRemainingMemberInTheSameCommit) {
   const auto stack  = Create({2, 0, 1, 3}, 0);
@@ -45,7 +57,7 @@ TEST_F(PhotoStackLifecycleTest, DeletingDownToOneMemberDissolvesTheSavedStack) {
   EXPECT_EQ(Number(duckorm::expr::raw("SELECT COUNT(*) FROM PhotoStackMember")), 0);
   const auto remaining = project->GetSleeveService()->Read<std::shared_ptr<SleeveElement>>(
       [&](FileSystem& fs) { return fs.Get(files[1]); });
-  EXPECT_EQ(remaining->sync_flag_, SyncFlag::SYNCED);
+  EXPECT_EQ(remaining->SyncState(), SyncFlag::SYNCED);
   const auto links = project->GetStorage()->GetElementStore().GetFolderContent(album);
   EXPECT_NE(std::find(links.begin(), links.end(), files[1]), links.end());
 }
@@ -83,24 +95,24 @@ TEST_F(PhotoStackLifecycleTest, FailedSyncRestoresFileSystemAndAllowsExplicitRet
   const auto stack    = Create({0, 1, 2}, 0);
   const auto album    = Album();
   const auto service  = project->GetSleeveService();
-  const auto original = service->ResolveFile(L"/stack0.jpg");
+  const auto original = FirstFile();
   const auto folder   = service->ResolveFolder(L"/Album");
   const auto before   = OrganizationRows();
   Execute("CREATE TABLE ProtectedElement (file_id BIGINT REFERENCES Element(id))");
   Execute(std::format("INSERT INTO ProtectedElement VALUES ({})", files[0]));
   // The final Element delete fails after folder writes, binding removal, and stack repair.
-  const auto failed = service->DeletePath(L"/stack0.jpg");
+  const auto failed = service->DeleteFileEverywhere(files[0]);
   ASSERT_FALSE(failed.success_);
   EXPECT_EQ(OrganizationRows(), before);
-  EXPECT_EQ(service->ResolveFile(L"/stack0.jpg"), original);
+  EXPECT_EQ(FirstFile(), original);
   EXPECT_EQ(service->ResolveFolder(L"/Album"), folder);
-  EXPECT_EQ(original->sync_flag_, SyncFlag::SYNCED);
-  EXPECT_EQ(folder->sync_flag_, SyncFlag::SYNCED);
+  EXPECT_EQ(original->SyncState(), SyncFlag::SYNCED);
+  EXPECT_EQ(folder->SyncState(), SyncFlag::SYNCED);
   EXPECT_TRUE(folder->ContentAddedSinceSync().empty());
   EXPECT_TRUE(folder->ContentRemovedSinceSync().empty());
   EXPECT_EQ(Cover(stack), files[0]);
   Execute("DROP TABLE ProtectedElement");
-  const auto retried = service->DeletePath(L"/stack0.jpg");
+  const auto retried = service->DeleteFileEverywhere(files[0]);
   ASSERT_TRUE(retried.success_) << retried.message_;
   EXPECT_EQ(Stacks().ReadMemberIds(stack), Files({1, 2}));
   EXPECT_EQ(Cover(stack), files[1]);
@@ -110,7 +122,7 @@ TEST_F(PhotoStackLifecycleTest, FailedSyncRestoresFileSystemAndAllowsExplicitRet
 TEST_F(PhotoStackLifecycleTest, FailedSyncDiscardsOnlyNewEntriesAndDoesNotReuseTheirIds) {
   const auto stack    = Create({0, 1, 2}, 0);
   const auto service  = project->GetSleeveService();
-  const auto original = service->ResolveFile(L"/stack0.jpg");
+  const auto original = FirstFile();
   const auto before   = OrganizationRows();
   const auto start_id = service->GetCurrentID();
   Execute("CREATE TABLE ProtectedElement (file_id BIGINT REFERENCES Element(id))");
@@ -122,9 +134,9 @@ TEST_F(PhotoStackLifecycleTest, FailedSyncDiscardsOnlyNewEntriesAndDoesNotReuseT
   });
   ASSERT_FALSE(failed.success_);
   EXPECT_EQ(OrganizationRows(), before);
-  EXPECT_EQ(service->ResolveFile(L"/stack0.jpg"), original);
+  EXPECT_EQ(FirstFile(), original);
   EXPECT_THROW(service->ResolveElement(L"/Not committed"), std::runtime_error);
-  EXPECT_EQ(created->sync_flag_, SyncFlag::DELETED);
+  EXPECT_EQ(created->SyncState(), SyncFlag::DELETED);
   EXPECT_GT(service->GetCurrentID(), start_id);
   EXPECT_EQ(Stacks().ReadMemberIds(stack), Files({0, 1, 2}));
   Execute("DROP TABLE ProtectedElement");
@@ -162,13 +174,13 @@ TEST_F(PhotoStackLifecycleTest, FailedOwnerRestoreReportsBothErrorsAndRequiresPr
   EXPECT_NE(failed.message_.substr(0, error_position).find("FileImage"), std::string::npos);
   EXPECT_NE(failed.message_.substr(error_position + separator.size()).find("FileImage"),
             std::string::npos);
-  EXPECT_THROW(project->GetSleeveService()->ResolveFile(L"/stack0.jpg"), std::runtime_error);
+  EXPECT_THROW(FirstFile(), std::runtime_error);
   EXPECT_FALSE(project->GetSleeveService()->Sync().success_);
   Execute("CREATE TABLE FileImage AS SELECT * FROM SavedFileBindings");
   Execute("DROP TABLE SavedFileBindings");
   project.reset();
   project = std::make_shared<ProjectService>(db_path, meta_path, ProjectOpenMode::kLoadExisting);
-  EXPECT_EQ(project->GetSleeveService()->ResolveFile(L"/stack0.jpg")->element_id_, files[0]);
+  EXPECT_EQ(FirstFile()->element_id_, files[0]);
 }
 
 TEST_F(PhotoStackLifecycleTest, FailedAlbumUnlinkRestoresTheSameFolderAndKeepsTheStack) {
@@ -184,7 +196,7 @@ TEST_F(PhotoStackLifecycleTest, FailedAlbumUnlinkRestoresTheSameFolderAndKeepsTh
   ASSERT_FALSE(failed.success_);
   EXPECT_EQ(OrganizationRows(), before);
   EXPECT_EQ(project->GetSleeveService()->ResolveFolder(L"/Album"), folder);
-  EXPECT_TRUE(folder->ContainsElementId(files[0]));
+  EXPECT_TRUE(AlbumContainsFirstFile(album));
   EXPECT_TRUE(folder->ContentRemovedSinceSync().empty());
   Execute("DROP TABLE ProtectedAlbumLink");
   EXPECT_TRUE(project->GetSleeveService()->DeleteFileFromFolder(files[0], album).success_);
@@ -214,13 +226,13 @@ TEST_F(PhotoStackLifecycleTest, FailedFolderRenameRestoresNamesPathsAndOwnersBef
   EXPECT_EQ(service->ResolveFolder(L"/Parent"), parent);
   EXPECT_EQ(service->ResolveFolder(L"/Parent/Album"), album);
   EXPECT_EQ(service->ResolveFolder(L"/Parent/Album/Child"), child);
-  EXPECT_EQ(service->ResolveFile(L"/Parent/Album/stack0.jpg")->element_id_, files[0]);
+  EXPECT_TRUE(AlbumContainsFirstFile(album->element_id_));
   EXPECT_THROW(service->ResolveFolder(L"/Parent/Renamed"), std::runtime_error);
   EXPECT_FALSE(parent->Contains(L"Renamed"));
   EXPECT_EQ(album->element_name_, L"Album");
   EXPECT_EQ(album->ref_count_, references);
   for (const auto& folder : {root, parent, album}) {
-    EXPECT_EQ(folder->sync_flag_, SyncFlag::SYNCED);
+    EXPECT_EQ(folder->SyncState(), SyncFlag::SYNCED);
     EXPECT_TRUE(folder->ContentAddedSinceSync().empty());
     EXPECT_TRUE(folder->ContentRemovedSinceSync().empty());
   }
@@ -263,13 +275,13 @@ TEST_F(PhotoStackLifecycleTest, FailedFolderMoveRestoresBothParentsPathsAndOwner
   EXPECT_EQ(service->ResolveFolder(L"/Destination"), destination);
   EXPECT_EQ(service->ResolveFolder(L"/Source/Album"), album);
   EXPECT_EQ(service->ResolveFolder(L"/Source/Album/Child"), child);
-  EXPECT_EQ(service->ResolveFile(L"/Source/Album/stack0.jpg")->element_id_, files[0]);
+  EXPECT_TRUE(AlbumContainsFirstFile(album->element_id_));
   EXPECT_THROW(service->ResolveFolder(L"/Destination/Album"), std::runtime_error);
-  EXPECT_TRUE(source->ContainsElementId(album->element_id_));
-  EXPECT_FALSE(destination->ContainsElementId(album->element_id_));
+  EXPECT_TRUE(source->HoldsChildFolder(album->element_id_));
+  EXPECT_FALSE(destination->HoldsChildFolder(album->element_id_));
   EXPECT_EQ(album->ref_count_, references);
   for (const auto& folder : {source, destination, album}) {
-    EXPECT_EQ(folder->sync_flag_, SyncFlag::SYNCED);
+    EXPECT_EQ(folder->SyncState(), SyncFlag::SYNCED);
     EXPECT_TRUE(folder->ContentAddedSinceSync().empty());
     EXPECT_TRUE(folder->ContentRemovedSinceSync().empty());
   }

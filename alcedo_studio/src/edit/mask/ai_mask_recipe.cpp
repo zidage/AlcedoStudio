@@ -14,6 +14,8 @@
 #include <utility>
 #include <variant>
 
+#include "edit/operators/models/json_read.hpp"
+
 namespace alcedo {
 namespace {
 
@@ -48,7 +50,7 @@ auto ReadFloat(const nlohmann::json& json, const char* key, std::string_view own
   if (!value.is_number()) {
     Fail(std::string{owner} + " field " + key + " must be a number");
   }
-  return value.get<float>();
+  return json_util::ToFloat(value, key);
 }
 
 auto ReadUint32(const nlohmann::json& json, const char* key, std::string_view owner)

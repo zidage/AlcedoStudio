@@ -74,6 +74,13 @@ class FolderImportScanModel final : public QAbstractListModel {
   Q_PROPERTY(int allowedFileCount READ AllowedFileCount NOTIFY AllowedCategoriesChanged)
   /// Dropped files of the scan (StartSources file sources).
   Q_PROPERTY(int droppedFileCount READ DroppedFileCount NOTIFY ScanStateChanged)
+  /// Folders found below the folder sources, at any depth (the Import Folder dialog, #1078).
+  Q_PROPERTY(int subfolderCount READ SubfolderCount NOTIFY ScanStateChanged)
+  /// Display name of the volume that holds the scan root (ReadVolumeLabel); empty when it has
+  /// none or before the worker read it.
+  Q_PROPERTY(QString volumeName READ VolumeName NOTIFY ScanStateChanged)
+  /// Mount point of that volume as the Disk section shows it (`E:`, `/Volumes/Card`).
+  Q_PROPERTY(QString volumeMountPoint READ VolumeMountPoint NOTIFY ScanStateChanged)
 
  public:
   enum Role {
@@ -124,6 +131,12 @@ class FolderImportScanModel final : public QAbstractListModel {
   [[nodiscard]] int  AllowedFileCount() const { return static_cast<int>(rows_.size()); }
   [[nodiscard]] int  DroppedFileCount() const { return dropped_count_; }
   [[nodiscard]] auto FolderPath() const -> QString { return folder_path_; }
+  [[nodiscard]] int  SubfolderCount() const { return subfolder_count_; }
+  [[nodiscard]] auto VolumeName() const -> QString { return volume_name_; }
+  [[nodiscard]] auto VolumeMountPoint() const -> QString { return volume_mount_point_; }
+  /// A new number at each Start, StartSources, and Cancel: a caller that waits for the end of
+  /// one scan compares it to the number it saw at the start.
+  [[nodiscard]] auto ScanSerial() const -> std::uint64_t { return scan_serial_; }
   [[nodiscard]] auto CurrentDirectory() const -> QString { return current_directory_; }
 
  signals:
@@ -155,9 +168,12 @@ class FolderImportScanModel final : public QAbstractListModel {
   /// Store @p entry and count it; returns true when it is a row under allowed_.
   bool AddEntry(Entry entry);
   void AppendBatch(const std::shared_ptr<Scan>& scan, std::vector<Entry> batch,
-                   const QString& current_directory);
+                   const QString& current_directory, int subfolder_count);
   void FinishScan(const std::shared_ptr<Scan>& scan, std::vector<Entry> sorted_entries,
-                  bool folder_valid);
+                  bool folder_valid, int subfolder_count);
+  void SetVolume(const std::shared_ptr<Scan>& scan, QString name, QString mount_point);
+  /// Clear the folder count and the volume of the previous scan.
+  void ClearScanFacts();
 
   std::vector<image_path_t>       file_paths_{};
   /// Category of each entry of file_paths_.
@@ -177,6 +193,10 @@ class FolderImportScanModel final : public QAbstractListModel {
   bool                      folder_valid_  = true;
   QString                   folder_path_{};
   QString                   current_directory_{};
+  int                             subfolder_count_ = 0;
+  QString                         volume_name_{};
+  QString                         volume_mount_point_{};
+  std::uint64_t                   scan_serial_ = 0;
 };
 
 }  // namespace alcedo::ui

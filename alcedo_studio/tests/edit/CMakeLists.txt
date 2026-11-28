@@ -254,6 +254,7 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/develop_color_transform_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/develop_raster_input_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/develop_ai_denoise_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/drt_output_resolver_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/aces_odt_numeric_stability_test.cpp)
 target_include_directories(GpuDagModelGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -454,6 +455,7 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/input/raw_input_loader_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/input/raster_input_loader_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/input/prepared_source_cache_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/develop_ai_denoise_input_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/adjustment_runtime_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/grade_schedule_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/scene_work_image_pair_test.cpp
@@ -505,7 +507,7 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_lens_calib_test.cpp)
   target_include_directories(GpuDagCudaDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaDevelopTest PRIVATE GTest::gtest_main EditRuntimeCuda
-    EditRuntimeLens EditInput DemosaicNet Image opencv_imgproc Qt6::Gui)
+    EditRuntimeLens EditInput DemosaicNet Image NnSafetensors opencv_imgproc Qt6::Gui)
   gtest_discover_tests(GpuDagCudaDevelopTest TEST_PREFIX "GpuDagCudaDevelopTest."
     PROPERTIES LABELS "gpu;edit;runtime")
   alcedo_register_test_target(GpuDagCudaDevelopTest gpu)
@@ -647,7 +649,7 @@ if(ALCEDO_METAL_ENABLED)
   target_include_directories(GpuDagMetalDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalDevelopTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditRuntimeLens EditInput RawProcessorOp MetalDemosaicNetEntry Image
-    opencv_imgproc Qt6::Gui)
+    NnSafetensors opencv_imgproc Qt6::Gui)
   target_compile_definitions(GpuDagMetalDevelopTest PRIVATE
     ALCEDO_METAL_NEURAL_EXPECTED_PIXEL_DIR="${ALCEDO_TEST_ROOT}/resources/expected_pixels/metal_neural_develop"
     ALCEDO_METAL_TO_LINEAR_REF_METALLIB_PATH="${METAL_TO_LINEAR_REF_METALLIB}"
@@ -783,7 +785,7 @@ if(ALCEDO_OPENCL_ENABLED)
   target_include_directories(GpuDagOpenClDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClDevelopTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditInput RawProcessorOp OpenClDemosaicNet
-    OpenClProgramLibrary Image opencv_imgproc Qt6::Gui)
+    OpenClProgramLibrary Image NnSafetensors opencv_imgproc Qt6::Gui)
   target_compile_definitions(GpuDagOpenClDevelopTest PRIVATE
     ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}"
     ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"

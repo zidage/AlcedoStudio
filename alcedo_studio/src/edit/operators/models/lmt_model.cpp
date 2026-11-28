@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "color/color_encoding_catalog.hpp"
+#include "edit/operators/models/json_read.hpp"
 
 namespace alcedo {
 
@@ -111,7 +112,7 @@ auto LmtUpdateFromModelJson(const nlohmann::json& json) -> LmtUpdate {
     if (!json.at("strength").is_number()) {
       throw std::invalid_argument("LMT strength must be a number");
     }
-    strength = json.at("strength").get<float>();
+    strength = json_util::ToFloat(json.at("strength"), "LMT strength");
   }
   update.strength        = strength;
   update.input_encoding  = ReadEncoding(json, "input_encoding");

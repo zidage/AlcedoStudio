@@ -5,6 +5,7 @@
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
 #include <QSettings>
+#include <QStringList>
 #include <QThread>
 #include <QTimer>
 #include <QtGlobal>
@@ -21,6 +22,8 @@
 #include "app/editor_session_service.hpp"
 #include "app/version_name_rules.hpp"
 #include "edit/frame_presentation_types.hpp"
+#include "edit/input/ai_denoise_error.hpp"
+#include "edit/runtime/render_progress.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 #include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/album_catalog.hpp"
@@ -46,6 +49,63 @@ constexpr auto   kActiveAdjustmentPanelKey       = "editor/activeAdjustmentPanel
 constexpr double kFilmstripExpandedHeightMin     = 168.0;
 constexpr double kFilmstripExpandedHeightMax     = 4096.0;
 constexpr double kFilmstripExpandedHeightDefault = 168.0;
+
+auto RenderStepToken(alcedo::RenderStep step) -> QString {
+  switch (step) {
+    case alcedo::RenderStep::ReadRaw:
+      return QStringLiteral("read_raw");
+    case alcedo::RenderStep::AiDenoise:
+      return QStringLiteral("ai_denoise");
+    case alcedo::RenderStep::Develop:
+      return QStringLiteral("develop");
+  }
+  return {};
+}
+
+auto DevelopGroupToken(alcedo::DevelopGroup group) -> QString {
+  switch (group) {
+    case alcedo::DevelopGroup::Sensor:
+      return QStringLiteral("sensor");
+    case alcedo::DevelopGroup::LensAndGeometry:
+      return QStringLiteral("lens_and_geometry");
+    case alcedo::DevelopGroup::Color:
+      return QStringLiteral("color");
+    case alcedo::DevelopGroup::ColorGrade:
+      return QStringLiteral("color_grade");
+    case alcedo::DevelopGroup::Display:
+      return QStringLiteral("display");
+  }
+  return {};
+}
+
+/// The QML form of the render progress (DN14): `steps` (the tokens of the steps of the render, in
+/// order), `step`, `completed`, `total`, and for `develop` `group`, `gradeIndex`, `gradeCount`.
+/// Empty without a progress.
+auto RenderProgressToVariant(const std::optional<alcedo::RenderProgress>& progress)
+    -> QVariantMap {
+  QVariantMap out;
+  if (!progress.has_value()) {
+    return out;
+  }
+  QStringList steps;
+  if (progress->read_raw) {
+    steps.append(RenderStepToken(alcedo::RenderStep::ReadRaw));
+  }
+  if (progress->ai_denoise) {
+    steps.append(RenderStepToken(alcedo::RenderStep::AiDenoise));
+  }
+  steps.append(RenderStepToken(alcedo::RenderStep::Develop));
+  out.insert(QStringLiteral("steps"), steps);
+  out.insert(QStringLiteral("step"), RenderStepToken(progress->step));
+  out.insert(QStringLiteral("completed"), progress->completed);
+  out.insert(QStringLiteral("total"), progress->total);
+  if (progress->step == alcedo::RenderStep::Develop) {
+    out.insert(QStringLiteral("group"), DevelopGroupToken(progress->group));
+    out.insert(QStringLiteral("gradeIndex"), progress->grade_index);
+    out.insert(QStringLiteral("gradeCount"), progress->grade_count);
+  }
+  return out;
+}
 
 }  // namespace
 
@@ -345,6 +405,8 @@ void EditorSessionController::OnBackendChanged() {
   }
   SyncIdentityFromBackend();
   SyncViewportIdentity();
+  SyncAiDenoiseError();
+  SyncRenderProgress();
   ApplyActionAvailability();
 
   const auto state = session_state();
@@ -420,7 +482,34 @@ void EditorSessionController::OnBackendChanged() {
   }
 }
 
+void EditorSessionController::SyncAiDenoiseError() {
+  QVariantMap error;
+  if (const auto current = session_backend_ ? session_backend_->ai_denoise_error() : std::nullopt;
+      current.has_value()) {
+    const auto kind = alcedo::AiDenoiseErrorKindToken(current->kind);
+    error.insert(QStringLiteral("kind"),
+                 QString::fromUtf8(kind.data(), static_cast<qsizetype>(kind.size())));
+    error.insert(QStringLiteral("text"), QString::fromStdString(current->text));
+  }
+  if (error == ai_denoise_error_) {
+    return;
+  }
+  ai_denoise_error_ = std::move(error);
+  emit AiDenoiseErrorChanged();
+}
+
+void EditorSessionController::SyncRenderProgress() {
+  auto progress = RenderProgressToVariant(
+      session_backend_ ? session_backend_->render_progress() : std::nullopt);
+  if (progress == render_progress_) {
+    return;
+  }
+  render_progress_ = std::move(progress);
+  emit RenderProgressChanged();
+}
+
 void EditorSessionController::OnRenderProgressChanged() {
+  SyncRenderProgress();
   PublishRenderProgressIfChanged();
 }
 
@@ -532,18 +621,18 @@ void EditorSessionController::RefreshImageExifDisplay() {
 }
 
 void EditorSessionController::ApplyImageIdentity(const alcedo::EditorImageExifDisplay& display) {
-  const auto lens_make    = QString::fromStdString(display.lens_make);
-  const auto lens_model   = QString::fromStdString(display.lens_model);
+  const auto lens_make    = QString::fromStdString(display.auto_lens_make);
+  const auto lens_model   = QString::fromStdString(display.auto_lens_model);
   const auto camera_make  = QString::fromStdString(display.camera_make);
   const auto camera_model = QString::fromStdString(display.camera_model);
   const auto file_name    = QString::fromStdWString(display.file_name);
-  if (exif_lens_make_ == lens_make && exif_lens_model_ == lens_model &&
+  if (auto_lens_make_ == lens_make && auto_lens_model_ == lens_model &&
       camera_make_ == camera_make && camera_model_ == camera_model &&
       image_file_name_ == file_name) {
     return;
   }
-  exif_lens_make_  = lens_make;
-  exif_lens_model_ = lens_model;
+  auto_lens_make_  = lens_make;
+  auto_lens_model_ = lens_model;
   camera_make_     = camera_make;
   camera_model_    = camera_model;
   image_file_name_ = file_name;

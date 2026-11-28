@@ -14,6 +14,13 @@ gtest_discover_tests(SleeveFolderRestoreTest TEST_PREFIX "SleeveFolderRestoreTes
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(SleeveFolderRestoreTest storage ci_core)
 
+# Sleeve Node Cache Plan SN2 (#1155): the page table and the dirty list of NodeCache.
+add_executable(NodeCacheTest ${ALCEDO_TEST_ROOT}/sleeve/node_cache_test.cpp)
+target_include_directories(NodeCacheTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(NodeCacheTest PRIVATE GTest::gtest_main SleeveElement StrConv)
+gtest_discover_tests(NodeCacheTest TEST_PREFIX "NodeCacheTest.")
+alcedo_register_test_target(NodeCacheTest storage)
+
 add_executable(DuckormExprTest ${ALCEDO_TEST_ROOT}/storage/duckorm_expr_test.cpp)
 target_include_directories(DuckormExprTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(DuckormExprTest PRIVATE GTest::gtest_main DuckORM)

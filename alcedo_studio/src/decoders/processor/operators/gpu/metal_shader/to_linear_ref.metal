@@ -10,6 +10,8 @@ struct RawRgbLinearizationParams {
   float black[3];
   float scale[3];
   uint  integer_codes;
+  uint  clamp_to_range;
+  float range_max[3];
 };
 
 kernel void linearize_rgb(texture2d<float, access::read_write> rgba [[texture(0)]],
@@ -21,6 +23,7 @@ kernel void linearize_rgb(texture2d<float, access::read_write> rgba [[texture(0)
     value[c] -= params.black[c];
     if (params.integer_codes) value[c] = max(value[c], 0.0f);
     value[c] *= params.scale[c];
+    if (params.clamp_to_range) value[c] = clamp(value[c], 0.0f, params.range_max[c]);
   }
   value.w = 1.0f;
   rgba.write(value, gid);

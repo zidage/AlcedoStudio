@@ -9,7 +9,7 @@
   "params": {
     "apply_crop": 0,
     "apply_crop_circle": 0,
-    "apply_distortion": 0,
+    "apply_distortion": 1,
     "apply_projection": 0,
     "apply_tca": 0,
     "apply_vignetting": 1,
@@ -34,7 +34,7 @@
     "dst_height": 1076,
     "dst_width": 715,
     "fast_path_distortion_only": 0,
-    "fast_path_vignetting_only": 1,
+    "fast_path_vignetting_only": 0,
     "interpolation": 2,
     "lens_center_x": 0.0,
     "lens_center_y": 0.0,
@@ -54,7 +54,7 @@
       0.0
     ],
     "real_focal_mm": 49.58427810668945,
-    "resolved_scale": 1.0,
+    "resolved_scale": 1.03895831,
     "source_projection": 1,
     "src_height": 1076,
     "src_width": 715,

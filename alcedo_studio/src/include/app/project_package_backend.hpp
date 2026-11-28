@@ -37,8 +37,8 @@ constexpr uint64_t kMaxPackedMetadataBytes = 256ULL * 1024ULL * 1024ULL;
 // 0.10.0 is a destructive cutover: project data stores DNG color profile
 // fingerprints instead of the profile tables, and 0.9.0 or older project
 // metadata is rejected at the versioned read boundary with no migration. 0.11.0 adds the
-// library mark columns, 0.12.0 adds mounted folder records, and 0.13.0 adds project photo
-// stacks. See pipeline_history_format.hpp for the supported versions and migrations.
+// library mark columns and 0.12.0 adds mounted folder records. 0.16.0 combines the photo stack
+// tables and duplicate file names. See pipeline_history_format.hpp for earlier versions.
 constexpr std::string_view kProjectFileVersion = ::alcedo::kProjectFileVersion;
 constexpr std::string_view kMinSupportedProjectFileVersion =
     ::alcedo::kMinSupportedProjectFileVersion;

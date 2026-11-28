@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <QString>
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -29,6 +30,8 @@
 #include "support/photo_stack_test_library.hpp"
 #include "support/storage_invariants.hpp"
 #include "type/mount_records.hpp"
+#include "type/source_file_record.hpp"
+#include "type/type.hpp"
 
 namespace alcedo {
 namespace {
@@ -71,7 +74,7 @@ TEST_F(PhotoStackPackageTest, Version011ProjectGainsEmptyStackTablesAndKeepsRoot
   project->SaveProject(meta_path);
   EXPECT_EQ(
       nlohmann::json::parse(std::ifstream(meta_path, std::ios::binary)).at("project_file_version"),
-      "0.13.0");
+      "0.16.0");
   Reopen();
   EXPECT_TRUE(StackRows().empty());
   test::ExpectStorageInvariants(*project->GetStorage());
@@ -80,7 +83,7 @@ TEST_F(PhotoStackPackageTest, Version011ProjectGainsEmptyStackTablesAndKeepsRoot
 TEST_F(PhotoStackPackageTest, Version012ProjectGainsEmptyStackTablesAndKeepsMountedFiles) {
   constexpr mount_id_t mount_id = 1;
   const auto [root, root_sync] =
-      project->GetSleeveService()->CreateMountRootFolder(0, L"Mounted", mount_id);
+      project->GetSleeveService()->CreateMountRootFolder(L"Mounted", mount_id);
   ASSERT_TRUE(root_sync.success_) << root_sync.message_;
   MountTreeChanges changes;
   changes.mount_id = mount_id;
@@ -101,8 +104,45 @@ TEST_F(PhotoStackPackageTest, Version012ProjectGainsEmptyStackTablesAndKeepsMoun
   EXPECT_EQ(project->GetStorage()->GetMountStore().ReadMountRoots(),
             std::vector<MountRootRecord>{mount});
   EXPECT_EQ(project->GetStorage()->GetMountStore().ReadSourceFile(files[0]), source);
-  EXPECT_EQ(project->GetSleeveService()->ResolveFile(L"/Mounted/stack0.jpg")->mount_id_, mount_id);
+  project->GetSleeveService()->Read<void>([&](FileSystem& fs) {
+    EXPECT_EQ(fs.Get(files[0])->mount_id_, mount_id);
+    EXPECT_EQ(fs.ListFileIds(root->element_id_), Files({0}));
+  });
   test::ExpectStorageInvariants(*project->GetStorage());
+}
+
+TEST_F(PhotoStackPackageTest, Version013ProjectKeepsStackMembershipOnSave) {
+  Create({2, 0, 1}, 0);
+  const auto before = StackRows();
+  project->SaveProject(meta_path);
+  auto metadata = nlohmann::json::parse(std::ifstream(meta_path, std::ios::binary));
+  metadata["project_file_version"] = "0.13.0";
+  metadata["project_file_max_supported_version"] = "0.13.0";
+  {
+    std::ofstream out(meta_path, std::ios::binary | std::ios::trunc);
+    out << metadata.dump(2);
+  }
+  Reopen();
+  EXPECT_EQ(StackRows(), before);
+  project->SaveProject(meta_path);
+  EXPECT_EQ(
+      nlohmann::json::parse(std::ifstream(meta_path, std::ios::binary)).at("project_file_version"),
+      "0.16.0");
+}
+
+TEST_F(PhotoStackPackageTest, Version015ProjectKeepsDuplicateFileNamesAndGainsStackTables) {
+  const auto [same_name, result] = project->GetSleeveService()->CreateFileInLibrary(L"stack0.jpg");
+  ASSERT_TRUE(result.success_) << result.message_;
+  const auto same_name_id = same_name->element_id_;
+  ReopenWithPreStackSchema("0.15.0");
+  EXPECT_TRUE(StackRows().empty());
+  project->GetSleeveService()->Read<void>([&](FileSystem& fs) {
+    EXPECT_EQ(fs.Get(files[0])->element_name_, L"stack0.jpg");
+    EXPECT_EQ(fs.Get(same_name_id)->element_name_, L"stack0.jpg");
+    const auto ids = fs.ListFileIds(kLibraryRootFolderId);
+    EXPECT_NE(std::find(ids.begin(), ids.end(), files[0]), ids.end());
+    EXPECT_NE(std::find(ids.begin(), ids.end(), same_name_id), ids.end());
+  });
 }
 
 TEST_F(PhotoStackPackageTest, PackagedProjectReopensWithExactStackMembershipAndCover) {

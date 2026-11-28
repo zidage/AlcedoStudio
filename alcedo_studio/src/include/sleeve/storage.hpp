@@ -5,41 +5,24 @@
 #pragma once
 
 #include <filesystem>
-#include <memory>
-#include <unordered_map>
 
-#include "sleeve/sleeve_element/sleeve_element.hpp"
-#include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/store/ai/ai_store.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/image/image_store.hpp"
+#include "storage/store/image/source_file_store.hpp"
 #include "storage/store/mount/mount_store.hpp"
 #include "storage/store/semantic/semantic_embedding_store.hpp"
 #include "storage/store/semantic/semantic_label_store.hpp"
 #include "storage/store/semantic/semantic_model_registry.hpp"
 #include "storage/store/semantic/semantic_vector_search.hpp"
 #include "storage/store/sleeve/element_store.hpp"
+#include "storage/store/sleeve/folder_entry_store.hpp"
 #include "storage/store/sleeve/photo_stack_store.hpp"
 #include "storage/store/storage_maintenance.hpp"
 #include "storage/store/storage_session.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
-
-class NodeStorageHandler {
- private:
-  ElementStore&                                                   element_store_;
-
-  std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>>& storage_;
-
- public:
-  NodeStorageHandler(ElementStore&                                                   element_store,
-                     std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>>& storage);
-  void AddToStorage(std::shared_ptr<SleeveElement> new_element);
-  void EnsureChildrenLoaded(std::shared_ptr<SleeveFolder> folder);
-  auto GetElement(sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
-  void GarbageCollect();
-};
 
 /**
  * @brief The stores of one project database.
@@ -52,8 +35,10 @@ class Storage {
  private:
   Database                                                              database_;
   ElementStore                                                         element_store_;
-  PhotoStackStore                                                       photo_stack_store_;
-  ImageStore                                                           image_store_;
+  FolderEntryStore                                                     folder_entry_store_;
+  PhotoStackStore                                                      photo_stack_store_;
+  ImageStore                                                         image_store_;
+  SourceFileStore                                                       source_file_store_;
   MountStore                                                           mount_store_;
   SemanticModelRegistry                                                 semantic_models_;
   SemanticEmbeddingStore                                                semantic_embeddings_;
@@ -80,9 +65,12 @@ class Storage {
   /// Diagnostics summary, package snapshot, and HNSW index removal (see StorageMaintenance).
   auto Maintenance() -> StorageMaintenance&;
   auto GetElementStore() -> ElementStore&;
+  /// Folder structure reads that load no file element (see FolderEntryStore).
+  auto GetFolderEntryStore() -> FolderEntryStore&;
   /// Project-owned stack operations; callers never retain a connection or mutable membership.
   auto GetPhotoStackStore() -> PhotoStackStore&;
   auto GetImageStore() -> ImageStore&;
+  auto GetSourceFileStore() -> SourceFileStore&;
   /// MountRoot and SourceFile rows (mounted folders).
   auto GetMountStore() -> MountStore&;
   auto GetSemanticModelRegistry() -> SemanticModelRegistry&;

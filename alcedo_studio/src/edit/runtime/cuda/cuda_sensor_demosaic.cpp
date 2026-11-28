@@ -24,6 +24,7 @@
 #include "decoders/processor/operators/gpu/cuda_xtrans_interpolate.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
+#include "edit/runtime/develop_ai_denoise.hpp"
 #include "gpu/transient_last_use.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
 
@@ -285,8 +286,7 @@ void ExecuteCudaRgbAndPack(CudaRenderDevice& device, const PreparedRawInput& inp
   void*     rgb_ptr =
       AllocateTransient(workspace, static_cast<std::size_t>(width) * height * sizeof(float) * 3);
   auto rgb = WrapF32C3(rgb_ptr, width, height);
-  CUDA::LinearizeRgb(uploaded_rgba, rgb,
-                     input.rgb_linearization.value_or(RawRgbLinearizationParams{}), &stream);
+  CUDA::LinearizeRgb(uploaded_rgba, rgb, DevelopRgbLinearization(input, hlr), &stream);
   ReleaseTransientSlabsAfterGpuLastUse(device, {uploaded_rgba.data});
   const float identity[4] = {1.0f, 1.0f, 1.0f, 1.0f};
   PackRgbWithOptionalHighlight(device, CropIfNeeded(rgb, input.demosaic_output_crop), packed,
